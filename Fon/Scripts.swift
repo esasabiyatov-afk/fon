@@ -1,0 +1,290 @@
+import Foundation
+
+/// JavaScript, который встраивается в страницы YouTube до их собственного кода.
+enum Scripts {
+
+    // MARK: - Общее для обоих окон
+
+    /// Страница всегда «видна» и «в фокусе», но сами мы знаем настоящее состояние.
+    static let common = #"""
+(() => {
+  if (window.__fon) return;
+  const fon = window.__fon = { realHidden: false, hiddenAt: 0, onVisibility: null };
+
+  fon.post = (msg) => { try { window.webkit.messageHandlers.fon.postMessage(msg); } catch (e) {} };
+
+  const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+  const realState = desc && desc.get ? () => desc.get.call(document) : () => 'visible';
+
+  const fake = (name, value) => {
+    try { Object.defineProperty(Document.prototype, name, { get: () => value, configurable: true }); } catch (e) {}
+  };
+  fake('hidden', false);
+  fake('webkitHidden', false);
+  fake('visibilityState', 'visible');
+  fake('webkitVisibilityState', 'visible');
+  try { Document.prototype.hasFocus = function () { return true; }; } catch (e) {}
+
+  // Мы видим смену видимости первыми и не пропускаем её дальше к YouTube.
+  const onVis = (e) => {
+    if (e.type === 'visibilitychange') {
+      fon.realHidden = realState() !== 'visible';
+      if (fon.realHidden) fon.hiddenAt = Date.now();
+      try { fon.onVisibility && fon.onVisibility(); } catch (err) {}
+    }
+    e.stopImmediatePropagation();
+  };
+  window.addEventListener('visibilitychange', onVis, true);
+  window.addEventListener('webkitvisibilitychange', onVis, true);
+  window.addEventListener('blur', (e) => { if (e.target === window) e.stopImmediatePropagation(); }, true);
+
+  fon.video = () =>
+    document.querySelector('video.html5-main-video') || document.querySelector('#player video') || document.querySelector('video');
+
+  fon.addStyle = (css) => {
+    const add = () => {
+      const s = document.createElement('style');
+      s.textContent = css;
+      (document.head || document.documentElement).appendChild(s);
+    };
+    if (document.documentElement) add(); else document.addEventListener('DOMContentLoaded', add);
+  };
+
+  fon.absURL = (href) => { try { return new URL(href, location.href); } catch (e) { return null; } };
+})();
+"""#
+
+    // MARK: - Окно плеера
+
+    static let player = #"""
+(() => {
+  const fon = window.__fon;
+  if (!fon || fon.role) return;
+  fon.role = 'player';
+
+  // --- 1. Отличаем «пауза от тебя» (YouTube вызывает pause() из JS) от «пауза от системы» (WebKit сам).
+  const proto = HTMLMediaElement.prototype;
+  const origPause = proto.pause;
+  const origPlay = proto.play;
+  proto.pause = function () { this.__fonUserPaused = true; return origPause.call(this); };
+  proto.play = function () { this.__fonUserPaused = false; return origPlay.call(this); };
+
+  let systemPausedEl = null;
+  let systemPausedAt = 0;
+
+  const tryResume = (v) => {
+    if (v && v.paused && !v.ended && !v.__fonUserPaused) {
+      const p = origPlay.call(v);
+      if (p && p.catch) p.catch(() => {});
+    }
+  };
+
+  document.addEventListener('play', (e) => {
+    if (e.target instanceof HTMLMediaElement) { e.target.__fonUserPaused = false; applyActions(); }
+  }, true);
+
+  // Сворачивание: WebKit ставит видео на паузу, потом страница становится скрытой.
+  // В этот момент снова включаем — так делает Brave.
+  document.addEventListener('pause', (e) => {
+    const v = e.target;
+    if (!(v instanceof HTMLMediaElement) || v.ended || v.__fonUserPaused) return;
+    systemPausedEl = v;
+    systemPausedAt = Date.now();
+    if (fon.realHidden && Date.now() - fon.hiddenAt < 2000) setTimeout(() => tryResume(v), 100);
+  }, true);
+
+  fon.onVisibility = () => {
+    if (fon.realHidden && systemPausedEl && Date.now() - systemPausedAt < 2000) {
+      setTimeout(() => tryResume(systemPausedEl), 100);
+    }
+  };
+
+  // Подстраховка из приложения после ухода в фон.
+  fon.resumeIfNeeded = () => {
+    if (systemPausedEl && Date.now() - systemPausedAt < 6000) tryResume(systemPausedEl);
+  };
+
+  // Окно «Видео приостановлено. Продолжить?» в фоне — нажимаем «Да».
+  const clickContinue = () => {
+    const buttons = document.querySelectorAll('[role="dialog"] button, ytm-dialog button, tp-yt-paper-dialog button, .dialog button');
+    for (const b of buttons) {
+      const label = (b.innerText || b.getAttribute('aria-label') || '').trim();
+      if (/^(yes|да|продолжить|continue)/i.test(label)) { b.click(); return true; }
+    }
+    return false;
+  };
+  setInterval(() => {
+    if (clickContinue()) setTimeout(() => { const v = fon.video(); if (v) { v.__fonUserPaused = false; tryResume(v); } }, 300);
+  }, 3000);
+
+  // --- 2. Команды плеера.
+  const currentId = () => {
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/(shorts|live)\/([\w-]{6,})/);
+      return m ? m[2] : null;
+    } catch (e) { return null; }
+  };
+
+  const findNext = () => {
+    const direct = document.querySelector('.ytp-next-button');
+    if (direct) return direct;
+    for (const b of document.querySelectorAll('button[aria-label]')) {
+      if (/next|следующ|далее/i.test(b.getAttribute('aria-label'))) return b;
+    }
+    const id = currentId();
+    for (const a of document.querySelectorAll('a[href*="/watch?v="]')) {
+      const u = fon.absURL(a.getAttribute('href'));
+      if (u && u.searchParams.get('v') && u.searchParams.get('v') !== id && a.offsetParent !== null) return a;
+    }
+    return null;
+  };
+
+  fon.cmd = (c, arg) => {
+    const v = fon.video();
+    switch (c) {
+      case 'play':   if (v) v.play().catch(() => {}); break;
+      case 'pause':  if (v) v.pause(); break;
+      case 'toggle': if (v) { v.paused ? v.play().catch(() => {}) : v.pause(); } break;
+      case 'seek':   if (v && typeof arg === 'number') v.currentTime = arg; break;
+      case 'next': {
+        const el = findNext();
+        if (el) el.click();
+        else if (v && isFinite(v.duration)) v.currentTime = Math.max(0, v.duration - 0.3);
+        break;
+      }
+      case 'prev':
+        if (v && v.currentTime > 3) v.currentTime = 0; else history.back();
+        break;
+    }
+  };
+
+  // --- 3. Экран блокировки: «следующий / предыдущий» вместо перемотки на 10 секунд.
+  const ms = navigator.mediaSession;
+  const ours = {
+    play: () => fon.cmd('play'),
+    pause: () => fon.cmd('pause'),
+    nexttrack: () => fon.cmd('next'),
+    previoustrack: () => fon.cmd('prev'),
+    seekto: (d) => fon.cmd('seek', d && d.seekTime),
+    seekforward: null,
+    seekbackward: null
+  };
+  let rawSet = null;
+  function applyActions() {
+    if (!rawSet) return;
+    for (const a in ours) { try { rawSet(a, ours[a]); } catch (e) {} }
+  }
+  if (ms && ms.setActionHandler) {
+    rawSet = ms.setActionHandler.bind(ms);
+    try {
+      ms.setActionHandler = function (action, handler) {
+        if (action in ours) return; // YouTube не перезапишет наши кнопки
+        try { return rawSet(action, handler); } catch (e) {}
+      };
+    } catch (e) {}
+    applyActions();
+  }
+
+  // --- 4. Мини-режим: на странице остаётся только видео на весь экран.
+  fon.addStyle(`
+    html.fon-mini, html.fon-mini body { overflow: hidden !important; background: #000 !important; }
+    html.fon-mini #player-container-id,
+    html.fon-mini .player-container,
+    html.fon-mini #player {
+      position: fixed !important; top: 0 !important; left: 0 !important;
+      width: 100vw !important; height: 100vh !important; max-height: none !important;
+      margin: 0 !important; padding: 0 !important; transform: none !important;
+      z-index: 2147483646 !important; background: #000 !important;
+    }
+    html.fon-mini video {
+      position: fixed !important; top: 0 !important; left: 0 !important;
+      width: 100vw !important; height: 100vh !important; object-fit: cover !important;
+    }
+    html.fon-mini #player-control-overlay,
+    html.fon-mini .player-controls-content,
+    html.fon-mini .ytp-unmute { display: none !important; }
+    ytm-pivot-bar-renderer { display: none !important; }
+  `);
+  fon.setMini = (on) => { document.documentElement.classList.toggle('fon-mini', !!on); };
+
+  // --- 5. Ссылки не на видео (канал, поиск) открываем в основном окне.
+  window.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const u = fon.absURL(a.getAttribute('href'));
+    if (!u || !/youtube\.com$/.test(u.hostname)) return;
+    if (u.pathname === '/watch') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    fon.post({ type: 'browse', url: u.href });
+  }, true);
+
+  // --- 6. Раз в секунду сообщаем приложению, что играет (для мини-плеера).
+  let ownMeta = false;
+  let lastId = null;
+  setInterval(() => {
+    const v = fon.video();
+    const id = currentId();
+    if (!v || !id) { fon.post({ type: 'state', active: false }); return; }
+
+    let md = ms && ms.metadata;
+    if (id !== lastId) { lastId = id; if (ownMeta && ms) { ms.metadata = null; md = null; ownMeta = false; } }
+
+    const pageTitle = (document.title || '').replace(/\s*-\s*YouTube\s*$/, '');
+    const title = (md && md.title) || pageTitle || 'YouTube';
+    const ownerEl = document.querySelector('.slim-owner-channel-name, .ytm-slim-owner-renderer .slim-owner-channel-name, ytm-slim-owner-renderer h3');
+    const artist = (md && md.artist) || (ownerEl ? ownerEl.textContent.trim() : '');
+    const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
+
+    if (ms && !ms.metadata && window.MediaMetadata && pageTitle) {
+      try {
+        ms.metadata = new MediaMetadata({ title, artist, artwork: [{ src: thumb, sizes: '480x360', type: 'image/jpeg' }] });
+        ownMeta = true;
+      } catch (e) {}
+    }
+
+    fon.post({
+      type: 'state', active: true, id, title, artist, thumb,
+      paused: v.paused, time: v.currentTime || 0, duration: isFinite(v.duration) ? v.duration : 0
+    });
+  }, 1000);
+})();
+"""#
+
+    // MARK: - Основное окно (лента, поиск, подписки)
+
+    static let browse = #"""
+(() => {
+  const fon = window.__fon;
+  if (!fon || fon.role) return;
+  fon.role = 'browse';
+
+  // Своя нижняя панель YouTube не нужна — у приложения есть своя.
+  fon.addStyle(`
+    ytm-pivot-bar-renderer { display: none !important; }
+    ytm-miniplayer, .ytm-miniplayer { display: none !important; }
+  `);
+
+  // Нажатие на видео — открываем в плеере, а лента остаётся на месте.
+  window.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const u = fon.absURL(a.getAttribute('href'));
+    if (!u || !/youtube\.com$/.test(u.hostname) || u.pathname !== '/watch') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    fon.post({ type: 'open', url: u.href });
+  }, true);
+
+  // Превью в ленте не играют. Shorts играют здесь же — тогда ставим плеер на паузу.
+  document.addEventListener('play', (e) => {
+    const v = e.target;
+    if (!(v instanceof HTMLMediaElement)) return;
+    if (location.pathname.startsWith('/shorts')) { fon.post({ type: 'browsePlaying' }); return; }
+    try { v.muted = true; v.pause(); } catch (err) {}
+  }, true);
+})();
+"""#
+}

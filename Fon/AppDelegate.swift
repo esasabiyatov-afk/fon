@@ -10,14 +10,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         // Категория .playback + UIBackgroundModes=audio в Info.plist —
-        // это и есть разрешение iOS играть звук, когда приложение свёрнуто.
+        // это разрешение iOS играть звук, когда приложение свёрнуто.
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [])
         try? session.setActive(true)
 
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.backgroundColor = .black
-        window.rootViewController = WebViewController()
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = MainViewController()
         window.makeKeyAndVisible()
         self.window = window
         return true
