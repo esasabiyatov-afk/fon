@@ -9,15 +9,14 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onCollapse: (() -> Void)?
     var onClose: (() -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
+    var onMusicModeChanged: (() -> Void)?
 
     static let miniHeight: CGFloat = 64
 
     private(set) var mode: Mode = .expanded
 
     /// Режим музыки: самое низкое качество видео, вместо картинки — обложка. Запоминается.
-    private(set) var musicMode: Bool = UserDefaults.standard.object(forKey: "musicMode") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(musicMode, forKey: "musicMode") }
-    }
+    private var musicMode: Bool { Settings.musicMode }
     private(set) var currentVideoID: String?
     private var webView: WKWebView!
     private var urlObservation: NSKeyValueObservation?
@@ -35,6 +34,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let collapseButton = UIButton(type: .system)
     private let topTitleLabel = UILabel()
     private let musicButton = UIButton(type: .system)
+    private let pipButton = UIButton(type: .system)
     private var miniGestures: [UIGestureRecognizer] = []
 
     override init(frame: CGRect) {
@@ -77,7 +77,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         topTitleLabel.textAlignment = .center
         musicButton.addTarget(self, action: #selector(musicTapped), for: .touchUpInside)
         updateMusicButton()
+        pipButton.setImage(UIImage(systemName: "pip.enter", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
+        pipButton.tintColor = .white
+        pipButton.accessibilityLabel = "Картинка в картинке"
+        pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
         topBar.addSubview(collapseButton)
+        topBar.addSubview(pipButton)
         topBar.addSubview(topTitleLabel)
         topBar.addSubview(musicButton)
         addSubview(topBar)
@@ -142,21 +147,22 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     @objc private func musicTapped() {
-        musicMode.toggle()
+        Settings.musicMode.toggle()
+        musicModeDidChange()
+        onMusicModeChanged?()
+        showToast(musicMode ? "Режим музыки: обложка, 144p" : "Режим видео",
+                  at: CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40))
+    }
+
+    /// Режим сменили (здесь или во вкладке приложения) — обновляем кнопку и страницу.
+    func musicModeDidChange() {
         updateMusicButton()
         applyPageState()
-        let toast = UILabel()
-        toast.text = musicMode ? "  Режим музыки: обложка, 144p  " : "  Режим видео  "
-        toast.font = .systemFont(ofSize: 14, weight: .semibold)
-        toast.textColor = .white
-        toast.backgroundColor = UIColor(white: 0.15, alpha: 0.95)
-        toast.layer.cornerRadius = 16
-        toast.clipsToBounds = true
-        toast.sizeToFit()
-        toast.frame.size.height = 32
-        toast.center = CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40)
-        addSubview(toast)
-        UIView.animate(withDuration: 0.3, delay: 1.4, options: []) { toast.alpha = 0 } completion: { _ in toast.removeFromSuperview() }
+    }
+
+    /// «Картинка в картинке». Вызов из приложения WebKit считает нажатием пользователя, поэтому PiP разрешён.
+    @objc private func pipTapped() {
+        command("pip")
     }
 
     func command(_ name: String) {
@@ -165,7 +171,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     /// После сворачивания приложения несколько раз пробуем продолжить, если WebKit поставил паузу.
     func kickResume() {
-        for delay in [0.5, 1.5, 3.0, 5.0] {
+        for delay in [0.2, 0.6, 1.5, 3.0, 5.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.runJS("window.__fon && __fon.resumeIfNeeded && __fon.resumeIfNeeded()")
             }
@@ -194,8 +200,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let top = safeAreaInsets.top
             topBar.frame = CGRect(x: 0, y: 0, width: w, height: top + 44)
             collapseButton.frame = CGRect(x: 4, y: top, width: 48, height: 44)
-            topTitleLabel.frame = CGRect(x: 56, y: top, width: w - 112, height: 44)
+            pipButton.frame = CGRect(x: w - 100, y: top, width: 48, height: 44)
             musicButton.frame = CGRect(x: w - 52, y: top, width: 48, height: 44)
+            topTitleLabel.frame = CGRect(x: 104, y: top, width: max(0, w - 208), height: 44)
             webView.frame = CGRect(x: 0, y: topBar.frame.maxY, width: w, height: bounds.height - topBar.frame.maxY)
         }
     }
@@ -287,5 +294,23 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let url = webView.url { webView.load(URLRequest(url: url)) }
+    }
+}
+
+extension UIView {
+    /// Короткая подсказка поверх экрана, сама исчезает.
+    func showToast(_ text: String, at center: CGPoint) {
+        let toast = UILabel()
+        toast.text = "  \(text)  "
+        toast.font = .systemFont(ofSize: 14, weight: .semibold)
+        toast.textColor = .white
+        toast.backgroundColor = UIColor(white: 0.15, alpha: 0.95)
+        toast.layer.cornerRadius = 16
+        toast.clipsToBounds = true
+        toast.sizeToFit()
+        toast.frame.size.height = 32
+        toast.center = center
+        addSubview(toast)
+        UIView.animate(withDuration: 0.3, delay: 1.4, options: []) { toast.alpha = 0 } completion: { _ in toast.removeFromSuperview() }
     }
 }

@@ -15,12 +15,13 @@
 | Файл | Роль |
 | --- | --- |
 | `Fon/AppDelegate.swift` | `AVAudioSession .playback`, корневой `MainViewController` (без SceneDelegate) |
-| `Fon/MainViewController.swift` | Окно «лента» (WKWebView m.youtube.com), нативный `UITabBar` (Главная/Поиск/Подписки/Вы), `PlayerView` поверх; уход в фон, прерывания (звонки) |
-| `Fon/PlayerView.swift` | Отдельный WKWebView со страницей `/watch`. Режимы: мини-полоска (64pt над вкладками) и развёрнутый. Кнопка ♪ — режим музыки (UserDefaults `musicMode`, по умолчанию вкл.) |
+| `Fon/MainViewController.swift` | Лента: **свой WKWebView на каждую вкладку** (создаётся лениво, не перезагружается при переключении; повторное нажатие — наверх, затем к корню). Нативный `UITabBar`: Главная/Поиск/Подписки/Вы/«Музыка·Видео» (последняя — переключатель режима). `PlayerView` поверх; уход в фон, прерывания (звонки) |
+| `Fon/Settings.swift` | `Settings.musicMode` (UserDefaults `musicMode`, по умолчанию вкл.) — общий для плеера и вкладок |
+| `Fon/PlayerView.swift` | Отдельный WKWebView со страницей `/watch`. Режимы: мини-полоска (64pt над вкладками) и развёрнутый. Кнопки: ♪ — режим музыки, PiP («картинка в картинке» через `webkitSetPresentationMode`) |
 | `Fon/SearchViewController.swift` | Нативный поиск: история (UserDefaults `searchHistory`) + подсказки `suggestqueries.google.com` (client=firefox, ds=yt) |
 | `Fon/Scripts.swift` | JS, внедряемый в начале документа: `common` (оба окна), `player`, `browse` |
 | `Fon/WebViewFactory.swift` | Общая конфигурация WKWebView, Safari User-Agent, правила переходов |
-| `project.yml` | XcodeGen; `UIBackgroundModes: [audio]`, iOS 16+, bundle id `com.personal.fon` |
+| `project.yml` | XcodeGen; `UIBackgroundModes: [audio]`, iOS 16+, iPhone + iPad (`TARGETED_DEVICE_FAMILY 1,2`), bundle id `com.personal.fon` |
 
 Оба WKWebView используют `WKWebsiteDataStore.default()` — вход в Google общий.
 
@@ -30,10 +31,18 @@
 - **Экран блокировки:** Now Playing ведёт сам WebKit через `navigator.mediaSession`. `setActionHandler` перехвачен: наши play/pause/nexttrack/previoustrack/seekto, `seekforward/seekbackward = null`, YouTube их не перезапишет. Нативного `MPRemoteCommandCenter` нет — он конфликтовал с WebKit.
 - **Лента → плеер:** клик по `a[href]` с путём `/watch` в ленте перехватывается и уходит в плеер (`{type:'open'}`); запасной путь — KVO на `url` ленты. В плеере ссылки не на `/watch` уходят в ленту (`{type:'browse'}`).
 - **Мини-режим:** класс `fon-mini` на `<html>` растягивает `#player-container-id/.player-container/#player` и `video` на весь viewport; webview в мини-полоске 16:9.
-- **Режим музыки / экономия:** класс `fon-music` прячет `video` (opacity 0) и показывает обложку `i.ytimg.com/vi/<id>/hqdefault.jpg`; качество — минимальное через `movie_player.setPlaybackQualityRange/setPlaybackQuality`. В фоне качество тоже падает до минимума, при возврате — `auto`. Чистый «только звук» в веб-плеере невозможен (протокол YouTube), это осознанный компромисс.
+- **Режим музыки / экономия:** класс `fon-music` прячет `video` (opacity 0) и показывает обложку `i.ytimg.com/vi/<id>/hqdefault.jpg`; качество — минимальное через `movie_player.setPlaybackQualityRange/setPlaybackQuality`. В фоне качество тоже падает до минимума (кроме PiP). YouTube запоминает качество в `localStorage['yt-player-quality']` — из-за этого 144p «прилипало»; теперь в режиме видео ключ стирается в начале документа, а после понижения качество явно ставится в hd720 (iPhone) / hd1080 (iPad). Чистый «только звук» в веб-плеере невозможен (протокол YouTube), это осознанный компромисс.
+- **Режим музыки — контент:** главная вкладка грузит музыкальный раздел `/channel/UC-9-kyTW8ZkZNDHQJ6FgpwQ`; видео открывается с Mix-плейлистом `&list=RD<id>` (похожая музыка, как радио в YT Music); под плеером скрыты комментарии и Shorts.
 - Скрываем родную нижнюю панель m.youtube (`ytm-pivot-bar-renderer`).
 
+## Проверено владельцем на iPhone (версия «режим музыки»)
+- Фон работает (короткая ~1 с пауза при сворачивании), экран блокировки, next/prev, мини-плеер, обложка — ок.
+- Было: 144p залипало после выключения ♪ — исправлено (см. выше), ждёт проверки.
+- Известное ограничение: если долго стоять на паузе в фоне, ▶ в пункте управления иногда не срабатывает — iOS усыпляет процесс WebKit; нужно открыть приложение. Нативный `MPRemoteCommandCenter` раньше конфликтовал с WebKit.
+
 ## Что ещё НЕ проверено на устройстве
+- Вкладки с отдельными WKWebView, переключатель режима, музыкальная главная, Mix `list=RD`, скрытие комментариев.
+- PiP из кнопки в плеере; iPad-раскладка.
 - Срабатывает ли автопродолжение после сворачивания (в симуляции jsdom — да).
 - Селекторы мини-режима и обложки на реальной вёрстке m.youtube.
 - Команды качества `movie_player` на мобильном плеере; не застревает ли 144p после возврата в режиме видео.

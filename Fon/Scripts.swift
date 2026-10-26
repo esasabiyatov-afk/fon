@@ -90,13 +90,19 @@ enum Scripts {
     if (!(v instanceof HTMLMediaElement) || v.ended || v.__fonUserPaused) return;
     systemPausedEl = v;
     systemPausedAt = Date.now();
-    if (fon.realHidden && Date.now() - fon.hiddenAt < 2000) setTimeout(() => tryResume(v), 100);
+    if (fon.realHidden && Date.now() - fon.hiddenAt < 2000) resumeSoon(v);
   }, true);
+
+  // Сразу и ещё раз чуть позже: так пауза при сворачивании почти не слышна.
+  const resumeSoon = (v) => {
+    tryResume(v);
+    setTimeout(() => tryResume(v), 250);
+  };
 
   fon.onVisibility = () => {
     setTimeout(() => { try { applyQuality(); } catch (e) {} }, 1500); // после того, как звук снова пошёл
     if (fon.realHidden && systemPausedEl && Date.now() - systemPausedAt < 2000) {
-      setTimeout(() => tryResume(systemPausedEl), 100);
+      resumeSoon(systemPausedEl);
     }
   };
 
@@ -153,6 +159,18 @@ enum Scripts {
         const el = findNext();
         if (el) el.click();
         else if (v && isFinite(v.duration)) v.currentTime = Math.max(0, v.duration - 0.3);
+        break;
+      }
+      case 'pip': {
+        if (!v) break;
+        try { v.disablePictureInPicture = false; v.removeAttribute('disablepictureinpicture'); } catch (e) {}
+        if (typeof v.webkitSetPresentationMode === 'function') {
+          v.webkitSetPresentationMode(v.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+        } else if (document.pictureInPictureElement) {
+          document.exitPictureInPicture().catch(() => {});
+        } else if (v.requestPictureInPicture) {
+          v.requestPictureInPicture().catch(() => {});
+        }
         break;
       }
       case 'prev':
@@ -215,43 +233,85 @@ enum Scripts {
       background: #000 var(--fon-thumb, none) center / cover no-repeat !important;
     }
     html.fon-music video { opacity: 0 !important; }
+
+    /* В режиме музыки под плеером только очередь и похожие треки — без комментариев и Shorts. */
+    html.fon-music ytm-comments-entry-point-header-renderer,
+    html.fon-music ytm-comment-section-renderer,
+    html.fon-music [section-identifier="comments-entry-point"],
+    html.fon-music [section-identifier="comment-item-section"],
+    html.fon-music ytm-engagement-panel-section-list-renderer[target-id*="comment"],
+    html.fon-music ytm-reel-shelf-renderer,
+    html.fon-music ytm-shorts-lockup-view-model { display: none !important; }
   `);
   fon.setMini = (on) => { document.documentElement.classList.toggle('fon-mini', !!on); };
 
   // --- 4b. Режим музыки и экономия: самое низкое качество видео, когда картинка не нужна.
+  // YouTube запоминает выбранное качество в localStorage — из-за этого 144p «прилипало»
+  // и к следующим видео. В режиме видео стираем эту память ещё до загрузки плеера.
+  const QUALITY_STORE = 'yt-player-quality';
+  try { if (localStorage.getItem('fon-music') !== '1') localStorage.removeItem(QUALITY_STORE); } catch (e) {}
+
   fon.musicMode = false;
   fon.setMusic = (on) => {
     fon.musicMode = !!on;
+    try { localStorage.setItem('fon-music', fon.musicMode ? '1' : '0'); } catch (e) {}
     document.documentElement.classList.toggle('fon-music', fon.musicMode);
     applyQuality();
   };
 
   const ytPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+  const ORDER = ['tiny', 'small', 'medium', 'large', 'hd720', 'hd1080', 'hd1440', 'hd2160', 'highres'];
+  const rank = (q) => ORDER.indexOf(q);
+  const inPip = () => {
+    const v = fon.video();
+    return !!v && (v.webkitPresentationMode === 'picture-in-picture' || document.pictureInPictureElement === v);
+  };
+  // Чёткое качество для экрана: на iPhone до 720p, на iPad до 1080p.
+  const goodQuality = (levels) => {
+    const cap = rank(Math.min(screen.width, screen.height) >= 700 ? 'hd1080' : 'hd720');
+    const fit = levels.filter((q) => rank(q) >= 0 && rank(q) <= cap).sort((a, b) => rank(b) - rank(a));
+    return fit[0] || levels[levels.length - 1];
+  };
   let qualityKey = null; // что и для какого видео уже выставили
+  let loweredOnce = false; // мы хоть раз ставили минимум — значит, надо будет поднимать
+
+  function setQuality(p, q) {
+    if (p.setPlaybackQualityRange) p.setPlaybackQualityRange(q, q);
+    if (p.setPlaybackQuality) p.setPlaybackQuality(q);
+  }
 
   function applyQuality() {
     const p = ytPlayer();
     const id = currentId();
     if (!p || !id || typeof p.getAvailableQualityLevels !== 'function') return;
-    const low = fon.musicMode || fon.realHidden; // в фоне картинку всё равно никто не видит
-    const key = id + ':' + (low ? 'low' : 'auto');
+    // В фоне картинку никто не видит; в «картинке в картинке» — видит.
+    const low = !inPip() && (fon.musicMode || fon.realHidden);
+    const key = id + ':' + (low ? 'low' : 'high');
     if (key === qualityKey) return;
-    if (!low && (qualityKey === null || !qualityKey.startsWith(id + ':'))) { qualityKey = key; return; } // новое видео в обычном режиме — YouTube сам выберет качество
     let levels = [];
     try { levels = (p.getAvailableQualityLevels() || []).filter((q) => q && q !== 'auto'); } catch (e) {}
     if (!levels.length) return; // плеер ещё не готов — попробуем на следующем тике
     try {
       if (low) {
-        const lowest = levels[levels.length - 1];
-        if (p.setPlaybackQualityRange) p.setPlaybackQualityRange(lowest, lowest);
-        if (p.setPlaybackQuality) p.setPlaybackQuality(lowest);
+        setQuality(p, levels[levels.length - 1]);
+        loweredOnce = true;
       } else {
-        if (p.setPlaybackQualityRange) p.setPlaybackQualityRange('auto', 'auto');
-        if (p.setPlaybackQuality) p.setPlaybackQuality('auto');
+        let current = '';
+        try { current = p.getPlaybackQuality ? p.getPlaybackQuality() : ''; } catch (e) {}
+        const stuckLow = rank(current) >= 0 && rank(current) <= rank('small');
+        if (loweredOnce || stuckLow) {
+          try { localStorage.removeItem(QUALITY_STORE); } catch (e) {}
+          setQuality(p, goodQuality(levels));
+        } else if (rank(current) < 0) {
+          return; // качество ещё неизвестно — проверим на следующем тике
+        }
       }
       qualityKey = key;
     } catch (e) {}
   }
+  document.addEventListener('webkitpresentationmodechanged', () => setTimeout(applyQuality, 300), true);
+  document.addEventListener('enterpictureinpicture', () => setTimeout(applyQuality, 300), true);
+  document.addEventListener('leavepictureinpicture', () => setTimeout(applyQuality, 300), true);
 
   // --- 5. Ссылки не на видео (канал, поиск) открываем в основном окне.
   window.addEventListener('click', (e) => {
