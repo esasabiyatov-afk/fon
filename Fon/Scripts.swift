@@ -161,6 +161,7 @@ enum Scripts {
         else if (v && isFinite(v.duration)) v.currentTime = Math.max(0, v.duration - 0.3);
         break;
       }
+      case 'loop': if (v) v.loop = !v.loop; break;
       case 'pip': {
         if (!v) break;
         try { v.disablePictureInPicture = false; v.removeAttribute('disablepictureinpicture'); } catch (e) {}
@@ -242,8 +243,65 @@ enum Scripts {
     html.fon-music ytm-engagement-panel-section-list-renderer[target-id*="comment"],
     html.fon-music ytm-reel-shelf-renderer,
     html.fon-music ytm-shorts-lockup-view-model { display: none !important; }
+
+    /* Свой полный экран: плеер YouTube на всё окно — с его субтитрами и настройками. */
+    html.fon-full, html.fon-full body { overflow: hidden !important; background: #000 !important; }
+    html.fon-full #player-container-id,
+    html.fon-full .player-container,
+    html.fon-full #player,
+    html.fon-full .html5-video-player {
+      position: fixed !important; top: 0 !important; left: 0 !important;
+      width: 100vw !important; height: 100vh !important; max-height: none !important;
+      margin: 0 !important; padding: 0 !important; transform: none !important;
+      z-index: 2147483646 !important; background: #000 !important;
+    }
+    html.fon-full .html5-video-container {
+      position: absolute !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important;
+    }
+    html.fon-full video,
+    html.fon-full.fon-music video {
+      position: absolute !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important; object-fit: contain !important; opacity: 1 !important;
+    }
   `);
   fon.setMini = (on) => { document.documentElement.classList.toggle('fon-mini', !!on); };
+
+  // --- 4a. Полный экран. На iPhone YouTube включает системный полноэкранный плеер iOS —
+  // в нём нет субтитров YouTube и меню качества. Подменяем его своим: плеер растягивается
+  // на всё окно, а приложение прячет шапку, статус-бар и поворачивает экран.
+  fon.isFull = false;
+  let fullEl = null;
+  const fire = (target, name) => { try { target.dispatchEvent(new Event(name, { bubbles: true })); } catch (e) {} };
+  const setFull = (on, el) => {
+    on = !!on;
+    if (on === fon.isFull) return;
+    fon.isFull = on;
+    const v = fon.video();
+    fullEl = on ? (el || document.getElementById('player-container-id') || v || document.documentElement) : null;
+    document.documentElement.classList.toggle('fon-full', on);
+    fon.post({ type: 'fullscreen', on });
+    if (v) fire(v, on ? 'webkitbeginfullscreen' : 'webkitendfullscreen');
+    fire(document, 'fullscreenchange');
+    fire(document, 'webkitfullscreenchange');
+    setTimeout(() => { fire(window, 'resize'); try { applyQuality(); } catch (e) {} }, 300);
+  };
+  fon.setFull = setFull;
+  const getter = (obj, name, get) => { try { Object.defineProperty(obj, name, { get, configurable: true }); } catch (e) {} };
+  const VP = HTMLVideoElement.prototype;
+  for (const n of ['webkitEnterFullscreen', 'webkitEnterFullScreen']) VP[n] = function () { setFull(!fon.isFull, this); };
+  for (const n of ['webkitExitFullscreen', 'webkitExitFullScreen']) VP[n] = function () { setFull(false); };
+  getter(VP, 'webkitDisplayingFullscreen', () => fon.isFull);
+  getter(VP, 'webkitSupportsFullscreen', () => true);
+  for (const n of ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen']) {
+    Element.prototype[n] = function () { setFull(true, this); return Promise.resolve(); };
+  }
+  for (const n of ['exitFullscreen', 'webkitExitFullscreen', 'webkitCancelFullScreen']) {
+    Document.prototype[n] = function () { setFull(false); return Promise.resolve(); };
+  }
+  for (const n of ['fullscreenElement', 'webkitFullscreenElement', 'webkitCurrentFullScreenElement']) getter(Document.prototype, n, () => fullEl);
+  for (const n of ['fullscreen', 'webkitIsFullScreen']) getter(Document.prototype, n, () => fon.isFull);
+  for (const n of ['fullscreenEnabled', 'webkitFullscreenEnabled']) getter(Document.prototype, n, () => true);
 
   // --- 4b. Режим музыки и экономия: самое низкое качество видео, когда картинка не нужна.
   // YouTube запоминает выбранное качество в localStorage — из-за этого 144p «прилипало»
@@ -285,7 +343,7 @@ enum Scripts {
     const id = currentId();
     if (!p || !id || typeof p.getAvailableQualityLevels !== 'function') return;
     // В фоне картинку никто не видит; в «картинке в картинке» — видит.
-    const low = !inPip() && (fon.musicMode || fon.realHidden);
+    const low = !inPip() && !fon.isFull && (fon.musicMode || fon.realHidden);
     const key = id + ':' + (low ? 'low' : 'high');
     if (key === qualityKey) return;
     let levels = [];
@@ -360,7 +418,7 @@ enum Scripts {
 
     fon.post({
       type: 'state', active: true, id, title, artist, thumb,
-      paused: v.paused, time: v.currentTime || 0, duration: isFinite(v.duration) ? v.duration : 0
+      paused: v.paused, loop: !!v.loop, time: v.currentTime || 0, duration: isFinite(v.duration) ? v.duration : 0
     });
   }, 1000);
 })();
@@ -373,6 +431,25 @@ enum Scripts {
   const fon = window.__fon;
   if (!fon || fon.role) return;
   fon.role = 'browse';
+
+  // Главная в режиме музыки (приложение открывает «/#fon-music»): обычные рекомендации,
+  // но с включённым фильтром «Музыка» вверху ленты.
+  if (location.pathname === '/' && location.hash === '#fon-music') {
+    try { history.replaceState(history.state, '', '/' + location.search); } catch (e) {}
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (++tries > 40 || location.pathname !== '/') { clearInterval(timer); return; }
+      const chips = document.querySelectorAll('ytm-chip-cloud-chip-renderer, yt-chip-cloud-chip-renderer');
+      for (const chip of chips) {
+        const label = (chip.innerText || chip.textContent || '').trim();
+        if (/^(music|музыка)$/i.test(label)) {
+          (chip.querySelector('button, a, [role="button"], [role="tab"]') || chip).click();
+          clearInterval(timer);
+          return;
+        }
+      }
+    }, 500);
+  }
 
   // Своя нижняя панель YouTube не нужна — у приложения есть своя.
   fon.addStyle(`

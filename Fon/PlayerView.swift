@@ -2,7 +2,8 @@ import UIKit
 import WebKit
 
 /// Плеер: отдельное окно с видео. Бывает мини (полоска над вкладками) и развёрнутым (на весь экран).
-final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
+/// В режиме музыки развёрнутый плеер — нативный экран `MusicPlayerView`, а веб-плеер играет под ним.
+final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate, UIGestureRecognizerDelegate {
     enum Mode { case mini, expanded }
 
     var onExpand: (() -> Void)?
@@ -10,16 +11,23 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onClose: (() -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
     var onMusicModeChanged: (() -> Void)?
+    var onAddToPlaylist: ((Track) -> Void)?
+    var onFullscreenChanged: ((Bool) -> Void)?
 
     static let miniHeight: CGFloat = 64
+    static let accent = UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1)
 
     private(set) var mode: Mode = .expanded
-
-    /// Режим музыки: самое низкое качество видео, вместо картинки — обложка. Запоминается.
+    /// Полноэкранное видео — наше собственное, а не системное: остаются субтитры и настройки YouTube.
+    private(set) var isFullscreen = false
+    /// В режиме музыки открыта страница YouTube (очередь, похожие) вместо нативного плеера.
+    private var showingPage = false
     private var musicMode: Bool { Settings.musicMode }
+    private var nativeMusic: Bool { mode == .expanded && musicMode && !showingPage && !isFullscreen }
     private(set) var currentVideoID: String?
     private var webView: WKWebView!
     private var urlObservation: NSKeyValueObservation?
+    private let musicView = MusicPlayerView()
 
     // Мини-полоска
     private let titleLabel = UILabel()
@@ -27,15 +35,18 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let playPauseButton = UIButton(type: .system)
     private let closeButton = UIButton(type: .system)
     private let progressView = UIView()
+    private let miniArtwork = UIImageView()
+    private var miniArtworkID: String?
     private var progress: CGFloat = 0
 
-    // Шапка развёрнутого плеера
+    // Шапка развёрнутого плеера (режим видео или страница YouTube в режиме музыки)
     private let topBar = UIView()
     private let collapseButton = UIButton(type: .system)
     private let topTitleLabel = UILabel()
     private let musicButton = UIButton(type: .system)
     private let pipButton = UIButton(type: .system)
     private var miniGestures: [UIGestureRecognizer] = []
+    private let dragGesture = UIPanGestureRecognizer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -64,8 +75,21 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: symbols), for: .normal)
         closeButton.tintColor = .white
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        progressView.backgroundColor = UIColor(red: 1, green: 0, blue: 0.2, alpha: 1)
-        [titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { addSubview($0) }
+        progressView.backgroundColor = Self.accent
+        miniArtwork.contentMode = .scaleAspectFill
+        miniArtwork.clipsToBounds = true
+        miniArtwork.layer.cornerRadius = 6
+        miniArtwork.backgroundColor = UIColor(white: 0.18, alpha: 1)
+        [miniArtwork, titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { addSubview($0) }
+
+        // Нативный музыкальный плеер
+        musicView.onCommand = { [weak self] name in self?.command(name) }
+        musicView.onSeek = { [weak self] t in self?.runJS("window.__fon && __fon.cmd && __fon.cmd('seek', \(t))") }
+        musicView.onCollapse = { [weak self] in self?.onCollapse?() }
+        musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
+        musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
+        musicView.onAddToPlaylist = { [weak self] track in self?.onAddToPlaylist?(track) }
+        addSubview(musicView)
 
         // Шапка развёрнутого плеера
         topBar.backgroundColor = .black
@@ -76,29 +100,25 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         topTitleLabel.textColor = .white
         topTitleLabel.textAlignment = .center
         musicButton.addTarget(self, action: #selector(musicTapped), for: .touchUpInside)
-        updateMusicButton()
         pipButton.setImage(UIImage(systemName: "pip.enter", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
         pipButton.tintColor = .white
         pipButton.accessibilityLabel = "Картинка в картинке"
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
-        topBar.addSubview(collapseButton)
-        topBar.addSubview(pipButton)
-        topBar.addSubview(topTitleLabel)
-        topBar.addSubview(musicButton)
+        [collapseButton, pipButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
         addSubview(topBar)
 
-        // Жесты: нажатие или свайп вверх на мини — развернуть; свайп вниз по шапке — свернуть.
+        // Мини: нажатие или свайп вверх — развернуть.
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniTapped))
         addGestureRecognizer(tap)
         let swipeUp = UISwipeGestureRecognizer(target: self, action: #selector(miniTapped))
         swipeUp.direction = .up
         addGestureRecognizer(swipeUp)
         miniGestures = [tap, swipeUp]
-        let swipeDown = UISwipeGestureRecognizer(target: self, action: #selector(collapseTapped))
-        swipeDown.direction = .down
-        topBar.addGestureRecognizer(swipeDown)
-        let tapTop = UITapGestureRecognizer(target: self, action: #selector(collapseTapped))
-        topBar.addGestureRecognizer(tapTop)
+
+        // Развёрнутый: тянем видео (или обложку) вниз — плеер едет за пальцем и сворачивается, как в YouTube.
+        dragGesture.addTarget(self, action: #selector(handleDrag(_:)))
+        dragGesture.delegate = self
+        addGestureRecognizer(dragGesture)
 
         setMode(.expanded)
     }
@@ -107,12 +127,19 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     // MARK: - Управление
 
-    func load(_ url: URL) {
+    /// source — откуда играем (название плейлиста); без него «Микс» или «YouTube».
+    func load(_ url: URL, source: String? = nil) {
         currentVideoID = Self.videoID(from: url)
+        let list = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "list" }?.value
+        musicView.sourceName = source ?? (list?.hasPrefix("RD") == true ? "Микс" : "YouTube")
+        musicView.reset(id: currentVideoID)
+        showingPage = false
         titleLabel.text = "Загрузка…"
         subtitleLabel.text = nil
         topTitleLabel.text = nil
         progress = 0
+        if let id = currentVideoID { updateMiniArtwork(id) }
+        updateVisibility()
         webView.load(URLRequest(url: url))
     }
 
@@ -123,14 +150,27 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func setMode(_ newMode: Mode) {
+        if newMode == .mini {
+            if isFullscreen { exitFullscreen() }
+            showingPage = false // при следующем открытии — снова нативный плеер
+        }
         mode = newMode
         let isMini = newMode == .mini
         applyPageState()
         webView.isUserInteractionEnabled = !isMini
-        [titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
-        topBar.isHidden = isMini
         miniGestures.forEach { $0.isEnabled = isMini } // в развёрнутом виде не мешаем нажатиям на странице
+        updateVisibility()
         setNeedsLayout()
+    }
+
+    private func updateVisibility() {
+        let isMini = mode == .mini
+        [titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
+        miniArtwork.isHidden = !(isMini && musicMode)
+        musicView.isHidden = !nativeMusic
+        topBar.isHidden = isMini || nativeMusic || isFullscreen
+        pipButton.isHidden = musicMode
+        updateMusicButton()
     }
 
     /// Передаём странице текущий вид: мини или нет, режим музыки или видео.
@@ -142,22 +182,41 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func updateMusicButton() {
         let symbols = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
         musicButton.setImage(UIImage(systemName: musicMode ? "music.note" : "play.rectangle", withConfiguration: symbols), for: .normal)
-        musicButton.tintColor = musicMode ? UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1) : .white
-        musicButton.accessibilityLabel = musicMode ? "Режим музыки включён" : "Режим видео"
+        musicButton.tintColor = musicMode ? Self.accent : .white
+        musicButton.accessibilityLabel = musicMode ? "Вернуться к плееру" : "Режим видео"
     }
 
     @objc private func musicTapped() {
-        Settings.musicMode.toggle()
-        musicModeDidChange()
-        onMusicModeChanged?()
-        showToast(musicMode ? "Режим музыки: обложка, 144p" : "Режим видео",
-                  at: CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40))
+        if musicMode && showingPage {
+            setShowingPage(false)
+        } else {
+            toggleMusicMode()
+        }
     }
 
-    /// Режим сменили (здесь или во вкладке приложения) — обновляем кнопку и страницу.
+    private func toggleMusicMode() {
+        Settings.musicMode.toggle()
+        showingPage = false
+        musicModeDidChange()
+        onMusicModeChanged?()
+        showToast(musicMode ? "Режим музыки" : "Режим видео", at: CGPoint(x: bounds.midX, y: safeAreaInsets.top + 90))
+    }
+
+    /// Режим сменили (здесь или во вкладке приложения) — обновляем экран и страницу.
     func musicModeDidChange() {
-        updateMusicButton()
+        UIView.transition(with: self, duration: 0.25, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.updateVisibility()
+        }
+        if let id = currentVideoID { updateMiniArtwork(id) }
         applyPageState()
+        setNeedsLayout()
+    }
+
+    private func setShowingPage(_ on: Bool) {
+        showingPage = on
+        UIView.transition(with: self, duration: 0.25, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.updateVisibility()
+        }
     }
 
     /// «Картинка в картинке». Вызов из приложения WebKit считает нажатием пользователя, поэтому PiP разрешён.
@@ -178,30 +237,115 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         }
     }
 
+    // MARK: - Полный экран
+
+    private func setFullscreen(_ on: Bool) {
+        guard on != isFullscreen else { return }
+        isFullscreen = on
+        updateVisibility()
+        setNeedsLayout()
+        onFullscreenChanged?(on)
+    }
+
+    func exitFullscreen() {
+        runJS("window.__fon && __fon.setFull && __fon.setFull(false)")
+    }
+
+    // MARK: - Перетаскивание вниз
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === dragGesture else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+        guard mode == .expanded else { return false }
+        let v = dragGesture.velocity(in: self)
+        guard v.y > 0, v.y > abs(v.x) * 1.5 else { return false }
+        if isFullscreen { return true }
+        let p = dragGesture.location(in: self)
+        if nativeMusic { return !musicView.blocksDrag(at: convert(p, to: musicView)) }
+        // На странице — только по самому видео (и шапке над ним), чтобы не мешать прокрутке.
+        let videoHeight = min(bounds.width, bounds.height * 1.4) * 9 / 16
+        return p.y < webView.frame.minY + videoHeight
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    @objc private func handleDrag(_ pan: UIPanGestureRecognizer) {
+        let ty = max(0, pan.translation(in: superview).y)
+        let velocity = pan.velocity(in: superview).y
+
+        if isFullscreen {
+            if pan.state == .ended, ty > 80 || velocity > 800 { exitFullscreen() }
+            return
+        }
+
+        switch pan.state {
+        case .began:
+            // Страница не должна прокручиваться вместе с плеером.
+            webView.scrollView.panGestureRecognizer.isEnabled = false
+            webView.scrollView.panGestureRecognizer.isEnabled = true
+        case .changed:
+            transform = CGAffineTransform(translationX: 0, y: ty)
+            layer.cornerRadius = min(18, ty / 8)
+        case .ended, .cancelled, .failed:
+            if pan.state == .ended, ty > 140 || velocity > 900 {
+                let current = frame
+                transform = .identity
+                layer.cornerRadius = 0
+                frame = current
+                onCollapse?()
+            } else {
+                UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
+                               options: [.allowUserInteraction, .beginFromCurrentState]) {
+                    self.transform = .identity
+                    self.layer.cornerRadius = 0
+                }
+            }
+        default:
+            break
+        }
+    }
+
     // MARK: - Раскладка
 
     override func layoutSubviews() {
         super.layoutSubviews()
         let w = bounds.width
+        musicView.frame = bounds
         switch mode {
         case .mini:
             let h = bounds.height
-            let videoW = (h * 16 / 9).rounded()
-            webView.frame = CGRect(x: 0, y: 0, width: videoW, height: h)
+            let leftWidth: CGFloat
+            if musicMode {
+                // Обложка трека; маленький веб-плеер прячется под ней и продолжает играть.
+                let side = h - 16
+                miniArtwork.frame = CGRect(x: 8, y: 8, width: side, height: side)
+                webView.frame = miniArtwork.frame
+                leftWidth = 8 + side
+            } else {
+                let videoW = (h * 16 / 9).rounded()
+                webView.frame = CGRect(x: 0, y: 0, width: videoW, height: h)
+                leftWidth = videoW
+            }
             let buttonW: CGFloat = 48
             closeButton.frame = CGRect(x: w - buttonW, y: 0, width: buttonW, height: h)
             playPauseButton.frame = CGRect(x: w - buttonW * 2, y: 0, width: buttonW, height: h)
-            let textX = videoW + 12
+            let textX = leftWidth + 12
             let textW = max(0, playPauseButton.frame.minX - textX - 4)
             titleLabel.frame = CGRect(x: textX, y: h / 2 - 19, width: textW, height: 20)
             subtitleLabel.frame = CGRect(x: textX, y: h / 2 + 1, width: textW, height: 18)
             progressView.frame = CGRect(x: 0, y: h - 2, width: w * progress, height: 2)
         case .expanded:
+            if isFullscreen {
+                webView.frame = bounds
+                return
+            }
             let top = safeAreaInsets.top
             topBar.frame = CGRect(x: 0, y: 0, width: w, height: top + 44)
-            collapseButton.frame = CGRect(x: 4, y: top, width: 48, height: 44)
-            pipButton.frame = CGRect(x: w - 100, y: top, width: 48, height: 44)
-            musicButton.frame = CGRect(x: w - 52, y: top, width: 48, height: 44)
+            collapseButton.frame = CGRect(x: safeAreaInsets.left + 4, y: top, width: 48, height: 44)
+            pipButton.frame = CGRect(x: w - safeAreaInsets.right - 100, y: top, width: 48, height: 44)
+            musicButton.frame = CGRect(x: w - safeAreaInsets.right - 52, y: top, width: 48, height: 44)
             topTitleLabel.frame = CGRect(x: 104, y: top, width: max(0, w - 208), height: 44)
             webView.frame = CGRect(x: 0, y: topBar.frame.maxY, width: w, height: bounds.height - topBar.frame.maxY)
         }
@@ -210,6 +354,15 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         setNeedsLayout()
+    }
+
+    private func updateMiniArtwork(_ id: String) {
+        guard id != miniArtworkID else { return }
+        miniArtworkID = id
+        ArtworkLoader.shared.load(id, size: .small) { [weak self] image, _ in
+            guard self?.miniArtworkID == id else { return }
+            self?.miniArtwork.image = image
+        }
     }
 
     // MARK: - Кнопки
@@ -245,7 +398,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let paused = body["paused"] as? Bool ?? true
             let time = (body["time"] as? NSNumber)?.doubleValue ?? 0
             let duration = (body["duration"] as? NSNumber)?.doubleValue ?? 0
-            if let id = body["id"] as? String { currentVideoID = id }
             titleLabel.text = title
             subtitleLabel.text = artist
             topTitleLabel.text = title
@@ -253,6 +405,14 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
             progress = duration > 0 ? CGFloat(min(1, max(0, time / duration))) : 0
             if mode == .mini { progressView.frame.size.width = bounds.width * progress }
+            if let id = body["id"] as? String {
+                currentVideoID = id
+                updateMiniArtwork(id)
+                musicView.update(id: id, title: title, artist: artist, paused: paused, time: time,
+                                 duration: duration, loop: body["loop"] as? Bool ?? false)
+            }
+        case "fullscreen":
+            setFullscreen(body["on"] as? Bool == true)
         case "browse":
             if let s = body["url"] as? String, let url = URL(string: s) { onOpenInBrowse?(url) }
         default:
@@ -267,6 +427,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             currentVideoID = Self.videoID(from: url) ?? currentVideoID
             return
         }
+        if url.path == "/watch_videos" { return } // свой плейлист: YouTube сейчас перенаправит на /watch
         onOpenInBrowse?(url)
         if webView.canGoBack { webView.goBack() }
     }

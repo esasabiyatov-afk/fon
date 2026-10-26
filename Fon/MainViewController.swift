@@ -9,15 +9,19 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private enum PlayerState { case hidden, mini, expanded }
 
     private enum TabKind {
-        case page(video: String, music: String) // путь в режиме видео и в режиме музыки
+        /// Путь в режиме видео и в режиме музыки; nil в режиме музыки — нативная медиатека.
+        case web(video: String, music: String?)
         case search
-        case mode                               // переключатель «Видео / Музыка»
+        case mode // переключатель «Видео / Музыка»
     }
+
+    private enum TabContent { case web(String), library, none }
 
     private let browseContainer = UIView()
     private var browseViews: [Int: WKWebView] = [:]
     private var browseRoots: [Int: String] = [:] // какой корневой путь загружен во вкладке
     private var urlObservations: [Int: NSKeyValueObservation] = [:]
+    private var libraryNav: UINavigationController?
     private var currentTab = 0
     private var browseBottomInset: CGFloat = 0
 
@@ -27,18 +31,23 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private let base = "https://m.youtube.com"
-    /// Музыкальный раздел YouTube: подборки, чарты, плейлисты по настроению.
-    private static let musicHome = "/channel/UC-9-kyTW8ZkZNDHQJ6FgpwQ"
+    /// Главная в режиме музыки — обычные рекомендации, но с фильтром «Музыка» (его включает скрипт ленты).
     private let tabs: [(title: String, icon: String, kind: TabKind)] = [
-        ("Главная", "house", .page(video: "/", music: MainViewController.musicHome)),
+        ("Главная", "house", .web(video: "/", music: "/#fon-music")),
         ("Поиск", "magnifyingglass", .search),
-        ("Подписки", "play.rectangle.on.rectangle", .page(video: "/feed/subscriptions", music: "/feed/subscriptions")),
-        ("Вы", "person.crop.circle", .page(video: "/feed/library", music: "/feed/library")),
+        ("Подписки", "play.rectangle.on.rectangle", .web(video: "/feed/subscriptions", music: "/feed/subscriptions")),
+        ("Вы", "person.crop.circle", .web(video: "/feed/library", music: nil)),
         ("Режим", "music.note", .mode)
     ]
+    private let libraryTabIndex = 3
     private var modeTabIndex: Int { tabs.count - 1 }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    override var prefersStatusBarHidden: Bool { playerState == .expanded && playerView.isFullscreen }
+    override var prefersHomeIndicatorAutoHidden: Bool { playerState == .expanded && playerView.isFullscreen }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        traitCollection.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -63,7 +72,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         tabBar.delegate = self
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tabBar)
-        updateModeTab()
+        updateModeTabs()
 
         NSLayoutConstraint.activate([
             browseContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -82,10 +91,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         playerView.onCollapse = { [weak self] in self?.setPlayerState(.mini) }
         playerView.onClose = { [weak self] in self?.setPlayerState(.hidden) }
         playerView.onOpenInBrowse = { [weak self] url in
-            self?.currentBrowseView.load(URLRequest(url: url))
+            self?.webViewForLoading().load(URLRequest(url: url))
             self?.setPlayerState(.mini)
         }
         playerView.onMusicModeChanged = { [weak self] in self?.musicModeChanged() }
+        playerView.onAddToPlaylist = { [weak self] track in self?.presentAddToPlaylist(track) }
+        playerView.onFullscreenChanged = { [weak self] on in self?.fullscreenChanged(on) }
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -123,6 +134,43 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return components.url ?? url
     }
 
+    /// Свой плейлист играем через временный плейлист YouTube (watch_videos):
+    /// тогда «следующий», экран блокировки и автопереход работают как у обычного плейлиста.
+    private func playTracks(_ tracks: [Track], from start: Int, shuffle: Bool, name: String) {
+        guard tracks.indices.contains(start) else { return }
+        var list = Array(tracks[start...]) + Array(tracks[..<start])
+        if shuffle { list.shuffle() }
+        var components = URLComponents(string: base + "/watch_videos")!
+        components.queryItems = [URLQueryItem(name: "video_ids", value: list.prefix(50).map(\.id).joined(separator: ","))]
+        guard let url = components.url else { return }
+        playerView.load(url, source: name)
+        setPlayerState(.expanded)
+    }
+
+    private func presentAddToPlaylist(_ track: Track) {
+        let style: UIAlertController.Style = traitCollection.userInterfaceIdiom == .pad ? .alert : .actionSheet
+        let sheet = UIAlertController(title: "Добавить в плейлист", message: track.title, preferredStyle: style)
+        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        for playlist in Library.shared.playlists {
+            let source = TrackListSource.playlist(playlist.id)
+            let has = Library.shared.contains(track.id, in: source)
+            sheet.addAction(UIAlertAction(title: (has ? "✓ " : "") + playlist.name, style: .default) { [weak self] _ in
+                let added = Library.shared.add(track, to: source)
+                self?.view.showToast(added ? "Добавлено в «\(playlist.name)»" : "Уже есть в «\(playlist.name)»", at: center)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Новый плейлист…", style: .default) { [weak self] _ in
+            guard let self else { return }
+            LibraryViewController.askName(title: "Новый плейлист", initial: "", from: self) { name in
+                let playlist = Library.shared.createPlaylist(named: name)
+                Library.shared.add(track, to: .playlist(playlist.id))
+                self.view.showToast("Добавлено в «\(playlist.name)»", at: center)
+            }
+        })
+        sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        present(sheet, animated: true)
+    }
+
     private func setPlayerState(_ state: PlayerState) {
         playerState = state
         switch state {
@@ -130,7 +178,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case .mini: playerView.setMode(.mini)
         case .expanded: playerView.setMode(.expanded)
         }
-        UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.layoutPlayer()
             self.playerView.layoutIfNeeded()
         }
@@ -155,10 +204,21 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
+    /// Свой полный экран: прячем статус-бар, на iPhone поворачиваем экран горизонтально.
+    private func fullscreenChanged(_ on: Bool) {
+        if on && playerState != .expanded { setPlayerState(.expanded) }
+        setNeedsStatusBarAppearanceUpdate()
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        guard traitCollection.userInterfaceIdiom == .phone, let scene = view.window?.windowScene else { return }
+        setNeedsUpdateOfSupportedInterfaceOrientations()
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: on ? .landscapeRight : .portrait)) { _ in }
+    }
+
     /// Чтобы мини-плеер не закрывал низ ленты.
     private func setBrowseBottomInset(_ inset: CGFloat) {
         browseBottomInset = inset
         browseViews.values.forEach { applyBottomInset(to: $0) }
+        libraryNav?.additionalSafeAreaInsets.bottom = inset
     }
 
     private func applyBottomInset(to webView: WKWebView) {
@@ -170,8 +230,6 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     // MARK: - Вкладки
 
-    private var currentBrowseView: WKWebView { browseView(for: currentTab) }
-
     /// Окно вкладки создаётся при первом открытии и дальше живёт вместе со своей историей.
     private func browseView(for index: Int) -> WKWebView {
         if let existing = browseViews[index] { return existing }
@@ -182,7 +240,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         webView.frame = browseContainer.bounds
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.isHidden = true
-        browseContainer.addSubview(webView)
+        browseContainer.insertSubview(webView, at: 0)
         urlObservations[index] = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
             DispatchQueue.main.async { self?.browseURLChanged(webView) }
         }
@@ -191,19 +249,60 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return webView
     }
 
-    private func rootPath(for index: Int) -> String? {
-        guard case let .page(video, music) = tabs[index].kind else { return nil }
-        return Settings.musicMode ? music : video
+    private func libraryController() -> UINavigationController {
+        if let libraryNav { return libraryNav }
+        let library = LibraryViewController()
+        library.onPlay = { [weak self] tracks, start, shuffle, name in
+            self?.playTracks(tracks, from: start, shuffle: shuffle, name: name)
+        }
+        let nav = UINavigationController(rootViewController: library)
+        nav.navigationBar.prefersLargeTitles = true
+        nav.navigationBar.tintColor = PlayerView.accent
+        nav.overrideUserInterfaceStyle = .dark
+        nav.view.backgroundColor = .black
+        addChild(nav)
+        nav.view.frame = browseContainer.bounds
+        nav.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        browseContainer.addSubview(nav.view)
+        nav.didMove(toParent: self)
+        nav.additionalSafeAreaInsets.bottom = browseBottomInset
+        libraryNav = nav
+        return nav
+    }
+
+    private func content(for index: Int) -> TabContent {
+        guard case let .web(video, music) = tabs[index].kind else { return .none }
+        guard Settings.musicMode else { return .web(video) }
+        if let music { return .web(music) }
+        return .library
     }
 
     private func showTab(_ index: Int) {
         currentTab = index
-        let webView = browseView(for: index)
-        browseViews.forEach { $0.value.isHidden = $0.key != index }
-        if let root = rootPath(for: index), browseRoots[index] != root {
-            load(path: root, in: webView)
-            browseRoots[index] = root
+        tabBar.selectedItem = tabBar.items?[index]
+        switch content(for: index) {
+        case .library:
+            let nav = libraryController()
+            nav.view.isHidden = false
+            browseViews.values.forEach { $0.isHidden = true }
+        case .web(let root):
+            libraryNav?.view.isHidden = true
+            let webView = browseView(for: index)
+            browseViews.forEach { $0.value.isHidden = $0.key != index }
+            if browseRoots[index] != root {
+                load(path: root, in: webView)
+                browseRoots[index] = root
+            }
+        case .none:
+            break
         }
+    }
+
+    /// Куда грузить ссылку или поиск: в текущую вкладку, а если открыта медиатека — на главную.
+    private func webViewForLoading() -> WKWebView {
+        if case .web = content(for: currentTab) { return browseView(for: currentTab) }
+        showTab(0)
+        return browseView(for: 0)
     }
 
     private func load(path: String, in webView: WKWebView) {
@@ -213,20 +312,27 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     /// Повторное нажатие на открытую вкладку: сначала наверх, потом к началу раздела.
     private func reselectTab(_ index: Int) {
-        let webView = browseView(for: index)
-        let scroll = webView.scrollView
-        let top = -scroll.adjustedContentInset.top
-        if scroll.contentOffset.y > top + 1 {
-            scroll.setContentOffset(CGPoint(x: 0, y: top), animated: true)
-        } else if let root = rootPath(for: index) {
-            load(path: root, in: webView)
+        switch content(for: index) {
+        case .library:
+            libraryNav?.popToRootViewController(animated: true)
+        case .web(let root):
+            let webView = browseView(for: index)
+            let scroll = webView.scrollView
+            let top = -scroll.adjustedContentInset.top
+            if scroll.contentOffset.y > top + 1 {
+                scroll.setContentOffset(CGPoint(x: 0, y: top), animated: true)
+            } else {
+                load(path: root, in: webView)
+            }
+        case .none:
+            break
         }
     }
 
     private func search(_ query: String) {
         var components = URLComponents(string: base + "/results")!
         components.queryItems = [URLQueryItem(name: "search_query", value: query)]
-        if let url = components.url { currentBrowseView.load(URLRequest(url: url)) }
+        if let url = components.url { webViewForLoading().load(URLRequest(url: url)) }
         if playerState == .expanded { setPlayerState(.mini) }
     }
 
@@ -236,7 +342,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         openInPlayer(url)
         if webView.canGoBack {
             webView.goBack()
-        } else if let index = browseViews.first(where: { $0.value === webView })?.key, let root = rootPath(for: index) {
+        } else if let index = browseViews.first(where: { $0.value === webView })?.key, case let .web(root) = content(for: index) {
             load(path: root, in: webView)
         }
     }
@@ -244,7 +350,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
         let index = item.tag
         switch tabs[index].kind {
-        case .page:
+        case .web:
             if index == currentTab { reselectTab(index) } else { showTab(index) }
             if playerState == .expanded { setPlayerState(.mini) }
         case .search:
@@ -264,26 +370,25 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
-    /// Сменился режим (из вкладки или кнопкой ♪ в плеере): обновляем вкладку и главную.
+    /// Сменился режим (из вкладки или кнопкой в плеере): обновляем вкладки и открытый раздел.
     private func musicModeChanged() {
-        updateModeTab()
-        if currentTab == 0 {
-            showTab(0)
-        } else {
-            browseRoots[0] = nil // главная перезагрузится при следующем открытии
-        }
+        updateModeTabs()
+        showTab(currentTab) // остальные вкладки обновятся при следующем открытии
     }
 
-    private func updateModeTab() {
-        guard let item = tabBar.items?[modeTabIndex] else { return }
-        if Settings.musicMode {
-            item.title = "Музыка"
-            let pink = UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1)
-            item.image = UIImage(systemName: "music.note")?.withTintColor(pink, renderingMode: .alwaysOriginal)
+    private func updateModeTabs() {
+        guard let items = tabBar.items else { return }
+        let music = Settings.musicMode
+        let modeItem = items[modeTabIndex]
+        if music {
+            modeItem.title = "Музыка"
+            modeItem.image = UIImage(systemName: "music.note")?.withTintColor(PlayerView.accent, renderingMode: .alwaysOriginal)
         } else {
-            item.title = "Видео"
-            item.image = UIImage(systemName: "play.rectangle")
+            modeItem.title = "Видео"
+            modeItem.image = UIImage(systemName: "play.rectangle")
         }
+        items[libraryTabIndex].title = music ? "Медиатека" : "Вы"
+        items[libraryTabIndex].image = UIImage(systemName: music ? "square.stack.fill" : "person.crop.circle")
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -314,7 +419,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let url = webView.url {
             webView.load(URLRequest(url: url))
-        } else if let index = browseViews.first(where: { $0.value === webView })?.key, let root = rootPath(for: index) {
+        } else if let index = browseViews.first(where: { $0.value === webView })?.key, case let .web(root) = content(for: index) {
             load(path: root, in: webView)
         }
     }
