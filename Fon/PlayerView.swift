@@ -13,6 +13,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     static let miniHeight: CGFloat = 64
 
     private(set) var mode: Mode = .expanded
+
+    /// Режим музыки: самое низкое качество видео, вместо картинки — обложка. Запоминается.
+    private(set) var musicMode: Bool = UserDefaults.standard.object(forKey: "musicMode") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(musicMode, forKey: "musicMode") }
+    }
     private(set) var currentVideoID: String?
     private var webView: WKWebView!
     private var urlObservation: NSKeyValueObservation?
@@ -29,6 +34,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let topBar = UIView()
     private let collapseButton = UIButton(type: .system)
     private let topTitleLabel = UILabel()
+    private let musicButton = UIButton(type: .system)
     private var miniGestures: [UIGestureRecognizer] = []
 
     override init(frame: CGRect) {
@@ -69,8 +75,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         topTitleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         topTitleLabel.textColor = .white
         topTitleLabel.textAlignment = .center
+        musicButton.addTarget(self, action: #selector(musicTapped), for: .touchUpInside)
+        updateMusicButton()
         topBar.addSubview(collapseButton)
         topBar.addSubview(topTitleLabel)
+        topBar.addSubview(musicButton)
         addSubview(topBar)
 
         // Жесты: нажатие или свайп вверх на мини — развернуть; свайп вниз по шапке — свернуть.
@@ -111,12 +120,43 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     func setMode(_ newMode: Mode) {
         mode = newMode
         let isMini = newMode == .mini
-        runJS("window.__fon && __fon.setMini && __fon.setMini(\(isMini))")
+        applyPageState()
         webView.isUserInteractionEnabled = !isMini
         [titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
         topBar.isHidden = isMini
         miniGestures.forEach { $0.isEnabled = isMini } // в развёрнутом виде не мешаем нажатиям на странице
         setNeedsLayout()
+    }
+
+    /// Передаём странице текущий вид: мини или нет, режим музыки или видео.
+    private func applyPageState() {
+        runJS("window.__fon && __fon.setMini && __fon.setMini(\(mode == .mini))")
+        runJS("window.__fon && __fon.setMusic && __fon.setMusic(\(musicMode))")
+    }
+
+    private func updateMusicButton() {
+        let symbols = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+        musicButton.setImage(UIImage(systemName: musicMode ? "music.note" : "play.rectangle", withConfiguration: symbols), for: .normal)
+        musicButton.tintColor = musicMode ? UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1) : .white
+        musicButton.accessibilityLabel = musicMode ? "Режим музыки включён" : "Режим видео"
+    }
+
+    @objc private func musicTapped() {
+        musicMode.toggle()
+        updateMusicButton()
+        applyPageState()
+        let toast = UILabel()
+        toast.text = musicMode ? "  Режим музыки: обложка, 144p  " : "  Режим видео  "
+        toast.font = .systemFont(ofSize: 14, weight: .semibold)
+        toast.textColor = .white
+        toast.backgroundColor = UIColor(white: 0.15, alpha: 0.95)
+        toast.layer.cornerRadius = 16
+        toast.clipsToBounds = true
+        toast.sizeToFit()
+        toast.frame.size.height = 32
+        toast.center = CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40)
+        addSubview(toast)
+        UIView.animate(withDuration: 0.3, delay: 1.4, options: []) { toast.alpha = 0 } completion: { _ in toast.removeFromSuperview() }
     }
 
     func command(_ name: String) {
@@ -155,6 +195,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             topBar.frame = CGRect(x: 0, y: 0, width: w, height: top + 44)
             collapseButton.frame = CGRect(x: 4, y: top, width: 48, height: 44)
             topTitleLabel.frame = CGRect(x: 56, y: top, width: w - 112, height: 44)
+            musicButton.frame = CGRect(x: w - 52, y: top, width: 48, height: 44)
             webView.frame = CGRect(x: 0, y: topBar.frame.maxY, width: w, height: bounds.height - topBar.frame.maxY)
         }
     }
@@ -235,7 +276,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        setMode(mode) // повторно применяем мини-режим после перезагрузки страницы
+        applyPageState() // повторно применяем режимы после перезагрузки страницы
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,

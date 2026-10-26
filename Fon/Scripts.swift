@@ -94,6 +94,7 @@ enum Scripts {
   }, true);
 
   fon.onVisibility = () => {
+    setTimeout(() => { try { applyQuality(); } catch (e) {} }, 1500); // после того, как звук снова пошёл
     if (fon.realHidden && systemPausedEl && Date.now() - systemPausedAt < 2000) {
       setTimeout(() => tryResume(systemPausedEl), 100);
     }
@@ -206,8 +207,51 @@ enum Scripts {
     html.fon-mini .player-controls-content,
     html.fon-mini .ytp-unmute { display: none !important; }
     ytm-pivot-bar-renderer { display: none !important; }
+
+    html.fon-music #player-container-id,
+    html.fon-music .player-container,
+    html.fon-music #player,
+    html.fon-music .html5-video-player {
+      background: #000 var(--fon-thumb, none) center / cover no-repeat !important;
+    }
+    html.fon-music video { opacity: 0 !important; }
   `);
   fon.setMini = (on) => { document.documentElement.classList.toggle('fon-mini', !!on); };
+
+  // --- 4b. Режим музыки и экономия: самое низкое качество видео, когда картинка не нужна.
+  fon.musicMode = false;
+  fon.setMusic = (on) => {
+    fon.musicMode = !!on;
+    document.documentElement.classList.toggle('fon-music', fon.musicMode);
+    applyQuality();
+  };
+
+  const ytPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+  let qualityKey = null; // что и для какого видео уже выставили
+
+  function applyQuality() {
+    const p = ytPlayer();
+    const id = currentId();
+    if (!p || !id || typeof p.getAvailableQualityLevels !== 'function') return;
+    const low = fon.musicMode || fon.realHidden; // в фоне картинку всё равно никто не видит
+    const key = id + ':' + (low ? 'low' : 'auto');
+    if (key === qualityKey) return;
+    if (!low && (qualityKey === null || !qualityKey.startsWith(id + ':'))) { qualityKey = key; return; } // новое видео в обычном режиме — YouTube сам выберет качество
+    let levels = [];
+    try { levels = (p.getAvailableQualityLevels() || []).filter((q) => q && q !== 'auto'); } catch (e) {}
+    if (!levels.length) return; // плеер ещё не готов — попробуем на следующем тике
+    try {
+      if (low) {
+        const lowest = levels[levels.length - 1];
+        if (p.setPlaybackQualityRange) p.setPlaybackQualityRange(lowest, lowest);
+        if (p.setPlaybackQuality) p.setPlaybackQuality(lowest);
+      } else {
+        if (p.setPlaybackQualityRange) p.setPlaybackQualityRange('auto', 'auto');
+        if (p.setPlaybackQuality) p.setPlaybackQuality('auto');
+      }
+      qualityKey = key;
+    } catch (e) {}
+  }
 
   // --- 5. Ссылки не на видео (канал, поиск) открываем в основном окне.
   window.addEventListener('click', (e) => {
@@ -224,10 +268,17 @@ enum Scripts {
   // --- 6. Раз в секунду сообщаем приложению, что играет (для мини-плеера).
   let ownMeta = false;
   let lastId = null;
+  let lastThumbId = null;
   setInterval(() => {
     const v = fon.video();
     const id = currentId();
-    if (!v || !id) { fon.post({ type: 'state', active: false }); return; }
+    if (!v || !id) { if (!fon.realHidden) fon.post({ type: 'state', active: false }); return; }
+
+    applyQuality();
+    if (id !== lastThumbId) {
+      lastThumbId = id;
+      document.documentElement.style.setProperty('--fon-thumb', 'url("https://i.ytimg.com/vi/' + id + '/hqdefault.jpg")');
+    }
 
     let md = ms && ms.metadata;
     if (id !== lastId) { lastId = id; if (ownMeta && ms) { ms.metadata = null; md = null; ownMeta = false; } }
@@ -244,6 +295,8 @@ enum Scripts {
         ownMeta = true;
       } catch (e) {}
     }
+
+    if (fon.realHidden) return; // в фоне интерфейс не виден — не тратим энергию на сообщения
 
     fon.post({
       type: 'state', active: true, id, title, artist, thumb,
