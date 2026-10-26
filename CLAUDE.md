@@ -5,7 +5,7 @@
 
 ## Ограничения окружения (важно)
 - **Mac нет.** Владелец на Windows. Xcode локально недоступен.
-- **Сборка — только в облаке:** `.github/workflows/build.yml` на `macos-latest`: XcodeGen → `xcodebuild` без подписи → `Fon.ipa` в Artifacts (`Fon-ipa`). Сборка запускается на каждый push в `main`.
+- **Сборка — только в облаке:** `.github/workflows/build.yml` на `macos-15-intel` (arm64-машины GitHub бывают перегружены — сборка отменялась, не дождавшись runner): XcodeGen → `xcodebuild` без подписи → `Fon.ipa` в Artifacts (`Fon-ipa`). Сборка запускается на каждый push в `main` (только main) и вручную (workflow_dispatch).
 - Проект Xcode **не хранится** в репозитории — его генерирует XcodeGen из `project.yml`. Новые `.swift` в папке `Fon/` подхватываются автоматически. Не создавай `.js`-файлы в `Fon/` (Xcode может положить их в Compile Sources) — JS живёт строками в `Scripts.swift`.
 - **Установка на телефон:** iloader (Windows) с бесплатным Apple ID, подпись живёт 7 дней. Sideloadly с конца октября 2026 не работает (ошибка Apple -80046).
 - Проверить на настоящем айфоне можно только руками владельца — проси скриншоты и описание поведения.

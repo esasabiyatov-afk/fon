@@ -2,11 +2,13 @@ name: Build IPA
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Mac на arm64 у GitHub бывают перегружены (сборка часами ждёт машину) — собираем на Intel.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
