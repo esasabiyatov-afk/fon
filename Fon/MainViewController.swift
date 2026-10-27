@@ -184,6 +184,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case .mini: playerView.setMode(.mini)
         case .expanded: playerView.setMode(.expanded)
         }
+        // Развёрнутый плеер закрывает вкладки, а мини-полоска никогда не должна закрывать их иконки.
+        if state == .expanded { view.bringSubviewToFront(playerView) } else { view.bringSubviewToFront(tabBar) }
         UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.layoutPlayer()
@@ -200,6 +202,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             setBrowseBottomInset(0)
         case .mini:
             playerView.isHidden = false
+            playerView.transform = .identity // мог остаться сдвиг от перетаскивания
             let h = PlayerView.miniHeight
             playerView.frame = CGRect(x: 0, y: tabBar.frame.minY - h, width: bounds.width, height: h)
             setBrowseBottomInset(h)
