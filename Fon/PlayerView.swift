@@ -50,6 +50,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private var miniGestures: [UIGestureRecognizer] = []
     private let dragGesture = UIPanGestureRecognizer()
     private var backgroundWatch: Timer?
+    private var dragStartedInFullscreen = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -291,6 +292,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         updateVisibility()
         setNeedsLayout()
         onFullscreenChanged?(on)
+        // После поворота экрана — ещё раз перерисовать видео, когда раскладка устоится.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.repaint() }
+    }
+
+    /// WebKit иногда теряет картинку видео после поворота или смены раскладки — просим перерисовать.
+    func repaint() {
+        runJS("window.__fon && __fon.repaint && __fon.repaint()")
     }
 
     func exitFullscreen() {
@@ -321,8 +329,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         let ty = max(0, pan.translation(in: superview).y)
         let velocity = pan.velocity(in: superview).y
 
-        if isFullscreen {
-            if pan.state == .ended, ty > 80 || velocity > 800 { exitFullscreen() }
+        // Жест, начатый в полном экране, только выходит из него — до самого конца жеста.
+        // Иначе YouTube (у него свой свайп выхода) закрывал полный экран посреди жеста,
+        // остаток свайпа сворачивал плеер, и видео пропадало (чёрный экран со звуком).
+        if pan.state == .began { dragStartedInFullscreen = isFullscreen }
+        if dragStartedInFullscreen {
+            if pan.state == .ended, isFullscreen, ty > 80 || velocity > 800 { exitFullscreen() }
+            if [.ended, .cancelled, .failed].contains(pan.state) { dragStartedInFullscreen = false }
             return
         }
 

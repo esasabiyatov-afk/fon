@@ -103,7 +103,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         layoutPlayer()
     }
 
-    override func viewDidAppear(_ animated: Bool) {
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.playerView.repaint() }
+    }
+
+        override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         Signature.warnIfNeeded(from: self)
     }
