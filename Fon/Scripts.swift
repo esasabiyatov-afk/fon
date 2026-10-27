@@ -66,8 +66,15 @@ enum Scripts {
   const proto = HTMLMediaElement.prototype;
   const origPause = proto.pause;
   const origPlay = proto.play;
-  proto.pause = function () { this.__fonUserPaused = true; return origPause.call(this); };
-  proto.play = function () { this.__fonUserPaused = false; return origPlay.call(this); };
+  // Пока приложение свёрнуто, pause() из JS YouTube чаще всего реакция на отказ WebKit играть в фоне,
+  // а не решение пользователя. Настоящая пауза в фоне — только наша команда (экран блокировки).
+  fon.explicitPause = false;
+  proto.pause = function () {
+    this.__fonUserPaused = !fon.realHidden || fon.explicitPause;
+    if (fon.explicitPause) this.__fonHardPause = true;
+    return origPause.call(this);
+  };
+  proto.play = function () { this.__fonUserPaused = false; this.__fonHardPause = false; return origPlay.call(this); };
 
   let systemPausedEl = null;
   let systemPausedAt = 0;
@@ -81,6 +88,9 @@ enum Scripts {
 
   document.addEventListener('play', (e) => {
     if (e.target instanceof HTMLMediaElement) { e.target.__fonUserPaused = false; applyActions(); }
+  }, true);
+  document.addEventListener('playing', (e) => {
+    if (e.target instanceof HTMLMediaElement) e.target.__fonPlayed = true;
   }, true);
 
   // Сворачивание: WebKit ставит видео на паузу, потом страница становится скрытой.
@@ -106,9 +116,29 @@ enum Scripts {
     }
   };
 
-  // Подстраховка из приложения после ухода в фон.
-  fon.resumeIfNeeded = () => {
-    if (systemPausedEl && Date.now() - systemPausedAt < 6000) tryResume(systemPausedEl);
+  // --- 1b. Ушли из приложения, пока видео ещё грузилось. Приложение раз в секунду (до ~25 с)
+  // вызывает backgroundTick — это заодно будит WebKit — а мы помогаем видео начать играть.
+  // Возвращаем 'playing', 'waiting' или 'idle' (пользователь сам поставил паузу — ничего не делаем).
+  let wantPlay = false;
+  const shouldForce = (v) =>
+    !v.ended && !v.__fonHardPause && (!v.__fonUserPaused || !v.__fonPlayed);
+  fon.backgroundTick = (first) => {
+    const v = fon.video();
+    if (first) wantPlay = !v || !v.paused || shouldForce(v); // видео ещё нет — значит, страница грузится
+    if (!wantPlay) return 'idle';
+    if (v && !v.paused && v.readyState >= 3) return 'playing';
+    clickContinue();
+    if (v && v.paused && shouldForce(v)) {
+      const p = origPlay.call(v);
+      if (p && p.catch) p.catch(() => {});
+    }
+    return 'waiting';
+  };
+  // Наушники отключили — это пауза пользователя, в фоне не включаем звук сами.
+  fon.markUserPaused = () => {
+    wantPlay = false;
+    const v = fon.video();
+    if (v) { v.__fonUserPaused = true; v.__fonHardPause = true; }
   };
 
   // Окно «Видео приостановлено. Продолжить?» в фоне — нажимаем «Да».
@@ -152,8 +182,15 @@ enum Scripts {
     const v = fon.video();
     switch (c) {
       case 'play':   if (v) v.play().catch(() => {}); break;
-      case 'pause':  if (v) v.pause(); break;
-      case 'toggle': if (v) { v.paused ? v.play().catch(() => {}) : v.pause(); } break;
+      case 'pause':
+        if (v) { fon.explicitPause = true; try { v.pause(); } finally { fon.explicitPause = false; } }
+        break;
+      case 'toggle':
+        if (!v) break;
+        if (v.paused) { v.play().catch(() => {}); break; }
+        fon.explicitPause = true;
+        try { v.pause(); } finally { fon.explicitPause = false; }
+        break;
       case 'seek':   if (v && typeof arg === 'number') v.currentTime = arg; break;
       case 'next': {
         const el = findNext();

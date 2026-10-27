@@ -30,7 +30,8 @@
 
 ## Ключевые приёмы
 - **Видимость:** `document.hidden`/`visibilityState` всегда «visible», события `visibilitychange` перехватываются на window (capture) и не доходят до YouTube; настоящее состояние — `__fon.realHidden`.
-- **Автопродолжение в фоне (как Brave `MediaBackgroundingScript.js`):** `HTMLMediaElement.prototype.pause/play` обёрнуты — пауза из JS = пауза пользователя (`__fonUserPaused`). Пауза без JS (от WebKit при сворачивании) + переход в hidden в пределах 2 с → вызываем оригинальный `play()`. Плюс `PlayerView.kickResume()` после `didEnterBackground`.
+- **Автопродолжение в фоне (как Brave `MediaBackgroundingScript.js`):** `HTMLMediaElement.prototype.pause/play` обёрнуты — пауза из JS **при видимой странице** = пауза пользователя (`__fonUserPaused`); в фоне пауза из JS YouTube не считается пользовательской (обычно это реакция на отказ WebKit), настоящая пауза в фоне — только наша команда (`fon.explicitPause` → `__fonHardPause`). Пауза без JS (от WebKit при сворачивании) + переход в hidden в пределах 2 с → вызываем оригинальный `play()`.
+- **Старт в фоне (видео ещё грузилось при сворачивании):** без звука iOS усыпляет приложение и WebKit, видео не стартует. `PlayerView.watchBackgroundStart` держит `beginBackgroundTask` и раз в 1 с (до 25 с) зовёт `__fon.backgroundTick(first)` — вызов `evaluateJavaScript` будит WebKit, страница жмёт `play()`; стоп при 'playing' 2 тика подряд или 'idle' (пауза пользователя). Отключение наушников (`routeChange .oldDeviceUnavailable`) → `markUserPaused`, чтобы не включить звук в динамик.
 - **Экран блокировки:** Now Playing ведёт сам WebKit через `navigator.mediaSession`. `setActionHandler` перехвачен: наши play/pause/nexttrack/previoustrack/seekto, `seekforward/seekbackward = null`, YouTube их не перезапишет. Нативного `MPRemoteCommandCenter` нет — он конфликтовал с WebKit.
 - **Лента → плеер:** клик по `a[href]` с путём `/watch` в ленте перехватывается и уходит в плеер (`{type:'open'}`); запасной путь — KVO на `url` ленты. В плеере ссылки не на `/watch` уходят в ленту (`{type:'browse'}`).
 - **Мини-режим:** класс `fon-mini` на `<html>` растягивает `#player-container-id/.player-container/#player` и `video` на весь viewport; webview в мини-полоске 16:9.
@@ -50,6 +51,7 @@
 - Жалобы, исправленные в следующей версии: в полном экране не было субтитров и настроек (системный AVKit-плеер); на iPad окно не разворачивалось на весь экран; свайп сворачивания был только по шапке; музыкальный канал на главной не понравился — хочет обычные рекомендации, но музыку.
 
 ## Что ещё НЕ проверено на устройстве
+- Старт воспроизведения в фоне, если свернуть приложение, пока видео грузится (жалоба владельца: видео «пропадало»).
 - Нативный музыкальный плеер, медиатека, `watch_videos` для своих плейлистов, чип «Музыка» на главной.
 - Свой полный экран (субтитры, меню качества, поворот), свайп вниз по видео, окно iPad на весь экран со сценами.
 - Скрытие комментариев в режиме музыки.

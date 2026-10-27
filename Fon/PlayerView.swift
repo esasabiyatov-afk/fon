@@ -47,6 +47,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let pipButton = UIButton(type: .system)
     private var miniGestures: [UIGestureRecognizer] = []
     private let dragGesture = UIPanGestureRecognizer()
+    private var backgroundWatch: Timer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -228,13 +229,45 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         runJS("window.__fon && __fon.cmd && __fon.cmd('\(name)')")
     }
 
-    /// После сворачивания приложения несколько раз пробуем продолжить, если WebKit поставил паузу.
-    func kickResume() {
-        for delay in [0.2, 0.6, 1.5, 3.0, 5.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.runJS("window.__fon && __fon.resumeIfNeeded && __fon.resumeIfNeeded()")
+    /// Приложение ушло в фон. Пока звук не пошёл (видео ещё грузится или WebKit поставил паузу),
+    /// iOS усыпляет и приложение, и WebKit — видео так и не начнёт играть. Поэтому раз в секунду
+    /// (до ~25 с, сколько iOS даёт фоновой задаче) зовём страницу: вызов будит WebKit, а страница
+    /// помогает видео стартовать. Когда звук идёт, iOS уже не усыпляет приложение — done().
+    func watchBackgroundStart(done: @escaping () -> Void) {
+        stopBackgroundWatch()
+        guard let url = webView.url, WebViewFactory.isYouTube(url) else { return done() }
+        var tick = 0
+        var playingTicks = 0
+        var finished = false
+        let finish: () -> Void = { [weak self] in
+            guard !finished else { return }
+            finished = true
+            self?.stopBackgroundWatch()
+            done()
+        }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return finish() }
+            tick += 1
+            let js = "window.__fon && __fon.backgroundTick ? __fon.backgroundTick(\(tick == 1)) : 'none'"
+            self.webView.evaluateJavaScript(js) { result, _ in
+                let state = result as? String ?? "none"
+                playingTicks = state == "playing" ? playingTicks + 1 : 0
+                if playingTicks >= 2 || state == "idle" || tick >= 25 { finish() }
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        backgroundWatch = timer
+    }
+
+    func stopBackgroundWatch() {
+        backgroundWatch?.invalidate()
+        backgroundWatch = nil
+    }
+
+    /// Наушники отключили: это пауза, в фоне сами звук не включаем.
+    func markUserPaused() {
+        stopBackgroundWatch()
+        runJS("window.__fon && __fon.markUserPaused && __fon.markUserPaused()")
     }
 
     // MARK: - Полный экран

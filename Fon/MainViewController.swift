@@ -102,6 +102,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
+        nc.addObserver(self, selector: #selector(audioRouteChanged(_:)), name: AVAudioSession.routeChangeNotification, object: nil)
 
         showTab(0)
     }
@@ -428,13 +429,24 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     @objc private func didEnterBackground() {
         try? AVAudioSession.sharedInstance().setActive(true)
-        backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in self?.endBackgroundTask() }
-        playerView.kickResume()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.endBackgroundTask() }
+        endBackgroundTask()
+        backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+            self?.playerView.stopBackgroundWatch()
+            self?.endBackgroundTask()
+        }
+        // Держим приложение, пока видео не заиграет (или до лимита iOS).
+        playerView.watchBackgroundStart { [weak self] in self?.endBackgroundTask() }
     }
 
     @objc private func willEnterForeground() {
+        playerView.stopBackgroundWatch()
         endBackgroundTask()
+    }
+
+    @objc private func audioRouteChanged(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
+        DispatchQueue.main.async { self.playerView.markUserPaused() }
     }
 
     private func endBackgroundTask() {
