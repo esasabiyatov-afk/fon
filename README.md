@@ -78,3 +78,16 @@ Mac не нужен: приложение собирается бесплатн�
 | `.github/workflows/build.yml` | Облачная сборка `.ipa` на Mac от GitHub |
 
 Фоновый режим объявлен в `project.yml` → `UIBackgroundModes: [audio]`.
+
+---
+
+## Обновления через SideStore
+
+Каждая сборка в `main` выкладывается в **Releases** вместе с файлом-источником для SideStore.
+Один раз добавь источник в SideStore: **Sources → «+»** →
+
+```
+https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json
+```
+
+После этого новые версии Fon появляются в **My Apps** с кнопкой **Update**. Работает, только если репозиторий публичный.

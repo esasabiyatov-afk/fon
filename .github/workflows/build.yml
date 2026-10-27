@@ -5,10 +5,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write # чтобы выложить сборку в Releases
+
 jobs:
   build:
     # Mac на arm64 у GitHub бывают перегружены (сборка часами ждёт машину) — собираем на Intel.
     runs-on: macos-15-intel
+    env:
+      VERSION: 1.${{ github.run_number }}
+      BUILD: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +36,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
             build
 
       - name: Package IPA
@@ -42,3 +50,61 @@ jobs:
         with:
           name: Fon-ipa
           path: Fon.ipa
+
+      # Источник для SideStore: https://github.com/<владелец>/<репо>/releases/latest/download/apps.json
+      # Каждая сборка — новый релиз с Fon.ipa и apps.json; SideStore по нему видит обновление.
+      - name: Make SideStore source
+        env:
+          REPO: ${{ github.repository }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          python3 - <<'PY'
+          import json, os, datetime
+          repo, version, build = os.environ["REPO"], os.environ["VERSION"], os.environ["BUILD"]
+          lines = (os.environ.get("NOTES") or "").splitlines()
+          notes = "\n".join(l for l in lines if not l.startswith(("Co-Authored-By", "Claude-Session"))).strip() or "Новая сборка"
+          raw = f"https://raw.githubusercontent.com/{repo}/main/Fon/Assets.xcassets/AppIcon.appiconset/icon.png"
+          source = {
+              "name": "Fon",
+              "identifier": "com.personal.fon.source",
+              "subtitle": "YouTube с музыкой в фоне",
+              "iconURL": raw,
+              "tintColor": "FF3355",
+              "apps": [{
+                  "name": "Fon",
+                  "bundleIdentifier": "com.personal.fon",
+                  "developerName": repo.split("/")[0],
+                  "subtitle": "YouTube с музыкой в фоне",
+                  "localizedDescription": "Обёртка над m.youtube.com: музыка в фоне, режим музыки, своя медиатека.",
+                  "iconURL": raw,
+                  "tintColor": "FF3355",
+                  "category": "entertainment",
+                  "versions": [{
+                      "version": version,
+                      "buildVersion": build,
+                      "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "localizedDescription": notes,
+                      "downloadURL": f"https://github.com/{repo}/releases/download/build-{build}/Fon.ipa",
+                      "size": os.path.getsize("Fon.ipa"),
+                      "minOSVersion": "16.0",
+                  }],
+                  "appPermissions": {"entitlements": [], "privacy": {}},
+              }],
+              "news": [],
+          }
+          with open("apps.json", "w", encoding="utf-8") as f:
+              json.dump(source, f, ensure_ascii=False, indent=2)
+          with open("notes.txt", "w", encoding="utf-8") as f:
+              f.write(notes)
+          PY
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-$BUILD" Fon.ipa apps.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Fon $VERSION" \
+            --notes-file notes.txt \
+            --latest

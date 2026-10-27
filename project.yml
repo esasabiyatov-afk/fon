@@ -13,8 +13,9 @@ targets:
       path: Support/Info.plist
       properties:
         CFBundleDisplayName: Fon
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
+        # Номер версии подставляет сборка в GitHub (1.<номер сборки>) — по нему SideStore видит обновления.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UIBackgroundModes: [audio]
         UILaunchScreen:
           UIColorName: LaunchBackground
