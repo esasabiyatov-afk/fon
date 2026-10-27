@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write # чтобы выложить сборку в Releases
 
+# Новая сборка отменяет незаконченную старую — иначе старая могла выйти позже и стать «последней».
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     # Mac на arm64 у GitHub бывают перегружены (сборка часами ждёт машину) — собираем на Intel.
@@ -103,6 +108,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Если уже выложена сборка новее (эта долго ждала машину) — не откатываем SideStore на старую.
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null | sed 's/^build-//')
+          if [ -n "$latest" ] && [ "$latest" -gt "$BUILD" ] 2>/dev/null; then
+            echo "Уже есть сборка $latest, новее этой ($BUILD) — не публикую."
+            exit 0
+          fi
           gh release create "build-$BUILD" Fon.ipa apps.json \
             --repo "$GITHUB_REPOSITORY" \
             --title "Fon $VERSION" \
