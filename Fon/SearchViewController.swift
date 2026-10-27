@@ -3,6 +3,8 @@ import UIKit
 /// Поиск как в приложении YouTube: история запросов и подсказки по мере ввода.
 final class SearchViewController: UIViewController, UISearchBarDelegate, UITableViewDataSource, UITableViewDelegate {
     var onSearch: ((String) -> Void)?
+    /// Текст в поле при открытии (например, текущий запрос со страницы результатов).
+    var initialText: String?
 
     private let searchBar = UISearchBar()
     private let tableView = UITableView(frame: .zero, style: .plain)
@@ -25,7 +27,8 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         view.backgroundColor = UIColor(white: 0.06, alpha: 1)
         overrideUserInterfaceStyle = .dark
 
-        searchBar.placeholder = "Поиск на YouTube"
+        searchBar.placeholder = Settings.musicMode ? "Песни, исполнители, альбомы" : "Поиск на YouTube"
+        searchBar.text = initialText
         searchBar.showsCancelButton = true
         searchBar.searchBarStyle = .minimal
         searchBar.delegate = self
@@ -38,6 +41,8 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         tableView.delegate = self
         tableView.keyboardDismissMode = .onDrag
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+        tableView.rowHeight = 50
+        tableView.separatorStyle = .none
         tableView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tableView)
 
@@ -55,6 +60,7 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         searchBar.becomeFirstResponder()
+        if let text = initialText, !text.isEmpty { loadSuggestions(for: text) }
     }
 
     // MARK: - Поиск
@@ -77,6 +83,10 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     }
 
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        textChanged(searchText)
+    }
+
+    private func textChanged(_ searchText: String) {
         suggestTask?.cancel()
         let q = searchText.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { suggestions = []; tableView.reloadData(); return }
@@ -133,7 +143,52 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         content.imageProperties.tintColor = UIColor(white: 0.6, alpha: 1)
         cell.contentConfiguration = content
         cell.backgroundColor = .clear
+        // «↖» — подставить строку в поле и уточнить запрос, не запуская поиск.
+        let fill = UIButton(type: .system)
+        fill.setImage(UIImage(systemName: "arrow.up.left"), for: .normal)
+        fill.tintColor = UIColor(white: 0.6, alpha: 1)
+        fill.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+        fill.tag = indexPath.row
+        fill.addTarget(self, action: #selector(fillTapped(_:)), for: .touchUpInside)
+        cell.accessoryView = fill
         return cell
+    }
+
+    @objc private func fillTapped(_ sender: UIButton) {
+        guard rows.indices.contains(sender.tag) else { return }
+        let text = rows[sender.tag] + " "
+        searchBar.text = text
+        textChanged(text)
+    }
+
+    // Заголовок «Недавние» с кнопкой «Очистить».
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        guard showingHistory, !history.isEmpty else { return nil }
+        let header = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 44))
+        let label = UILabel()
+        label.text = "Недавние"
+        label.font = .systemFont(ofSize: 20, weight: .bold)
+        label.textColor = .white
+        label.frame = CGRect(x: 20, y: 8, width: 200, height: 30)
+        header.addSubview(label)
+        let clear = UIButton(type: .system)
+        clear.setTitle("Очистить", for: .normal)
+        clear.tintColor = PlayerView.accent
+        clear.frame = CGRect(x: tableView.bounds.width - 110, y: 8, width: 96, height: 30)
+        clear.autoresizingMask = [.flexibleLeftMargin]
+        clear.contentHorizontalAlignment = .right
+        clear.addTarget(self, action: #selector(clearHistory), for: .touchUpInside)
+        header.addSubview(clear)
+        return header
+    }
+
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        showingHistory && !history.isEmpty ? 44 : 0
+    }
+
+    @objc private func clearHistory() {
+        history = []
+        tableView.reloadData()
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {

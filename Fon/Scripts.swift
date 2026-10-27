@@ -51,6 +51,62 @@ enum Scripts {
   };
 
   fon.absURL = (href) => { try { return new URL(href, location.href); } catch (e) { return null; } };
+
+  // --- Shorts не нужны: прячем полки, карточки и фильтр «Shorts» в ленте, поиске и под видео.
+  fon.addStyle(`
+    ytm-reel-shelf-renderer, ytm-shorts-shelf-renderer, ytm-reel-item-renderer,
+    ytm-shorts-lockup-view-model, ytm-shorts-lockup-view-model-v2,
+    .fon-hidden { display: none !important; }
+  `);
+  // :has() — отдельным блоком: если браузер его не поймёт, первый блок всё равно сработает.
+  fon.addStyle(`
+    ytm-rich-section-renderer:has(ytm-reel-shelf-renderer),
+    ytm-rich-section-renderer:has(ytm-shorts-lockup-view-model),
+    ytm-rich-section-renderer:has(ytm-shorts-lockup-view-model-v2),
+    ytm-item-section-renderer:has(> ytm-reel-shelf-renderer),
+    ytm-rich-item-renderer:has(a[href^="/shorts/"]),
+    ytm-video-with-context-renderer:has(a[href^="/shorts/"]),
+    ytm-compact-video-renderer:has(a[href^="/shorts/"]) { display: none !important; }
+  `);
+  // Запасной путь, если YouTube переименует элементы: прячем секции с заголовком «Shorts».
+  const SHORTS = /^(shorts|шортс)$/i;
+  const SECTION = 'ytm-rich-section-renderer, ytm-item-section-renderer, ytm-reel-shelf-renderer, ytm-shelf-renderer, ytm-horizontal-card-list-renderer';
+  setInterval(() => {
+    if (fon.realHidden || !document.body) return;
+    for (const el of document.querySelectorAll('h2, h3, h4, .reel-shelf-title, [role="heading"]')) {
+      if (!SHORTS.test((el.textContent || '').trim())) continue;
+      const section = el.closest(SECTION);
+      if (section) section.classList.add('fon-hidden');
+    }
+    for (const chip of document.querySelectorAll('ytm-chip-cloud-chip-renderer, yt-chip-cloud-chip-renderer')) {
+      if (SHORTS.test((chip.textContent || '').trim())) chip.classList.add('fon-hidden');
+    }
+  }, 1500);
+
+  // --- Лупа в шапке YouTube открывает поиск приложения, а не веб-поиск.
+  const currentQuery = () => {
+    try { return new URL(location.href).searchParams.get('search_query') || ''; } catch (e) { return ''; }
+  };
+  const openSearch = () => fon.post({ type: 'search', query: currentQuery() });
+  window.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest ? e.target.closest('button, [role="button"], a') : null;
+    if (!b || !b.closest('ytm-mobile-topbar-renderer, header, #header-bar, .mobile-topbar-header')) return;
+    const label = (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '');
+    if (!/search|поиск/i.test(label)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    openSearch();
+  }, true);
+  // Если веб-поиск всё же открылся (поле получило фокус) — закрываем его и открываем свой.
+  document.addEventListener('focusin', (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    if (!(input.type === 'search' || input.name === 'search' || input.classList.contains('searchbox-input'))) return;
+    input.blur();
+    const back = document.querySelector('ytm-search button[aria-label], .searchbox-back-button, button[aria-label="Back"], button[aria-label="Назад"]');
+    if (back) back.click();
+    openSearch();
+  }, true);
 })();
 """#
 

@@ -13,6 +13,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onMusicModeChanged: (() -> Void)?
     var onAddToPlaylist: ((Track) -> Void)?
     var onFullscreenChanged: ((Bool) -> Void)?
+    var onSearch: ((String?) -> Void)?
 
     static let miniHeight: CGFloat = 64
     static let accent = UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1)
@@ -28,6 +29,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private var webView: WKWebView!
     private var urlObservation: NSKeyValueObservation?
     private let musicView = MusicPlayerView()
+    private var queueIDs: Set<String>?
 
     // Мини-полоска
     private let titleLabel = UILabel()
@@ -129,7 +131,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     // MARK: - Управление
 
     /// source — откуда играем (название плейлиста); без него «Микс» или «YouTube».
-    func load(_ url: URL, source: String? = nil) {
+    /// queue — id треков своего плейлиста: когда YouTube доиграет их и включит что-то своё,
+    /// подпись «Играет из» сменится на «Похожие треки».
+    func load(_ url: URL, source: String? = nil, queue: [String]? = nil) {
+        queueIDs = queue.map { Set($0) }
         currentVideoID = Self.videoID(from: url)
         let list = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "list" }?.value
         musicView.sourceName = source ?? (list?.hasPrefix("RD") == true ? "Микс" : "YouTube")
@@ -448,10 +453,16 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             if mode == .mini { progressView.frame.size.width = bounds.width * progress }
             if let id = body["id"] as? String {
                 currentVideoID = id
+                if let queue = queueIDs, !queue.contains(id) {
+                    queueIDs = nil
+                    musicView.sourceName = "Похожие треки"
+                }
                 updateMiniArtwork(id)
                 musicView.update(id: id, title: title, artist: artist, paused: paused, time: time,
                                  duration: duration, loop: body["loop"] as? Bool ?? false)
             }
+        case "search":
+            onSearch?(body["query"] as? String)
         case "fullscreen":
             setFullscreen(body["on"] as? Bool == true)
         case "browse":

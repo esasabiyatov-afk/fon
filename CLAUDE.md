@@ -16,14 +16,15 @@
 | Файл | Роль |
 | --- | --- |
 | `Fon/AppDelegate.swift` | `AVAudioSession .playback`; `SceneDelegate` (там же) создаёт окно с `MainViewController`. Сцены нужны, чтобы окно на iPad растягивалось на весь экран (`UIRequiresFullScreen` убран) |
-| `Fon/MainViewController.swift` | Лента: **свой WKWebView на каждую вкладку** (создаётся лениво, не перезагружается при переключении; повторное нажатие — наверх, затем к корню). Нативный `UITabBar`: Главная/Поиск/Подписки/Вы/«Музыка·Видео» (последняя — переключатель режима). В режиме музыки «Вы» → нативная «Медиатека» (`LibraryViewController` в `UINavigationController`, дочерний VC в `browseContainer`). Свои плейлисты играются через `/watch_videos?video_ids=…` (временный плейлист YouTube, до 50 id). `PlayerView` поверх; уход в фон, прерывания (звонки) |
+| `Fon/MainViewController.swift` | Лента: **свой WKWebView на каждую вкладку** (создаётся лениво, не перезагружается при переключении; повторное нажатие — наверх, затем к корню). Своя панель вкладок `TabBarView` (системный `UITabBar` на iOS 26 рисовал иконки выше своей границы — они налезали на мини-плеер): Главная/Поиск/Подписки/Вы/«Музыка·Видео» (последняя — переключатель режима). В режиме музыки «Вы» → нативная «Медиатека» (`LibraryViewController` в `UINavigationController`, дочерний VC в `browseContainer`). Свои плейлисты играются через `/watch_videos?video_ids=…` (временный плейлист YouTube, до 50 id). `PlayerView` поверх; уход в фон, прерывания (звонки) |
 | `Fon/Settings.swift` | `Settings.musicMode` (UserDefaults `musicMode`, по умолчанию вкл.) — общий для плеера и вкладок |
 | `Fon/PlayerView.swift` | Отдельный WKWebView со страницей `/watch`. Режимы: мини-полоска (64pt над вкладками) и развёрнутый. В режиме музыки развёрнутый = нативный `MusicPlayerView` поверх веб-плеера (webview играет под ним); кнопка «список» показывает страницу YouTube, ♪ — назад к плееру. В режиме видео: шапка с PiP и ♪. Свайп вниз по видео/обложке (`UIPanGestureRecognizer`, плеер едет за пальцем) сворачивает; в полном экране — выходит из него |
 | `Fon/MusicPlayerView.swift` | Плеер в стиле Spotify: квадратная обложка, градиент под её средний цвет, ♡, ⊕ в плейлист, ползунок (плавно интерполируется между сообщениями раз в 1 с), prev/play/next, повтор трека (`video.loop`) |
 | `Fon/Library.swift` | `Library` — понравившиеся и плейлисты (JSON в Application Support), `ArtworkLoader` — квадратные обложки из `i.ytimg.com` (maxres→sd→hq, центр кадра 16:9) + средний цвет |
 | `Fon/LibraryViewController.swift` | Медиатека и список треков (слушать/перемешать, удалить, поменять порядок) |
 | `Fon/Signature.swift` | Срок подписи из `embedded.mobileprovision` (`ExpirationDate`): при <48 ч — алерт (не чаще раза в 12 ч) с кнопкой «Открыть SideStore» (`sidestore://`); дата в подвале медиатеки |
-| `Fon/SearchViewController.swift` | Нативный поиск: история (UserDefaults `searchHistory`) + подсказки `suggestqueries.google.com` (client=firefox, ds=yt) |
+| `Fon/TabBarView.swift` | Своя нижняя панель: 50 pt кнопок (иконка над подписью) + safe area; `setItem(_:title:icon:color:)`, `select(_:)` |
+| `Fon/SearchViewController.swift` | Нативный поиск: «Недавние» (UserDefaults `searchHistory`, кнопка «Очистить») + подсказки `suggestqueries.google.com` (client=firefox, ds=yt), «↖» подставляет строку в поле; `initialText` — текущий запрос. Лупа в шапке m.youtube (оба окна) перехватывается скриптом `common` → `{type:'search'}` → этот экран |
 | `Fon/Scripts.swift` | JS, внедряемый в начале документа: `common` (оба окна), `player`, `browse` |
 | `Fon/WebViewFactory.swift` | Общая конфигурация WKWebView, Safari User-Agent, правила переходов |
 | `project.yml` | XcodeGen; `UIBackgroundModes: [audio]`, iOS 16+, iPhone + iPad (`TARGETED_DEVICE_FAMILY 1,2`), bundle id `com.personal.fon` |
@@ -43,6 +44,8 @@
 - **Свой полный экран:** m.youtube на iPhone включает системный AVKit-фулскрин (без субтитров YouTube и меню качества). В `player` подменены `webkitEnterFullscreen/requestFullscreen/exitFullscreen` и геттеры `fullscreenElement/fullscreenEnabled/webkitDisplayingFullscreen`: класс `fon-full` растягивает плеер на окно, шлются `webkitbeginfullscreen/fullscreenchange`, приложение получает `{type:'fullscreen'}` — прячет шапку и статус-бар, на iPhone поворачивает в landscape (`requestGeometryUpdate`). В полном экране качество не понижается и видео видно даже в режиме музыки.
 - **Главная в режиме музыки:** грузится `/#fon-music`; скрипт `browse` убирает хэш и нажимает чип «Music/Музыка» (`ytm-chip-cloud-chip-renderer`) — обычные рекомендации, но только музыка.
 - Скрываем родную нижнюю панель m.youtube (`ytm-pivot-bar-renderer`).
+- **Shorts скрыты везде** (`common`): CSS по `ytm-reel-shelf-renderer`/`ytm-shorts-lockup-view-model*`/карточкам со ссылкой `/shorts/` (правила с `:has()` — отдельным блоком) + раз в 1,5 с прячем секции с заголовком «Shorts» и чип «Shorts».
+- **Свой плейлист закончился** — YouTube включает похожее; `PlayerView.queueIDs` замечает id не из очереди и меняет «Играет из» на «Похожие треки».
 
 ## Проверено владельцем на iPhone (версия «режим музыки»)
 - Фон работает (короткая ~1 с пауза при сворачивании), экран блокировки, next/prev, мини-плеер, обложка — ок.

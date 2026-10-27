@@ -5,7 +5,7 @@ import AVFoundation
 /// Главный экран: лента YouTube, нижние вкладки и плеер поверх.
 /// У каждой вкладки своё окно WKWebView, как в приложении YouTube: при переключении
 /// страница не перезагружается, а остаётся там же, где её оставили.
-final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate, UITabBarDelegate {
+final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     private enum PlayerState { case hidden, mini, expanded }
 
     private enum TabKind {
@@ -25,7 +25,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var currentTab = 0
     private var browseBottomInset: CGFloat = 0
 
-    private let tabBar = UITabBar()
+    private lazy var tabBar = TabBarView(items: tabs.map { (title: $0.title, icon: $0.icon) })
     private let playerView = PlayerView()
     private var playerState: PlayerState = .hidden
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -58,18 +58,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         view.addSubview(browseContainer)
 
         // Вкладки
-        let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = UIColor(white: 0.06, alpha: 1)
-        tabBar.standardAppearance = appearance
-        tabBar.scrollEdgeAppearance = appearance
-        tabBar.tintColor = .white
-        tabBar.unselectedItemTintColor = UIColor(white: 0.6, alpha: 1)
-        tabBar.items = tabs.enumerated().map { index, tab in
-            UITabBarItem(title: tab.title, image: UIImage(systemName: tab.icon), tag: index)
-        }
-        tabBar.selectedItem = tabBar.items?.first
-        tabBar.delegate = self
+        tabBar.onSelect = { [weak self] index in self?.tabSelected(index) }
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tabBar)
         updateModeTabs()
@@ -81,7 +70,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             browseContainer.bottomAnchor.constraint(equalTo: tabBar.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            tabBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -TabBarView.contentHeight)
         ])
 
         // Плеер
@@ -97,6 +87,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         playerView.onMusicModeChanged = { [weak self] in self?.musicModeChanged() }
         playerView.onAddToPlaylist = { [weak self] track in self?.presentAddToPlaylist(track) }
         playerView.onFullscreenChanged = { [weak self] on in self?.fullscreenChanged(on) }
+        playerView.onSearch = { [weak self] query in self?.presentSearch(prefill: query) }
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -149,7 +140,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         var components = URLComponents(string: base + "/watch_videos")!
         components.queryItems = [URLQueryItem(name: "video_ids", value: list.prefix(50).map(\.id).joined(separator: ","))]
         guard let url = components.url else { return }
-        playerView.load(url, source: name)
+        playerView.load(url, source: name, queue: list.prefix(50).map(\.id))
         setPlayerState(.expanded)
     }
 
@@ -288,7 +279,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     private func showTab(_ index: Int) {
         currentTab = index
-        tabBar.selectedItem = tabBar.items?[index]
+        tabBar.select(index)
         switch content(for: index) {
         case .library:
             let nav = libraryController()
@@ -356,27 +347,31 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
-    func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-        let index = item.tag
+    private func tabSelected(_ index: Int) {
         switch tabs[index].kind {
         case .web:
             if index == currentTab { reselectTab(index) } else { showTab(index) }
             if playerState == .expanded { setPlayerState(.mini) }
         case .search:
-            tabBar.selectedItem = tabBar.items?[currentTab]
-            let searchVC = SearchViewController()
-            searchVC.onSearch = { [weak self] query in self?.search(query) }
-            searchVC.modalPresentationStyle = .overFullScreen
-            searchVC.modalTransitionStyle = .crossDissolve
-            present(searchVC, animated: true)
+            presentSearch(prefill: nil)
         case .mode:
-            tabBar.selectedItem = tabBar.items?[currentTab]
             Settings.musicMode.toggle()
             playerView.musicModeDidChange()
             musicModeChanged()
             view.showToast(Settings.musicMode ? "Режим музыки" : "Режим видео",
                            at: CGPoint(x: view.bounds.midX, y: tabBar.frame.minY - (playerState == .hidden ? 40 : PlayerView.miniHeight + 40)))
         }
+    }
+
+    /// Свой поиск — и из вкладки, и из лупы в шапке страницы YouTube (её мы перехватываем).
+    private func presentSearch(prefill: String?) {
+        guard presentedViewController == nil else { return }
+        let searchVC = SearchViewController()
+        searchVC.initialText = prefill
+        searchVC.onSearch = { [weak self] query in self?.search(query) }
+        searchVC.modalPresentationStyle = .overFullScreen
+        searchVC.modalTransitionStyle = .crossDissolve
+        present(searchVC, animated: true)
     }
 
     /// Сменился режим (из вкладки или кнопкой в плеере): обновляем вкладки и открытый раздел.
@@ -386,18 +381,13 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     private func updateModeTabs() {
-        guard let items = tabBar.items else { return }
         let music = Settings.musicMode
-        let modeItem = items[modeTabIndex]
         if music {
-            modeItem.title = "Музыка"
-            modeItem.image = UIImage(systemName: "music.note")?.withTintColor(PlayerView.accent, renderingMode: .alwaysOriginal)
+            tabBar.setItem(modeTabIndex, title: "Музыка", icon: "music.note", color: PlayerView.accent)
         } else {
-            modeItem.title = "Видео"
-            modeItem.image = UIImage(systemName: "play.rectangle")
+            tabBar.setItem(modeTabIndex, title: "Видео", icon: "play.rectangle")
         }
-        items[libraryTabIndex].title = music ? "Медиатека" : "Вы"
-        items[libraryTabIndex].image = UIImage(systemName: music ? "square.stack.fill" : "person.crop.circle")
+        tabBar.setItem(libraryTabIndex, title: music ? "Медиатека" : "Вы", icon: music ? "square.stack.fill" : "person.crop.circle")
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -407,6 +397,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             if let s = body["url"] as? String, let url = URL(string: s) { openInPlayer(url) }
         case "browsePlaying":
             playerView.command("pause")
+        case "search":
+            presentSearch(prefill: body["query"] as? String)
         default:
             break
         }
