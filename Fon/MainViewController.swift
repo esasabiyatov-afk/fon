@@ -112,6 +112,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         layoutPlayer()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        Signature.warnIfNeeded(from: self)
+    }
+
     // MARK: - Плеер
 
     private func openInPlayer(_ url: URL) {
@@ -441,6 +446,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     @objc private func willEnterForeground() {
         playerView.stopBackgroundWatch()
         endBackgroundTask()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            Signature.warnIfNeeded(from: self)
+        }
     }
 
     @objc private func audioRouteChanged(_ note: Notification) {

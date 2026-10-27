@@ -8,6 +8,7 @@
 - **Сборка — только в облаке:** `.github/workflows/build.yml` на `macos-15-intel` (arm64-машины GitHub бывают перегружены — сборка отменялась, не дождавшись runner): XcodeGen → `xcodebuild` без подписи → `Fon.ipa` в Artifacts (`Fon-ipa`). Сборка запускается на каждый push в `main` (только main) и вручную (workflow_dispatch).
 - Проект Xcode **не хранится** в репозитории — его генерирует XcodeGen из `project.yml`. Новые `.swift` в папке `Fon/` подхватываются автоматически. Не создавай `.js`-файлы в `Fon/` (Xcode может положить их в Compile Sources) — JS живёт строками в `Scripts.swift`.
 - **Установка на телефон:** iloader (Windows) с бесплатным Apple ID, подпись живёт 7 дней. Sideloadly с конца октября 2026 не работает (ошибка Apple -80046).
+- **Продление (с 27.10.2026):** владелец перешёл на SideStore (установлен через iloader) + LocalDevVPN из App Store; вход в Apple ID в SideStore заработал после выбора anisette-сервера «SideStore (New)» и Reset adi.pb. Fon ставится в SideStore через «+» из скачанного IPA; автопродление — автоматизация «Команд» (Refresh All). Fon стоит и на устройствах семьи — у каждого нужен свой SideStore.
 - Проверить на настоящем айфоне можно только руками владельца — проси скриншоты и описание поведения.
 - Логи GitHub Actions могут быть недоступны для чтения из облачной сессии; при ошибке сборки проси владельца скопировать текст ошибки.
 
@@ -21,6 +22,7 @@
 | `Fon/MusicPlayerView.swift` | Плеер в стиле Spotify: квадратная обложка, градиент под её средний цвет, ♡, ⊕ в плейлист, ползунок (плавно интерполируется между сообщениями раз в 1 с), prev/play/next, повтор трека (`video.loop`) |
 | `Fon/Library.swift` | `Library` — понравившиеся и плейлисты (JSON в Application Support), `ArtworkLoader` — квадратные обложки из `i.ytimg.com` (maxres→sd→hq, центр кадра 16:9) + средний цвет |
 | `Fon/LibraryViewController.swift` | Медиатека и список треков (слушать/перемешать, удалить, поменять порядок) |
+| `Fon/Signature.swift` | Срок подписи из `embedded.mobileprovision` (`ExpirationDate`): при <48 ч — алерт (не чаще раза в 12 ч) с кнопкой «Открыть SideStore» (`sidestore://`); дата в подвале медиатеки |
 | `Fon/SearchViewController.swift` | Нативный поиск: история (UserDefaults `searchHistory`) + подсказки `suggestqueries.google.com` (client=firefox, ds=yt) |
 | `Fon/Scripts.swift` | JS, внедряемый в начале документа: `common` (оба окна), `player`, `browse` |
 | `Fon/WebViewFactory.swift` | Общая конфигурация WKWebView, Safari User-Agent, правила переходов |
