@@ -166,27 +166,92 @@ final class ArtworkLoader {
         URLSession.shared.dataTask(with: url) { data, response, _ in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             if ok, let data, let image = UIImage(data: data), image.size.width > 150 {
-                done(ArtworkLoader.squareCrop(image, maxSide: maxSide))
+                done(ArtworkLoader.squareArtwork(image, maxSide: maxSide))
             } else {
                 self.fetch(id, names: names.dropFirst(), maxSide: maxSide, done: done)
             }
         }.resume()
     }
 
-    /// Центральный квадрат кадра 16:9 (у превью 4:3 сверху и снизу чёрные полосы — их отрезаем).
-    /// У «музыкальных» видео с обложкой альбома по центру это и есть обложка.
-    static func squareCrop(_ image: UIImage, maxSide: CGFloat) -> UIImage? {
+    /// Квадратная обложка из превью. Сначала берём кадр 16:9 (у превью 4:3 сверху и снизу чёрные полосы).
+    /// Если по бокам кадра однотонные поля — в центре обложка альбома, вырезаем квадрат.
+    /// Если картинка на весь кадр — показываем её целиком, а сверху и снизу размытую копию,
+    /// чтобы не отрезать края (например, текст на обложке).
+    static func squareArtwork(_ image: UIImage, maxSide: CGFloat) -> UIImage? {
         guard let cg = image.cgImage else { return image }
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
-        let side = min(h, w * 9 / 16)
-        let rect = CGRect(x: (w - side) / 2, y: (h - side) / 2, width: side, height: side).integral
-        guard let cropped = cg.cropping(to: rect) else { return image }
-        let target = min(side, maxSide)
+        let bandH = min(h, w * 9 / 16)
+        let bandW = min(w, bandH * 16 / 9)
+        guard let band = cg.cropping(to: CGRect(x: (w - bandW) / 2, y: (h - bandH) / 2, width: bandW, height: bandH).integral) else {
+            return image
+        }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        return UIGraphicsImageRenderer(size: CGSize(width: target, height: target), format: format).image { _ in
-            UIImage(cgImage: cropped).draw(in: CGRect(x: 0, y: 0, width: target, height: target))
+
+        if hasFlatSides(band) {
+            let bw = CGFloat(band.width), bh = CGFloat(band.height)
+            guard let square = band.cropping(to: CGRect(x: (bw - bh) / 2, y: 0, width: bh, height: bh).integral) else { return image }
+            let side = min(bh, maxSide)
+            return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+                UIImage(cgImage: square).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+            }
         }
+
+        let side = min(CGFloat(band.width), maxSide)
+        let backdrop = blurred(band)
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
+            let full = CGRect(x: 0, y: 0, width: side, height: side)
+            if let backdrop {
+                let fillW = side * 16 / 9
+                UIImage(cgImage: backdrop).draw(in: CGRect(x: (side - fillW) / 2, y: 0, width: fillW, height: side))
+            }
+            UIColor(white: 0, alpha: 0.3).setFill()
+            ctx.fill(full)
+            let fitH = side * CGFloat(band.height) / CGFloat(band.width)
+            UIImage(cgImage: band).draw(in: CGRect(x: 0, y: (side - fitH) / 2, width: side, height: fitH))
+        }
+    }
+
+    /// Однотонные ли поля слева и справа от центрального квадрата (как у видео «Topic» с обложкой альбома).
+    private static func hasFlatSides(_ band: CGImage) -> Bool {
+        let width = 64, height = 36
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        return pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return true }
+            ctx.interpolationQuality = .low
+            ctx.draw(band, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let strip = (width - height) / 2
+            func stats(_ columns: Range<Int>) -> (mean: Double, deviation: Double) {
+                var sum = 0.0, squares = 0.0, count = 0.0
+                for y in 0..<height {
+                    for x in columns {
+                        let i = (y * width + x) * 4
+                        let l = (0.299 * Double(buffer[i]) + 0.587 * Double(buffer[i + 1]) + 0.114 * Double(buffer[i + 2])) / 255
+                        sum += l
+                        squares += l * l
+                        count += 1
+                    }
+                }
+                let mean = sum / count
+                return (mean, (max(0, squares / count - mean * mean)).squareRoot())
+            }
+            // Крайний столбец у самого квадрата не берём — там бывает край обложки.
+            let left = stats(0..<(strip - 1))
+            let right = stats((width - strip + 1)..<width)
+            return left.deviation < 0.06 && right.deviation < 0.06 && abs(left.mean - right.mean) < 0.08
+        }
+    }
+
+    private static func blurred(_ image: CGImage) -> CGImage? {
+        let input = CIImage(cgImage: image)
+        guard let filter = CIFilter(name: "CIGaussianBlur", parameters: [
+                kCIInputImageKey: input.clampedToExtent(),
+                kCIInputRadiusKey: max(8, Double(image.width) / 25)
+              ]),
+              let output = filter.outputImage?.cropped(to: input.extent) else { return nil }
+        return ciContext.createCGImage(output, from: input.extent)
     }
 
     static func averageColor(_ image: UIImage) -> UIColor? {
@@ -199,5 +264,29 @@ final class ArtworkLoader {
         ciContext.render(output, toBitmap: &pixel, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
                          format: .RGBA8, colorSpace: nil)
         return UIColor(red: CGFloat(pixel[0]) / 255, green: CGFloat(pixel[1]) / 255, blue: CGFloat(pixel[2]) / 255, alpha: 1)
+    }
+}
+
+/// Красивое название трека: «Исполнитель - Песня (Official Video)» → «Песня» и «Исполнитель».
+enum TrackTitle {
+    private static let junk = #"\s*[\(\[]\s*(official|music video|video|audio|lyric|lyrics|visuali[sz]er|clip|mv|hd|hq|4k|премьера|клип|текст|аудио|official audio)[^\)\]]*[\)\]]"#
+
+    static func clean(title: String, artist: String) -> (title: String, artist: String) {
+        var name = title.replacingOccurrences(of: junk, with: "", options: [.regularExpression, .caseInsensitive])
+        if let bar = name.range(of: " | ") { name = String(name[..<bar.lowerBound]) }
+        var by = artist.replacingOccurrences(of: " - Topic", with: "")
+        for separator in [" - ", " – ", " — "] {
+            guard let range = name.range(of: separator) else { continue }
+            let left = name[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+            let right = name[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            if !left.isEmpty, !right.isEmpty {
+                by = left
+                name = right
+            }
+            break
+        }
+        name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        by = by.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (name.isEmpty ? title : name, by.isEmpty ? artist : by)
     }
 }

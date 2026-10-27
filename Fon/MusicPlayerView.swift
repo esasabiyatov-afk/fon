@@ -79,6 +79,8 @@ final class MusicPlayerView: UIView {
         addSubview(artworkContainer)
 
         titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        titleLabel.adjustsFontSizeToFitWidth = true // длинное название чуть уменьшается, а не обрезается сразу
+        titleLabel.minimumScaleFactor = 0.7
         titleLabel.textColor = .white
         artistLabel.font = .systemFont(ofSize: 16)
         artistLabel.textColor = UIColor(white: 1, alpha: 0.65)
@@ -153,7 +155,8 @@ final class MusicPlayerView: UIView {
         updateLike()
     }
 
-    func update(id: String, title: String, artist: String, paused: Bool, time: Double, duration: Double, loop: Bool) {
+    func update(id: String, title rawTitle: String, artist rawArtist: String, paused: Bool, time: Double, duration: Double, loop: Bool) {
+        let (title, artist) = TrackTitle.clean(title: rawTitle, artist: rawArtist)
         let isNew = track?.id != id
         track = Track(id: id, title: title, artist: artist)
         if isNew { loadArtwork(id) }
@@ -306,7 +309,8 @@ final class MusicPlayerView: UIView {
         headerLabel.frame = CGRect(x: 104, y: top + 5, width: max(0, w - 208), height: 14)
         sourceLabel.frame = CGRect(x: 104, y: top + 19, width: max(0, w - 208), height: 20)
         let contentTop = top + 56
-        let contentBottom = h - max(safe.bottom, 16) - 12
+        // Кнопки управления подняты повыше от нижнего края — так удобнее до них дотягиваться.
+        let contentBottom = h - max(safe.bottom, 16) - (w > h * 1.15 ? 12 : 52)
 
         let art: CGFloat
         let artCenter: CGPoint

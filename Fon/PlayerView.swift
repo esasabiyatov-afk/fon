@@ -444,8 +444,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let paused = body["paused"] as? Bool ?? true
             let time = (body["time"] as? NSNumber)?.doubleValue ?? 0
             let duration = (body["duration"] as? NSNumber)?.doubleValue ?? 0
-            titleLabel.text = title
-            subtitleLabel.text = artist
+            let shown = musicMode ? TrackTitle.clean(title: title, artist: artist) : (title: title, artist: artist)
+            titleLabel.text = shown.title
+            subtitleLabel.text = shown.artist
             topTitleLabel.text = title
             let symbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
             playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
