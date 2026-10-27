@@ -134,6 +134,38 @@ enum Scripts {
     }
     return 'waiting';
   };
+  // --- 1c. Плеер открывается не нажатием на его странице, поэтому YouTube считает это автозапуском
+  // и включает видео без звука. Возвращаем звук — если только пользователь сам не нажал «без звука».
+  let lastTouch = 0;
+  let unmutes = [];
+  document.addEventListener('touchstart', () => { lastTouch = Date.now(); }, true);
+  document.addEventListener('pointerdown', () => { lastTouch = Date.now(); }, true);
+  const unmute = (v) => {
+    if (!v || !v.muted || v.__fonUserMuted) return;
+    const now = Date.now();
+    unmutes = unmutes.filter((t) => now - t < 10000);
+    if (unmutes.length >= 5) return; // YouTube упорно выключает звук — не спорим бесконечно
+    unmutes.push(now);
+    try {
+      const p = ytPlayer();
+      if (p && typeof p.unMute === 'function') p.unMute();
+      if (p && typeof p.getVolume === 'function' && p.getVolume() === 0 && p.setVolume) p.setVolume(100);
+    } catch (e) {}
+    v.muted = false;
+  };
+  fon.unmute = unmute;
+  document.addEventListener('volumechange', (e) => {
+    const v = e.target;
+    if (!(v instanceof HTMLMediaElement)) return;
+    // Звук выключили сразу после нажатия на странице — это решение пользователя, запоминаем.
+    if (v.muted && Date.now() - lastTouch < 1500) v.__fonUserMuted = true;
+    if (!v.muted) v.__fonUserMuted = false;
+    setTimeout(() => unmute(v), 50);
+  }, true);
+  document.addEventListener('playing', (e) => {
+    if (e.target instanceof HTMLMediaElement) unmute(e.target);
+  }, true);
+
   // Наушники отключили — это пауза пользователя, в фоне не включаем звук сами.
   fon.markUserPaused = () => {
     wantPlay = false;
@@ -438,6 +470,7 @@ enum Scripts {
     if (!v || !id) { if (!fon.realHidden) fon.post({ type: 'state', active: false }); return; }
 
     applyQuality();
+    unmute(v);
     if (id !== lastThumbId) {
       lastThumbId = id;
       document.documentElement.style.setProperty('--fon-thumb', 'url("https://i.ytimg.com/vi/' + id + '/hqdefault.jpg")');
