@@ -167,6 +167,7 @@ enum Scripts {
 
   fon.onVisibility = () => {
     setTimeout(() => { try { applyQuality(); } catch (e) {} }, 1500); // после того, как звук снова пошёл
+    if (!fon.realHidden) for (const t of [300, 1000]) setTimeout(() => { try { fon.repaint(); } catch (e) {} }, t);
     if (fon.realHidden && systemPausedEl && Date.now() - systemPausedAt < 2000) {
       resumeSoon(systemPausedEl);
     }
@@ -384,6 +385,13 @@ enum Scripts {
       position: absolute !important; top: 0 !important; left: 0 !important;
       width: 100% !important; height: 100% !important;
     }
+    /* Панель управления YouTube (пауза, перемотка, ⚙ качество, выход) — поверх растянутого видео. */
+    html.fon-full #player-control-overlay,
+    html.fon-full ytm-custom-control {
+      position: fixed !important; top: 0 !important; left: 0 !important;
+      width: 100vw !important; height: 100vh !important;
+      z-index: 2147483647 !important;
+    }
     html.fon-full video,
     html.fon-full.fon-music video {
       position: absolute !important; top: 0 !important; left: 0 !important;
@@ -418,6 +426,19 @@ enum Scripts {
     fire(document, 'fullscreenchange');
     fire(document, 'webkitfullscreenchange');
     setTimeout(() => { fire(window, 'resize'); try { applyQuality(); } catch (e) {} }, 300);
+    for (const t of [400, 1200]) setTimeout(() => fon.repaint(), t);
+  };
+
+  // После поворота, выхода из полного экрана или возврата в приложение WebKit иногда теряет
+  // картинку видео (чёрный экран, звук идёт). Заставляем его перерисовать слой видео.
+  fon.repaint = () => {
+    const v = fon.video();
+    fire(window, 'resize');
+    if (!v) return;
+    const prev = v.style.transform;
+    v.style.transform = 'translateZ(0)';
+    const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : (f) => setTimeout(f, 16);
+    raf(() => raf(() => { v.style.transform = prev; }));
   };
   fon.setFull = setFull;
   const getter = (obj, name, get) => { try { Object.defineProperty(obj, name, { get, configurable: true }); } catch (e) {} };
