@@ -302,7 +302,15 @@ enum Scripts {
       width: 100% !important; height: 100% !important; object-fit: contain !important; opacity: 1 !important;
     }
   `);
-  fon.setMini = (on) => { document.documentElement.classList.toggle('fon-mini', !!on); };
+  // После мини-полоски YouTube может не заметить, что окно снова большое, и оставить видео
+  // маленьким в углу — несколько раз сообщаем ему о новом размере.
+  fon.setMini = (on) => {
+    on = !!on;
+    const root = document.documentElement;
+    if (root.classList.contains('fon-mini') === on) return;
+    root.classList.toggle('fon-mini', on);
+    for (const t of [60, 350, 900]) setTimeout(() => fire(window, 'resize'), t);
+  };
 
   // --- 4a. Полный экран. На iPhone YouTube включает системный полноэкранный плеер iOS —
   // в нём нет субтитров YouTube и меню качества. Подменяем его своим: плеер растягивается

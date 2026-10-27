@@ -158,7 +158,15 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         mode = newMode
         let isMini = newMode == .mini
         applyPageState()
-        webView.isUserInteractionEnabled = !isMini
+        // Пока плеер разворачивается, страница не принимает нажатий: иначе тап по мини-полоске
+        // (или второй тап) «проваливается» в страницу и открывает, например, описание видео.
+        webView.isUserInteractionEnabled = false
+        if !isMini {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                guard let self, self.mode == .expanded else { return }
+                self.webView.isUserInteractionEnabled = true
+            }
+        }
         miniGestures.forEach { $0.isEnabled = isMini } // в развёрнутом виде не мешаем нажатиям на странице
         updateVisibility()
         setNeedsLayout()
