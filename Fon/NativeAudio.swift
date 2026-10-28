@@ -45,9 +45,9 @@ enum YouTubeSession {
 
     /// Заголовок, которым страница YouTube подписывает запросы внутреннего API от имени аккаунта.
     static func authorization(origin: String) -> String? {
-        guard let sapisid else { return nil }
+        guard let id = sapisid else { return nil }
         let ts = Int(Date().timeIntervalSince1970)
-        let hash = Insecure.SHA1.hash(data: Data("\(ts) \(sapisid) \(origin)".utf8)).map { String(format: "%02x", $0) }.joined()
+        let hash = Insecure.SHA1.hash(data: Data("\(ts) \(id) \(origin)".utf8)).map { String(format: "%02x", $0) }.joined()
         return "SAPISIDHASH \(ts)_\(hash)"
     }
 }
