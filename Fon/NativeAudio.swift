@@ -399,25 +399,34 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     static weak var host: UIView?
 
     private var webView: WKWebView?
-    private var completion: ((URL?, String) -> Void)?
+    private var completion: ((URL?, String, String?) -> Void)?
     private var keepAlive: SafariStream?
 
-    static func find(_ videoID: String) async -> (stream: AudioStream?, note: String) {
+    /// Поток трека и название страницы (для очереди без названий).
+    static func find(_ videoID: String) async -> YouTubeStreams.Result {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
-                guard let host else { return continuation.resume(returning: (nil, "нет окна")) }
-                SafariStream().start(videoID, in: host) { url, note in
-                    guard let url else { return continuation.resume(returning: (nil, note)) }
-                    let hls = url.absoluteString.contains("m3u8") || url.host?.hasPrefix("manifest") == true
-                    let stream = AudioStream(url: url, headers: ["User-Agent": WebViewFactory.safariUserAgent()],
-                                             client: hls ? "Safari HLS" : "Safari файл", isMaster: hls)
-                    continuation.resume(returning: (stream, note))
+                var result = YouTubeStreams.Result()
+                guard let host else {
+                    result.log.append("Safari: нет окна")
+                    return continuation.resume(returning: result)
+                }
+                SafariStream().start(videoID, in: host) { url, note, title in
+                    result.log.append("Safari: " + note)
+                    if let url {
+                        let hls = url.absoluteString.contains("m3u8") || url.host?.hasPrefix("manifest") == true
+                        result.streams = [AudioStream(url: url, headers: ["User-Agent": WebViewFactory.safariUserAgent()],
+                                                      client: hls ? "Safari HLS" : "Safari файл", isMaster: hls)]
+                    }
+                    let name = (title ?? "").replacingOccurrences(of: " - YouTube", with: "").trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty, name != "YouTube" { result.title = name } // пока страница грузится, там просто «YouTube»
+                    continuation.resume(returning: result)
                 }
             }
         }
     }
 
-    private func start(_ videoID: String, in host: UIView, completion: @escaping (URL?, String) -> Void) {
+    private func start(_ videoID: String, in host: UIView, completion: @escaping (URL?, String, String?) -> Void) {
         self.completion = completion
         keepAlive = self
         let config = WKWebViewConfiguration()
@@ -434,15 +443,15 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         webView.navigationDelegate = self
         host.insertSubview(webView, at: 0)
         self.webView = webView
-        // Именно www, не m.: в приватной вкладке Safari владельца YouTube оставался на youtube.com и играл
-        // системным плеером, а на m.youtube.com включался свой плеер YouTube.
-        webView.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?v=\(videoID)")!))
+        // Компьютерная версия (`app=desktop`, не m.youtube): на iPhone её плеер играет системным плеером iOS
+        // по обычной ссылке HLS — владелец проверил в Safari, в том числе со входом в аккаунт.
+        webView.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?app=desktop&v=\(videoID)")!))
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.finish(nil, "ссылки нет (YouTube дал свой плеер)") }
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let text = message.body as? String, let url = URL(string: text) else { return }
-        finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл")
+        guard let body = message.body as? [String: Any], let text = body["src"] as? String, let url = URL(string: text) else { return }
+        finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл", title: body["title"] as? String)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -460,14 +469,14 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         decisionHandler(.allow)
     }
 
-    private func finish(_ url: URL?, _ note: String) {
+    private func finish(_ url: URL?, _ note: String, title: String? = nil) {
         guard let completion else { return }
         self.completion = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "fonSrc")
         webView?.stopLoading()
         webView?.removeFromSuperview()
         webView = nil
-        completion(url, note)
+        completion(url, note, title)
         keepAlive = nil
     }
 }
@@ -505,6 +514,7 @@ final class NativeAudio: NSObject {
     private var loop = false
     private var candidates: [AudioStream] = []
     private var triedSafari = false
+    private var triedMain = false
     private var token = UUID()
     private var playedOnce = false
     private var failuresInRow = 0
@@ -609,23 +619,44 @@ final class NativeAudio: NSObject {
         token = current
         candidates = []
         triedSafari = false
+        triedMain = false
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
         listened = 0
+        NativeAudio.lastLog = ""
         publish(loading: true)
         beginBackgroundTask()
-        let ready = prefetched.removeValue(forKey: track.id)
+        // Поток следующего трека найден заранее — сразу его; иначе сначала компьютерная версия (Safari),
+        // потом запасной путь через страницу и токен.
+        if let ready = prefetched.removeValue(forKey: track.id) {
+            use(ready, for: track)
+            tryNextCandidate()
+        } else {
+            trySafari()
+        }
+    }
+
+    /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
+    private func use(_ result: YouTubeStreams.Result, for track: Track) {
+        NativeAudio.lastLog += (NativeAudio.lastLog.isEmpty ? "" : "; ") + result.log.joined(separator: "; ")
+        if queue.indices.contains(index), queue[index].id == track.id, queue[index].title.isEmpty, let title = result.title {
+            let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
+            queue[index] = Track(id: track.id, title: clean.title, artist: clean.artist)
+            publish(loading: true)
+        }
+        candidates += result.streams
+    }
+
+    /// Запасной путь: поток со страницы www.youtube.com + защитный токен (см. YouTubeStreams).
+    private func tryMain() {
+        guard !triedMain, let track = currentTrack else { return trackFailed() }
+        triedMain = true
+        let current = token
         Task { [weak self] in
-            let result: YouTubeStreams.Result
-            if let ready { result = ready } else { result = await YouTubeStreams.resolve(track.id) }
+            let result = await YouTubeStreams.resolve(track.id)
             await MainActor.run {
                 guard let self, self.token == current, self.active else { return }
-                NativeAudio.lastLog = result.log.joined(separator: "; ")
-                if self.queue[self.index].title.isEmpty, let title = result.title {
-                    let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
-                    self.queue[self.index] = Track(id: track.id, title: clean.title, artist: clean.artist)
-                }
-                self.candidates = result.streams
+                self.use(result, for: track)
                 self.tryNextCandidate()
             }
         }
@@ -634,7 +665,7 @@ final class NativeAudio: NSObject {
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
     private func tryNextCandidate() {
         guard active else { return }
-        guard !candidates.isEmpty else { return trySafari() }
+        guard !candidates.isEmpty else { return triedSafari ? tryMain() : trySafari() }
         let stream = candidates.removeFirst()
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
         let item = AVPlayerItem(asset: asset)
@@ -672,17 +703,16 @@ final class NativeAudio: NSObject {
         stallTimer = timer
     }
 
-    /// Основной поток не заиграл — пробуем ссылку, которую YouTube даёт «чистому» Safari (один раз на трек).
+    /// Основной путь: ссылка HLS, которую компьютерная версия YouTube даёт системному плееру (один раз на трек).
     private func trySafari() {
-        guard !triedSafari, let track = currentTrack else { return trackFailed() }
+        guard !triedSafari, let track = currentTrack else { return tryMain() }
         triedSafari = true
         let current = token
         Task { [weak self] in
             let found = await SafariStream.find(track.id)
             await MainActor.run {
                 guard let self, self.token == current, self.active else { return }
-                NativeAudio.lastLog += "; Safari: " + found.note
-                if let stream = found.stream { self.candidates = [stream] }
+                self.use(found, for: track)
                 self.tryNextCandidate()
             }
         }
@@ -829,7 +859,8 @@ final class NativeAudio: NSObject {
         guard prefetched[id] == nil, !prefetching.contains(id) else { return }
         prefetching.insert(id)
         Task { [weak self] in
-            let result = await YouTubeStreams.resolve(id)
+            var result = await SafariStream.find(id)
+            if result.streams.isEmpty { result = await YouTubeStreams.resolve(id) }
             await MainActor.run {
                 guard let self else { return }
                 self.prefetching.remove(id)

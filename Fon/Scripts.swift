@@ -1437,13 +1437,13 @@ enum Scripts {
 })();
 """#
 
-    /// Скрытое окно «чистого Safari» (`SafariStream`): YouTube без входа иногда отдаёт iPhone видео обычной
-    /// ссылкой (системный плеер iOS вместо MediaSource — наблюдение владельца). Ловим эту ссылку, звук не нужен.
+    /// Скрытое окно `SafariStream`: компьютерная версия www.youtube.com (`app=desktop`) на iPhone играет видео
+    /// системным плеером iOS по обычной ссылке HLS (наблюдение владельца). Ловим эту ссылку, звук не нужен.
     static let safariSource = #"""
 (() => {
   const send = (u) => {
     try {
-      if (u && /^https?:/.test(String(u))) window.webkit.messageHandlers.fonSrc.postMessage(String(u));
+      if (u && /^https?:/.test(String(u))) window.webkit.messageHandlers.fonSrc.postMessage({ src: String(u), title: document.title || '' });
     } catch (e) {}
   };
   const proto = HTMLMediaElement.prototype;
