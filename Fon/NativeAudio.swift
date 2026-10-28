@@ -535,22 +535,27 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     private func finish(_ url: URL?, _ note: String, title: String? = nil) {
         guard let completion else { return }
         self.completion = nil
-        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "fonSrc")
         let shownWeb = webView, card = frameView
         webView = nil
         frameView = nil
-        if let card, let label = card.subviews.first(where: { $0 is UILabel }) as? UILabel {
-            label.text = (url != nil ? "Найдено: " : "Нет: ") + note // видно ещё 5 с
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+        shownWeb?.configuration.userContentController.removeScriptMessageHandler(forName: "fonSrc")
+        // Сначала останавливаем видео окна и даём WebKit «отпустить» звук, потом отдаём ссылку плееру.
+        // Иначе WebKit отпускал звук приложения уже после старта AVPlayer: время шло, звука не было (владелец).
+        shownWeb?.evaluateJavaScript("window.__fonStop && __fonStop()", completionHandler: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if let card, let label = card.subviews.first(where: { $0 is UILabel }) as? UILabel {
+                label.text = (url != nil ? "Найдено: " : "Нет: ") + note // видно ещё 5 с
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    shownWeb?.stopLoading()
+                    card.removeFromSuperview()
+                }
+            } else {
                 shownWeb?.stopLoading()
-                card.removeFromSuperview()
+                shownWeb?.removeFromSuperview()
             }
-        } else {
-            shownWeb?.stopLoading()
-            shownWeb?.removeFromSuperview()
+            completion(url, note, title)
+            self.keepAlive = nil
         }
-        completion(url, note, title)
-        keepAlive = nil
     }
 }
 
@@ -865,6 +870,18 @@ final class NativeAudio: NSObject {
         }
     }
 
+    /// Подстраховка от «время идёт, звука нет»: через 1,5 с после старта — то, что помогало владельцу руками:
+    /// снова включить звук приложения и сделать короткую паузу + play (если скрытое окно всё же отпустило звук позже).
+    private func nudgeSound() {
+        let current = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.token == current, self.active, self.player.timeControlStatus == .playing else { return }
+            try? AVAudioSession.sharedInstance().setActive(true)
+            self.player.pause()
+            self.player.play()
+        }
+    }
+
     /// Трек — в обычный веб-плеер (системный не справился).
     private func fallBackToWeb() {
         guard let track = currentTrack else { return }
@@ -983,6 +1000,7 @@ final class NativeAudio: NSObject {
                 let size = player.currentItem?.presentationSize ?? .zero
                 log(size.width > 0 ? "играет ✓, картинка \(Int(size.width))×\(Int(size.height))" : "играет ✓")
                 report()
+                nudgeSound()
             }
             endBackgroundTask()
             listened += 0.5

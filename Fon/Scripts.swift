@@ -1447,9 +1447,22 @@ enum Scripts {
     try { delete window[n]; } catch (e) {}
     if (n in window) { try { Object.defineProperty(window, n, { value: undefined, configurable: true, writable: true }); } catch (e) {} }
   }
+  // Остановить видео окна: WebKit, останавливая медиа, «отпускает» звук приложения — пусть это случится
+  // до старта системного плеера, а не после (иначе время шло без звука, жалоба владельца).
+  let done = false;
+  const stopAll = () => {
+    for (const v of document.querySelectorAll('video, audio')) {
+      try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+    }
+  };
+  window.__fonStop = () => { done = true; stopAll(); };
   const send = (u) => {
     try {
-      if (u && /^https?:/.test(String(u))) window.webkit.messageHandlers.fonSrc.postMessage({ src: String(u), title: document.title || '', ua: navigator.userAgent });
+      if (!done && u && /^https?:/.test(String(u))) {
+        done = true;
+        window.webkit.messageHandlers.fonSrc.postMessage({ src: String(u), title: document.title || '', ua: navigator.userAgent });
+        setTimeout(stopAll, 0);
+      }
     } catch (e) {}
   };
   const proto = HTMLMediaElement.prototype;
@@ -1474,7 +1487,7 @@ enum Scripts {
       try { v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.playsInline = true; } catch (e) {}
       send(v.currentSrc || v.src);
       // Ссылки всё нет — жмём «play» без звука: плеер может выбрать поток только при запуске.
-      if (Date.now() - started > 2500 && v.paused && !v.__fonTried) {
+      if (!done && Date.now() - started > 2500 && v.paused && !v.__fonTried) {
         v.__fonTried = true;
         try { const p = document.getElementById('movie_player'); if (p && p.playVideo) p.playVideo(); } catch (e) {}
         try { const r = v.play(); if (r && r.catch) r.catch(() => {}); } catch (e) {}
