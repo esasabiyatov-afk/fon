@@ -402,8 +402,8 @@ enum YouTubeStreams {
     }
 }
 
-/// Запасной путь к потоку (наблюдение владельца 29.10.2026): в приватной вкладке Safari (без входа и
-/// истории) www.youtube.com играет системным плеером iOS — у видео обычная ссылка на поток, а не MediaSource. Открываем страницу
+/// Поток по находке владельца (29.10.2026): www.youtube.com/watch?app=desktop в Safari на iPhone играет
+/// системным плеером iOS (и в приватной вкладке, и со входом) — у видео обычная ссылка на поток, а не MediaSource. Открываем страницу
 /// так же — в скрытом окне с чистыми данными — и забираем эту ссылку для AVPlayer.
 final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Куда вставить скрытое окно (без родителя WebKit не работает) — задаёт MainViewController.
@@ -444,7 +444,9 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         self.completion = completion
         keepAlive = self
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent() // как Safari после очистки истории: без входа и cookies
+        // С входом в аккаунт (общие cookies приложения): в 1.61 окно «без cookies» на каждый трек Google принял за бота
+        // (google.com/sorry — капча). Владелец проверил: со входом в Safari системный плеер тоже работает.
+        config.websiteDataStore = .default()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = [] // звук и так выключен скриптом; «play» нужен для ссылки
         // Именно как iPhone: с «Запросом версии для компьютера» (UA Mac) YouTube включает свой плеер (проверил
@@ -495,6 +497,12 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         if navigationAction.targetFrame?.isMainFrame != false, navigationAction.request.url?.host == "m.youtube.com" {
             decisionHandler(.cancel)
             finish(nil, "YouTube перекинул на мобильную версию")
+            return
+        }
+        if navigationAction.targetFrame?.isMainFrame != false, let url = navigationAction.request.url,
+           url.host?.hasSuffix("google.com") == true, url.path.hasPrefix("/sorry") {
+            decisionHandler(.cancel)
+            finish(nil, "Google просит капчу (принял за бота)")
             return
         }
         decisionHandler(.allow)
