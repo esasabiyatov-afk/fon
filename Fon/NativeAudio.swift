@@ -433,6 +433,9 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         config.websiteDataStore = .nonPersistent() // как Safari после очистки истории: без входа и cookies
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = .all
+        // Именно как iPhone: с «Запросом версии для компьютера» (UA Mac) YouTube включает свой плеер (проверил
+        // владелец). На iPad WebKit по умолчанию просит версию для компьютера — запрещаем.
+        config.defaultWebpagePreferences.preferredContentMode = .mobile
         config.userContentController.add(WeakScriptHandler(self), name: "fonSrc")
         config.userContentController.addUserScript(WKUserScript(source: Scripts.safariSource, injectionTime: .atDocumentStart,
                                                                 forMainFrameOnly: false))
