@@ -107,8 +107,17 @@ final class TrackListViewController: UITableViewController {
             navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Очистить", style: .plain, target: self, action: #selector(clearHistory))
         }
         let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(reload), name: kind == .liked ? CloudLikes.didChange : Library.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil) // ♡ у треков
+        if kind == .history { nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil) }
         reload()
+    }
+
+    /// Шапка с кнопками — по ширине таблицы (иначе «Перемешать» уезжала за край).
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard let header = tableView.tableHeaderView, header.frame.width != tableView.bounds.width else { return }
+        header.frame.size.width = tableView.bounds.width
+        tableView.tableHeaderView = header
     }
 
     @objc private func reload() {
@@ -187,7 +196,11 @@ final class TrackListViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "track", for: indexPath) as! TrackCell
-        cell.configure(tracks[indexPath.row])
+        let track = tracks[indexPath.row]
+        cell.configure(track, liked: CloudLikes.shared.isLiked(track.id)) { liked in
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CloudLikes.shared.setLiked(track, liked)
+        }
         return cell
     }
 
@@ -221,7 +234,10 @@ final class TrackCell: UITableViewCell {
     private let artwork = UIImageView()
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
+    private let likeButton = UIButton(type: .system)
     private var trackID: String?
+    private var liked = false
+    private var onLike: ((Bool) -> Void)?
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -237,13 +253,36 @@ final class TrackCell: UITableViewCell {
         titleLabel.textColor = .white
         artistLabel.font = .systemFont(ofSize: 13)
         artistLabel.textColor = .secondaryLabel
-        [artwork, titleLabel, artistLabel].forEach { contentView.addSubview($0) }
+        likeButton.tintColor = PlayerView.accent
+        likeButton.accessibilityLabel = "Понравившиеся"
+        likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
+        [artwork, titleLabel, artistLabel, likeButton].forEach { contentView.addSubview($0) }
+    }
+
+    /// ♡ справа — добавить в «Понравившиеся» (облачный плейлист) или убрать оттуда.
+    @objc private func likeTapped() {
+        setLiked(!liked)
+        onLike?(liked)
+        UIView.animate(withDuration: 0.12, animations: {
+            self.likeButton.transform = CGAffineTransform(scaleX: 1.3, y: 1.3)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.2) { self.likeButton.transform = .identity }
+        })
+    }
+
+    private func setLiked(_ value: Bool) {
+        liked = value
+        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)
+        likeButton.setImage(UIImage(systemName: value ? "heart.fill" : "heart", withConfiguration: config), for: .normal)
+        likeButton.tintColor = value ? PlayerView.accent : UIColor(white: 0.6, alpha: 1)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(_ track: Track) {
+    func configure(_ track: Track, liked: Bool, onLike: @escaping (Bool) -> Void) {
         trackID = track.id
+        self.onLike = onLike
+        setLiked(liked)
         titleLabel.text = track.title
         artistLabel.text = track.artist
         artwork.image = nil
@@ -259,7 +298,8 @@ final class TrackCell: UITableViewCell {
         let w = contentView.bounds.width
         artwork.frame = CGRect(x: 16, y: (h - 48) / 2, width: 48, height: 48)
         let x: CGFloat = 76
-        titleLabel.frame = CGRect(x: x, y: h / 2 - 20, width: max(0, w - x - 12), height: 21)
-        artistLabel.frame = CGRect(x: x, y: h / 2 + 2, width: max(0, w - x - 12), height: 18)
+        likeButton.frame = CGRect(x: w - 52, y: (h - 44) / 2, width: 44, height: 44)
+        titleLabel.frame = CGRect(x: x, y: h / 2 - 20, width: max(0, w - x - 56), height: 21)
+        artistLabel.frame = CGRect(x: x, y: h / 2 + 2, width: max(0, w - x - 56), height: 18)
     }
 }
