@@ -52,6 +52,44 @@ enum YouTubeSession {
     }
 }
 
+/// Защитный токен YouTube (PO token) для потока: его выдаёт BotGuard в скрытом окне www.youtube.com
+/// (`Scripts.potoken`). Токен живёт часами — храним в памяти, чтобы следующие треки (и в фоне, когда
+/// WebKit может спать) обходились без окна.
+enum PoToken {
+    private static var cache: [String: (token: String, until: Date)] = [:] // только главный поток
+
+    static func token(for identifier: String) async -> (token: String?, note: String) {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                if let cached = cache[identifier], cached.until > Date() {
+                    return continuation.resume(returning: (cached.token, "из памяти"))
+                }
+                var done = false
+                let finish: (String?, String) -> Void = { token, note in
+                    guard !done else { return }
+                    done = true
+                    continuation.resume(returning: (token, note))
+                }
+                HiddenPage.desktop.call("__fonPot.mint(id)", { ["id": identifier] }) { result in
+                    switch result {
+                    case .success(let value):
+                        guard let dict = value as? [String: Any], let token = dict["token"] as? String, !token.isEmpty else {
+                            return finish(nil, "пустой ответ")
+                        }
+                        let ttl = (dict["ttl"] as? NSNumber)?.doubleValue ?? 3600
+                        cache[identifier] = (token, Date().addingTimeInterval(max(300, ttl)))
+                        finish(token, "получен")
+                    case .failure(let error):
+                        let message = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                        finish(nil, "ошибка (\(message.prefix(80)))")
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 45) { finish(nil, "нет ответа") }
+            }
+        }
+    }
+}
+
 /// Поток трека для системного плеера. YouTube отдаёт готовый поток HLS (его AVPlayer играет сам,
 /// без расшифровки подписи) браузеру Safari на Mac — как в yt-dlp клиент `web_safari`. Поэтому
 /// запрашиваем страницу видео www.youtube.com с User-Agent Safari для Mac и cookies входа в аккаунт;
@@ -66,6 +104,8 @@ enum YouTubeStreams {
         let context: [String: Any]
         let clientVersion: String
         let signatureTimestamp: Int?
+        /// Для защитного токена: dataSyncId аккаунта (со входом) или visitorData (без входа).
+        let identifier: String?
     }
 
     private static let lock = NSLock()
@@ -84,7 +124,7 @@ enum YouTubeStreams {
 
     private static var fallbackConfig: Config {
         Config(context: ["client": ["clientName": "WEB", "clientVersion": webVersion, "hl": "ru", "gl": "RU"]],
-               clientVersion: webVersion, signatureTimestamp: nil)
+               clientVersion: webVersion, signatureTimestamp: nil, identifier: nil)
     }
 
     struct Result {
@@ -118,9 +158,20 @@ enum YouTubeStreams {
             result.title = details["title"] as? String
             result.author = details["author"] as? String
         }
-        guard let master = hlsURL(response) else { return result }
+        guard var master = hlsURL(response) else { return result }
+        // Защитный токен (без него куски потока — 403): как yt-dlp, дописываем /pot/<токен> к ссылке HLS.
+        if let identifier = config?.identifier {
+            let pot = await PoToken.token(for: identifier)
+            result.log.append("токен: " + pot.note)
+            if let token = pot.token, let url = URL(string: master.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/pot/" + token) {
+                master = url
+            }
+        } else {
+            result.log.append("токен: нет идентификатора")
+        }
         let streams = await playlists(master: master)
         result.log.append("HLS: " + streams.map(\.client).joined(separator: ", "))
+        if let first = streams.first { result.log.append("проверка: " + (await probe(first))) }
         result.streams = streams
         return result
     }
@@ -139,8 +190,11 @@ enum YouTubeStreams {
         guard code == 200 else { return (nil, "HTTP \(code)") }
         if let context = jsonObject(in: data, after: "\"INNERTUBE_CONTEXT\":") {
             let client = context["client"] as? [String: Any]
+            let dataSync = string(in: data, after: "\"DATASYNC_ID\":\"")?.components(separatedBy: "||").first
+            let visitor = client?["visitorData"] as? String
             config = Config(context: context, clientVersion: client?["clientVersion"] as? String ?? webVersion,
-                            signatureTimestamp: number(in: data, after: "\"STS\":"))
+                            signatureTimestamp: number(in: data, after: "\"STS\":"),
+                            identifier: (dataSync?.isEmpty == false ? dataSync : nil) ?? visitor)
         }
         let response = jsonObject(in: data, after: "ytInitialPlayerResponse = ")
         return (response, response.map(describe) ?? "без ответа плеера")
@@ -281,6 +335,32 @@ enum YouTubeStreams {
             }
             return nil
         }
+    }
+
+    /// Сами открываем список и первый кусок потока — в журнал: на каком шаге YouTube отказывает.
+    private static func probe(_ stream: AudioStream) async -> String {
+        func get(_ url: URL, range: Bool) async -> (Int, Data?) {
+            var request = URLRequest(url: url, timeoutInterval: 10)
+            stream.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+            if range { request.setValue("bytes=0-1023", forHTTPHeaderField: "Range") }
+            guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return (0, nil) }
+            return ((reply as? HTTPURLResponse)?.statusCode ?? 0, data)
+        }
+        let (code, data) = await get(stream.url, range: false)
+        var note = "список \(code)"
+        guard code == 200, let text = data.flatMap({ String(data: $0, encoding: .utf8) }) else { return note }
+        note += text.contains("/pot/") || text.contains("pot=") ? " (с токеном)" : " (без токена)"
+        guard let line = text.components(separatedBy: .newlines).first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
+              let segment = URL(string: line.trimmingCharacters(in: .whitespaces), relativeTo: stream.url)?.absoluteURL else { return note }
+        if line.contains(".m3u8") { return note + ", вложенный список" }
+        let (segmentCode, _) = await get(segment, range: true)
+        return note + ", кусок \(segmentCode)"
+    }
+
+    private static func string(in data: Data, after marker: String) -> String? {
+        guard let found = data.range(of: Data(marker.utf8)) else { return nil }
+        let value = data[found.upperBound...].prefix { $0 != 0x22 }
+        return String(decoding: value, as: UTF8.self)
     }
 
     private static func number(in data: Data, after marker: String) -> Int? {

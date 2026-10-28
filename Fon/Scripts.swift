@@ -1352,4 +1352,88 @@ enum Scripts {
   }, true);
 })();
 """#
+
+    /// Скрытое окно www.youtube.com (`HiddenPage.desktop`): защитный токен (PO token) для потока системного
+    /// плеера. Без него googlevideo отвечает 403 (1.57: HLS нашёлся, но AVPlayer -12660). Токен выдаёт
+    /// BotGuard Google — его скрипт запускается здесь, как на странице YouTube (схема — как в BgUtils/yt-dlp):
+    /// Create → интерпретатор BotGuard → снимок → GenerateIT (integrity token) → minter(идентификатор).
+    static let potoken = #"""
+(() => {
+  if (window.__fonPot) return;
+  const REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo';
+  const HEADERS = {
+    'content-type': 'application/json+protobuf',
+    'x-goog-api-key': 'AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw',
+    'x-user-agent': 'grpc-web-javascript/0.1'
+  };
+  const b64ToU8 = (s) => {
+    const bin = atob(String(s).replace(/-/g, '+').replace(/_/g, '/').replace(/\./g, '='));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
+  const u8ToB64 = (u) => {
+    let bin = '';
+    for (let i = 0; i < u.length; i++) bin += String.fromCharCode(u[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_');
+  };
+  const descramble = (s) => new TextDecoder().decode(b64ToU8(s).map((b) => (b + 97) & 255));
+  const timeout = (promise, ms, what) => Promise.race([promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(what + ': нет ответа')), ms))]);
+  const loadScript = (src) => new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error('скрипт BotGuard не загрузился'));
+    (document.head || document.documentElement).appendChild(el);
+  });
+  const post = async (path, body) => {
+    const res = await fetch(path, { method: 'POST', headers: HEADERS, body: JSON.stringify(body), credentials: 'include' });
+    if (!res.ok) throw new Error(path.split('/').pop() + ' HTTP ' + res.status);
+    return res.json();
+  };
+  let minter = null, minterUntil = 0;
+  const createMinter = async () => {
+    const raw = await post('/api/jnn/v1/Create', [REQUEST_KEY]);
+    let data = [];
+    if (raw.length > 1 && typeof raw[1] === 'string') data = JSON.parse(descramble(raw[1]) || '[]');
+    else if (raw.length && typeof raw[0] === 'object') data = raw[0];
+    const pick = (w) => (Array.isArray(w) ? w.find((x) => x && typeof x === 'string') : null);
+    const script = pick(data[1]), url = pick(data[2]), program = data[4], globalName = data[5];
+    if (!program || !globalName) throw new Error('Create: нет программы');
+    if (!window[globalName]) {
+      if (script) (0, eval)(script);
+      else if (url) await timeout(loadScript(url.startsWith('//') ? 'https:' + url : url), 15000, 'скрипт BotGuard');
+      else throw new Error('Create: нет интерпретатора');
+    }
+    const vm = window[globalName];
+    if (!vm || typeof vm.a !== 'function') throw new Error('нет BotGuard');
+    let snapshot = null;
+    const callback = (asyncSnapshot) => { snapshot = asyncSnapshot; };
+    await vm.a(program, callback, true, undefined, () => {}, [[], []])[0];
+    for (let i = 0; i < 40 && !snapshot; i++) await new Promise((r) => setTimeout(r, 50));
+    if (typeof snapshot !== 'function') throw new Error('BotGuard: нет снимка');
+    const signal = [];
+    const response = await timeout(new Promise((resolve) => snapshot(resolve, [undefined, undefined, signal, undefined])), 15000, 'снимок BotGuard');
+    const it = await post('/api/jnn/v1/GenerateIT', [REQUEST_KEY, response]);
+    const integrity = it && it[0];
+    if (typeof integrity !== 'string') throw new Error('GenerateIT: нет токена');
+    const getMinter = signal[0];
+    if (typeof getMinter !== 'function') throw new Error('BotGuard: нет minter');
+    const mint = await getMinter(b64ToU8(integrity));
+    if (typeof mint !== 'function') throw new Error('BotGuard: minter не функция');
+    minter = mint;
+    minterUntil = Date.now() + Math.max(600, (Number(it[1]) || 3600) - 300) * 1000;
+  };
+  window.__fonPot = {
+    // Токен для идентификатора (dataSyncId аккаунта или visitorData) и сколько секунд он годен.
+    async mint(identifier) {
+      if (!minter || Date.now() > minterUntil) await timeout(createMinter(), 40000, 'BotGuard');
+      const out = await minter(new TextEncoder().encode(identifier));
+      if (!(out instanceof Uint8Array)) throw new Error('токен не получен');
+      return { token: u8ToB64(out), ttl: Math.round((minterUntil - Date.now()) / 1000) };
+    }
+  };
+})();
+"""#
 }
