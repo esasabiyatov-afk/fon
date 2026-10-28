@@ -9,13 +9,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private enum PlayerState { case hidden, mini, expanded }
 
     private enum TabKind {
-        /// Путь в режиме видео и в режиме музыки; nil в режиме музыки — нативная медиатека.
-        case web(video: String, music: String?)
-        case search
-        case mode // переключатель «Видео / Музыка»
+        case home, history, subscriptions, you
+        case mode // переключатель «Видео / Музыка» — в центре панели
     }
 
-    private enum TabContent { case web(String), library, musicHome, search, none }
+    private enum TabContent { case web(String), library, musicHome, history, search, none }
 
     private let browseContainer = UIView()
     private var browseViews: [Int: WKWebView] = [:]
@@ -23,8 +21,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var urlObservations: [Int: NSKeyValueObservation] = [:]
     private var libraryNav: UINavigationController?
     private var homeNav: UINavigationController?
+    private var historyNav: UINavigationController?
     private var searchVC: SearchViewController?
-    private let searchTabIndex = 1
+    /// Поиск — не вкладка на панели, а отдельное место в той же области (открывается лупой YouTube
+    /// или лупой на подборках); панель и мини-плеер остаются, вернуться — любой вкладкой.
+    private var searchTabIndex: Int { tabs.count }
     /// В режиме музыки на «Главной» вместо подборок открыта лента YouTube (или результаты поиска).
     private var musicFeedShown = false
     private var currentTab = 0
@@ -36,16 +37,16 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private let base = "https://m.youtube.com"
-    /// Главная в режиме музыки — обычные рекомендации, но с фильтром «Музыка» (его включает скрипт ленты).
+    /// Порядок владельца: Главная · История · [режим] · Подписки · Вы.
     private let tabs: [(title: String, icon: String, kind: TabKind)] = [
-        ("Главная", "house", .web(video: "/", music: "/#fon-music")),
-        ("Поиск", "magnifyingglass", .search),
-        ("Подписки", "play.rectangle.on.rectangle", .web(video: "/feed/subscriptions", music: "/feed/subscriptions")),
-        ("Вы", "person.crop.circle", .web(video: "/feed/library", music: nil)),
-        ("Режим", "music.note", .mode)
+        ("Главная", "house", .home),
+        ("История", "clock.arrow.circlepath", .history),
+        ("Режим", "music.note", .mode),
+        ("Подписки", "play.rectangle.on.rectangle", .subscriptions),
+        ("Вы", "person.crop.circle", .you)
     ]
-    private let libraryTabIndex = 3
-    private var modeTabIndex: Int { tabs.count - 1 }
+    private let modeTabIndex = 2
+    private let libraryTabIndex = 4
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
     override var prefersStatusBarHidden: Bool { playerState == .expanded && playerView.isFullscreen }
@@ -214,6 +215,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         browseViews.values.forEach { applyBottomInset(to: $0) }
         libraryNav?.additionalSafeAreaInsets.bottom = inset
         homeNav?.additionalSafeAreaInsets.bottom = inset
+        historyNav?.additionalSafeAreaInsets.bottom = inset
     }
 
     private func applyBottomInset(to webView: WKWebView) {
@@ -253,6 +255,15 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return nav
     }
 
+    private func historyController() -> UINavigationController {
+        if let historyNav { return historyNav }
+        let history = TrackListViewController(kind: .history)
+        history.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
+        let nav = embed(history)
+        historyNav = nav
+        return nav
+    }
+
     private func searchController() -> SearchViewController {
         if let searchVC { return searchVC }
         let search = SearchViewController()
@@ -275,6 +286,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             list.onPlay = { url, source, queue in self?.play(url, source: source, queue: queue) }
             self?.homeNav?.pushViewController(list, animated: true)
         }
+        home.onSearch = { [weak self] in self?.presentSearch(prefill: nil) }
         home.onOpenFeed = { [weak self] in
             self?.musicFeedShown = true
             self?.showTab(0)
@@ -301,12 +313,16 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     private func content(for index: Int) -> TabContent {
-        if case .search = tabs[index].kind { return .search }
-        guard case let .web(video, music) = tabs[index].kind else { return .none }
-        guard Settings.musicMode else { return .web(video) }
-        if index == 0 && !musicFeedShown { return .musicHome }
-        if let music { return .web(music) }
-        return .library
+        guard tabs.indices.contains(index) else { return index == searchTabIndex ? .search : .none }
+        let music = Settings.musicMode
+        switch tabs[index].kind {
+        // Главная в режиме музыки — подборки; лента YouTube с фильтром «Музыка» — по карточке.
+        case .home: return music ? (musicFeedShown ? .web("/#fon-music") : .musicHome) : .web("/")
+        case .history: return music ? .history : .web("/feed/history")
+        case .subscriptions: return .web("/feed/subscriptions")
+        case .you: return music ? .library : .web("/feed/library")
+        case .mode: return .none
+        }
     }
 
     private func showTab(_ index: Int) {
@@ -315,6 +331,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let tabContent = content(for: index)
         libraryNav?.view.isHidden = true
         homeNav?.view.isHidden = true
+        historyNav?.view.isHidden = true
         searchVC?.view.isHidden = true
         if case .web = tabContent {} else { browseViews.values.forEach { $0.isHidden = true } }
         switch tabContent {
@@ -326,6 +343,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             results.isHidden = false
         case .library:
             libraryController().view.isHidden = false
+        case .history:
+            historyController().view.isHidden = false
         case .musicHome:
             homeController().view.isHidden = false
         case .web(let root):
@@ -364,6 +383,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         switch content(for: index) {
         case .library:
             libraryNav?.popToRootViewController(animated: true)
+        case .history:
+            (historyNav?.viewControllers.first as? UITableViewController)?.tableView.setContentOffset(.zero, animated: true)
         case .musicHome:
             if homeNav?.viewControllers.count ?? 0 > 1 {
                 homeNav?.popToRootViewController(animated: true)
@@ -380,7 +401,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
                 load(path: root, in: webView)
             }
         case .search, .none:
-            break // повторное нажатие «Поиска» обрабатывает tabSelected
+            break
         }
     }
 
@@ -406,14 +427,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     private func tabSelected(_ index: Int) {
         switch tabs[index].kind {
-        case .web:
+        case .home, .history, .subscriptions, .you:
             if index == currentTab { reselectTab(index) } else { showTab(index) }
-            if playerState == .expanded { setPlayerState(.mini) }
-        case .search:
-            // Первое нажатие — открыть вкладку (с прошлыми результатами), повторное — сразу к вводу.
-            let wasOpen = currentTab == index
-            if !wasOpen { showTab(index) }
-            if wasOpen || !(searchVC?.hasResults ?? false) { searchVC?.beginSearch(prefill: nil) }
             if playerState == .expanded { setPlayerState(.mini) }
         case .mode:
             Settings.musicMode.toggle()

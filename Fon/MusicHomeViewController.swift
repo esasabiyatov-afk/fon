@@ -6,6 +6,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     var onPlay: PlayHandler?
     var onOpenLikes: (() -> Void)?
     var onOpenFeed: (() -> Void)?
+    var onSearch: (() -> Void)?
 
     fileprivate enum Style { case quick, large, small }
 
@@ -199,7 +200,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     func collectionView(_ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> UICollectionReusableView {
         let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "header", for: indexPath) as! HeaderView
-        header.configure(sections[indexPath.section].title, big: indexPath.section == 0)
+        let first = indexPath.section == 0
+        header.configure(sections[indexPath.section].title, big: first, onSearch: first ? { [weak self] in self?.onSearch?() } : nil)
         return header
     }
 
@@ -225,26 +227,40 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     // MARK: - Ячейки
 
+    /// Заголовок раздела; у первого (приветствие) справа — лупа поиска.
     private final class HeaderView: UICollectionReusableView {
         private let label = UILabel()
+        private let searchButton = UIButton(type: .system)
+        private var onSearch: (() -> Void)?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
             label.textColor = .white
             addSubview(label)
+            searchButton.setImage(UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21, weight: .semibold)), for: .normal)
+            searchButton.tintColor = .white
+            searchButton.accessibilityLabel = "Поиск"
+            searchButton.addTarget(self, action: #selector(searchTapped), for: .touchUpInside)
+            addSubview(searchButton)
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func configure(_ text: String, big: Bool) {
+        func configure(_ text: String, big: Bool, onSearch: (() -> Void)?) {
             label.text = text
             label.font = .systemFont(ofSize: big ? 26 : 21, weight: .bold)
+            self.onSearch = onSearch
+            searchButton.isHidden = onSearch == nil
             setNeedsLayout()
         }
 
+        @objc private func searchTapped() { onSearch?() }
+
         override func layoutSubviews() {
             super.layoutSubviews()
-            label.frame = bounds.insetBy(dx: 16, dy: 0)
+            let buttonSide: CGFloat = 44
+            searchButton.frame = CGRect(x: bounds.width - buttonSide - 6, y: (bounds.height - buttonSide) / 2, width: buttonSide, height: buttonSide)
+            label.frame = CGRect(x: 16, y: 0, width: max(0, bounds.width - 32 - (searchButton.isHidden ? 0 : buttonSide)), height: bounds.height)
         }
     }
 
