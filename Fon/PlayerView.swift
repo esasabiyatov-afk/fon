@@ -104,11 +104,23 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
         // Нативный музыкальный плеер
         musicView.onCommand = { [weak self] name in self?.command(name) }
-        musicView.onSeek = { [weak self] t in self?.runJS("window.__fon && __fon.cmd && __fon.cmd('seek', \(t))") }
+        musicView.onSeek = { [weak self] t in
+            if NativeAudio.shared.active { NativeAudio.shared.seek(t) } else { self?.runJS("window.__fon && __fon.cmd && __fon.cmd('seek', \(t))") }
+        }
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
         addSubview(musicView)
+
+        // Системный плеер (настройка): его состояние показываем так же, как сообщения веб-плеера.
+        NativeAudio.shared.onState = { [weak self] s in
+            self?.applyState(id: s.id, title: s.title, artist: s.artist, paused: s.paused, time: s.time, duration: s.duration, loop: s.loop)
+        }
+        NativeAudio.shared.onFallback = { [weak self] url in
+            guard let self else { return }
+            self.musicView.queueAvailable = true
+            self.webView.load(URLRequest(url: url))
+        }
 
         // Шапка развёрнутого плеера
         topBar.backgroundColor = .black
@@ -167,11 +179,21 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         topTitleLabel.text = nil
         progress = 0
         if let id = currentVideoID { updateMiniArtwork(id) }
+        if Settings.nativeAudio && musicMode && NativeAudio.canPlay(url) {
+            // Системный плеер: веб-страница молчит (иначе два звука), очередь «Играет из» — своя.
+            webView.load(URLRequest(url: URL(string: "about:blank")!))
+            musicView.queueAvailable = false
+            NativeAudio.shared.start(url: url, queue: queue)
+        } else {
+            NativeAudio.shared.deactivate()
+            musicView.queueAvailable = true
+            webView.load(URLRequest(url: url))
+        }
         updateVisibility()
-        webView.load(URLRequest(url: url))
     }
 
     func stop() {
+        NativeAudio.shared.deactivate()
         runJS("window.__fon && __fon.cmd('pause')")
         webView.load(URLRequest(url: URL(string: "about:blank")!))
         currentVideoID = nil
@@ -241,6 +263,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     /// Режим сменили (здесь или во вкладке приложения) — обновляем экран и страницу.
     func musicModeDidChange() {
+        // Режим видео — картинку показывает только веб-плеер: передаём ему трек с того же места.
+        if !musicMode, NativeAudio.shared.active, let url = NativeAudio.shared.handoverURL() {
+            NativeAudio.shared.deactivate()
+            musicView.queueAvailable = true
+            webView.load(URLRequest(url: url))
+        }
         UIView.transition(with: self, duration: 0.25, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.updateVisibility()
         }
@@ -285,7 +313,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func command(_ name: String) {
-        runJS("window.__fon && __fon.cmd && __fon.cmd('\(name)')")
+        if NativeAudio.shared.active {
+            NativeAudio.shared.handle(name)
+        } else {
+            runJS("window.__fon && __fon.cmd && __fon.cmd('\(name)')")
+        }
     }
 
     /// Приложение ушло в фон. Пока звук не пошёл (видео ещё грузится или WebKit поставил паузу),
@@ -294,7 +326,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// помогает видео стартовать. Когда звук идёт, iOS уже не усыпляет приложение — done().
     func watchBackgroundStart(done: @escaping () -> Void) {
         stopBackgroundWatch()
-        guard let url = webView.url, WebViewFactory.isYouTube(url) else { return done() }
+        // Системный плеер играет в фоне сам — помогать ему не нужно.
+        guard !NativeAudio.shared.active, let url = webView.url, WebViewFactory.isYouTube(url) else { return done() }
         var tick = 0
         var playingTicks = 0
         var finished = false
@@ -326,6 +359,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// Наушники отключили: это пауза, в фоне сами звук не включаем.
     func markUserPaused() {
         stopBackgroundWatch()
+        if NativeAudio.shared.active { NativeAudio.shared.pause() }
         runJS("window.__fon && __fon.markUserPaused && __fon.markUserPaused()")
     }
 
@@ -540,39 +574,39 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         webView?.evaluateJavaScript("try { \(code) } catch (e) {} ; void 0", completionHandler: nil)
     }
 
+    /// Что играет сейчас (веб-плеер раз в секунду или системный плеер) — мини-полоска, шапка и музыкальный экран.
+    private func applyState(id: String?, title: String, artist: String, paused: Bool, time: Double, duration: Double, loop: Bool) {
+        let shown = musicMode ? TrackTitle.clean(title: title, artist: artist) : (title: title, artist: artist)
+        titleLabel.text = shown.title
+        subtitleLabel.text = shown.artist
+        topTitleLabel.text = title
+        let symbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+        playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
+        progress = duration > 0 ? CGFloat(min(1, max(0, time / duration))) : 0
+        if mode == .mini { progressView.frame.size.width = bounds.width * progress }
+        guard let id else { return }
+        currentVideoID = id
+        let clean = TrackTitle.clean(title: title, artist: artist)
+        if currentTrack?.id != id || currentTrack?.title != clean.title {
+            currentTrack = Track(id: id, title: clean.title, artist: clean.artist)
+            updateLikeButton()
+        }
+        if let queue = queueIDs, !queue.contains(id) {
+            queueIDs = nil
+            musicView.sourceName = "Похожие треки"
+        }
+        updateMiniArtwork(id)
+        musicView.update(id: id, title: title, artist: artist, paused: paused, time: time, duration: duration, loop: loop)
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
         case "state":
-            guard body["active"] as? Bool == true else { return }
-            let title = body["title"] as? String ?? ""
-            let artist = body["artist"] as? String ?? ""
-            let paused = body["paused"] as? Bool ?? true
-            let time = (body["time"] as? NSNumber)?.doubleValue ?? 0
-            let duration = (body["duration"] as? NSNumber)?.doubleValue ?? 0
-            let shown = musicMode ? TrackTitle.clean(title: title, artist: artist) : (title: title, artist: artist)
-            titleLabel.text = shown.title
-            subtitleLabel.text = shown.artist
-            topTitleLabel.text = title
-            let symbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
-            playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
-            progress = duration > 0 ? CGFloat(min(1, max(0, time / duration))) : 0
-            if mode == .mini { progressView.frame.size.width = bounds.width * progress }
-            if let id = body["id"] as? String {
-                currentVideoID = id
-                if currentTrack?.id != id {
-                    let clean = TrackTitle.clean(title: title, artist: artist)
-                    currentTrack = Track(id: id, title: clean.title, artist: clean.artist)
-                    updateLikeButton()
-                }
-                if let queue = queueIDs, !queue.contains(id) {
-                    queueIDs = nil
-                    musicView.sourceName = "Похожие треки"
-                }
-                updateMiniArtwork(id)
-                musicView.update(id: id, title: title, artist: artist, paused: paused, time: time,
-                                 duration: duration, loop: body["loop"] as? Bool ?? false)
-            }
+            guard body["active"] as? Bool == true, !NativeAudio.shared.active else { return }
+            applyState(id: body["id"] as? String, title: body["title"] as? String ?? "", artist: body["artist"] as? String ?? "",
+                       paused: body["paused"] as? Bool ?? true, time: (body["time"] as? NSNumber)?.doubleValue ?? 0,
+                       duration: (body["duration"] as? NSNumber)?.doubleValue ?? 0, loop: body["loop"] as? Bool ?? false)
         case "search":
             onSearch?(body["query"] as? String)
         case "played":

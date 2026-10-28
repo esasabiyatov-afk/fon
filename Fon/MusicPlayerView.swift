@@ -11,6 +11,8 @@ final class MusicPlayerView: UIView {
 
     private(set) var track: Track?
     var sourceName: String = "YouTube" { didSet { sourceLabel.text = sourceName } }
+    /// Кнопка «очередь» открывает страницу YouTube — с системным плеером её нет (страница заиграла бы второй раз).
+    var queueAvailable = true { didSet { queueButton.isHidden = !queueAvailable } }
 
     private let gradient = CAGradientLayer()
     private let collapseButton = UIButton(type: .system)
