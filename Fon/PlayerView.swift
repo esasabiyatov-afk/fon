@@ -67,6 +67,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
     /// Открыто меню YouTube (⚙ и др.): свайп вниз закрывает его, а не плеер и не полный экран.
     private var youTubeMenuOpen = false
+    /// Верх открытого меню YouTube в точках страницы (-1 — неизвестно).
+    private var youTubeMenuTop: CGFloat = -1
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -362,9 +364,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === dragGesture else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
         guard mode == .expanded else { return false }
-        if youTubeMenuOpen && !nativeMusic { return false }
         let v = dragGesture.velocity(in: self)
         guard v.y > 0, v.y > abs(v.x) * 1.5 else { return false }
+        // Меню YouTube тянут вниз, чтобы закрыть его, — там свайп не наш. Выше меню (по видео) — наш.
+        if youTubeMenuOpen && !nativeMusic {
+            let y = dragGesture.location(in: webView).y
+            if youTubeMenuTop < 0 || y >= youTubeMenuTop - 12 { return false }
+        }
         if isFullscreen { return true }
         let p = dragGesture.location(in: self)
         if nativeMusic { return !musicView.blocksDrag(at: convert(p, to: musicView)) }
@@ -593,6 +599,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             onTrackEnding?()
         case "menu":
             youTubeMenuOpen = body["open"] as? Bool == true
+            youTubeMenuTop = CGFloat((body["top"] as? NSNumber)?.doubleValue ?? -1)
         case "fullscreen":
             setFullscreen(body["on"] as? Bool == true, vertical: body["vertical"] as? Bool == true)
         case "browse":

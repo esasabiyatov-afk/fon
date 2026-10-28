@@ -486,9 +486,14 @@ enum Scripts {
   fon.isFull = false;
   let fullEl = null;
   const fire = (target, name) => { try { target.dispatchEvent(new Event(name, { bubbles: true })); } catch (e) {} };
+  let exitedAt = 0;
   const setFull = (on, el) => {
     on = !!on;
     if (on === fon.isFull) return;
+    // Сразу после выхода YouTube мог тут же снова запросить полный экран (его состояние ещё «внутри») —
+    // и выход кнопкой/свайпом будто не срабатывал. Повторный вход в ближайшие 1,5 с не принимаем.
+    if (on && Date.now() - exitedAt < 1500) return;
+    if (!on) exitedAt = Date.now();
     fon.isFull = on;
     const v = fon.video();
     fullEl = on ? (el || document.getElementById('player-container-id') || v || document.documentElement) : null;
@@ -667,19 +672,34 @@ enum Scripts {
   // а не выйти из полного экрана или свернуть плеер. Сообщаем приложению, когда меню открыто.
   const MENUS = 'bottom-sheet-container, .bottom-sheet-container, ytm-bottom-sheet-renderer, bottom-sheet-layout, ' +
     'ytm-menu-popup-renderer, ytm-dialog, .dialog-container, [role="dialog"], tp-yt-paper-dialog, ytm-select';
-  let menuOpen = false;
+  // Меню считается открытым, только если оно действительно сверху (а не пустой контейнер за плеером):
+  // ложное «открыто» отключало свайп выхода из полного экрана. Приложению сообщаем верх меню —
+  // свайп отключается только на самом меню.
+  let menuOpen = false, menuTop = -1;
+  const onTop = (el, r) => {
+    const x = Math.min(Math.max(r.left + r.width / 2, 0), window.innerWidth - 1);
+    const y = Math.min(Math.max(r.top + Math.min(r.height / 2, 30), 0), window.innerHeight - 1);
+    const hit = document.elementFromPoint(x, y);
+    return !!hit && (el === hit || el.contains(hit));
+  };
   const checkMenu = () => {
-    let open = false;
+    let open = false, top = -1;
     try {
       for (const el of document.querySelectorAll(MENUS)) {
         const r = el.getBoundingClientRect();
         const cs = getComputedStyle(el);
-        if (r.height > 40 && r.width > 40 && cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0') { open = true; break; }
+        if (r.height > 40 && r.width > 40 && r.bottom > 0 && r.top < window.innerHeight &&
+            cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0' && onTop(el, r)) {
+          open = true;
+          const t = Math.max(0, Math.round(r.top));
+          top = top < 0 ? t : Math.min(top, t);
+        }
       }
     } catch (e) {}
-    if (open !== menuOpen) {
+    if (open !== menuOpen || top !== menuTop) {
       menuOpen = open;
-      fon.post({ type: 'menu', open });
+      menuTop = top;
+      fon.post({ type: 'menu', open, top });
     }
   };
   window.addEventListener('touchstart', checkMenu, true);
