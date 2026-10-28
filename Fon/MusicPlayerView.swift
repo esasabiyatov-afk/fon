@@ -8,6 +8,8 @@ final class MusicPlayerView: UIView {
     var onCollapse: (() -> Void)?
     var onShowQueue: (() -> Void)?
     var onVideoMode: (() -> Void)?
+    /// Своя громкость YouTube (0…1), отдельно от громкости телефона.
+    var onVolume: ((Double) -> Void)?
 
     private(set) var track: Track?
     var sourceName: String = "YouTube" { didSet { sourceLabel.text = sourceName } }
@@ -32,6 +34,9 @@ final class MusicPlayerView: UIView {
     private let playButton = UIButton(type: .system)
     private let nextButton = UIButton(type: .system)
     private let loopButton = UIButton(type: .system)
+    private let volumeSlider = UISlider()
+    private let volumeLow = UIImageView(image: UIImage(systemName: "speaker.fill"))
+    private let volumeHigh = UIImageView(image: UIImage(systemName: "speaker.wave.3.fill"))
 
     private var paused = true
     private var looping = false
@@ -40,7 +45,7 @@ final class MusicPlayerView: UIView {
     private var stamp = CACurrentMediaTime()
     private var scrubbing = false
     private var ticker: Timer?
-    private let panelHeight: CGFloat = 206
+    private let panelHeight: CGFloat = 252
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -111,6 +116,25 @@ final class MusicPlayerView: UIView {
         setup(nextButton, "forward.fill", 28, #selector(nextTapped))
         setup(loopButton, "repeat.1", 20, #selector(loopTapped))
         loopButton.accessibilityLabel = "Повтор трека"
+        // Громкость YouTube — отдельно от кнопок громкости телефона.
+        let small: CGFloat = 9
+        let knob = UIGraphicsImageRenderer(size: CGSize(width: small, height: small)).image { ctx in
+            UIColor.white.setFill()
+            ctx.cgContext.fillEllipse(in: CGRect(x: 0, y: 0, width: small, height: small))
+        }
+        volumeSlider.setThumbImage(knob, for: .normal)
+        volumeSlider.minimumTrackTintColor = UIColor(white: 1, alpha: 0.8)
+        volumeSlider.maximumTrackTintColor = UIColor(white: 1, alpha: 0.2)
+        volumeSlider.value = Float(Settings.youtubeVolume)
+        volumeSlider.accessibilityLabel = "Громкость YouTube"
+        volumeSlider.addTarget(self, action: #selector(volumeChanged), for: .valueChanged)
+        for icon in [volumeLow, volumeHigh] {
+            icon.tintColor = UIColor(white: 1, alpha: 0.6)
+            icon.contentMode = .center
+            icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            addSubview(icon)
+        }
+        addSubview(volumeSlider)
         playButton.backgroundColor = .white
         playButton.tintColor = .black
         updateButtons()
@@ -248,9 +272,9 @@ final class MusicPlayerView: UIView {
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// Вертикальный свайп по ползунку не должен сворачивать плеер.
+    /// Вертикальный свайп по ползункам не должен сворачивать плеер.
     func blocksDrag(at point: CGPoint) -> Bool {
-        slider.frame.insetBy(dx: -8, dy: -16).contains(point)
+        slider.frame.insetBy(dx: -8, dy: -16).contains(point) || volumeSlider.frame.insetBy(dx: -8, dy: -16).contains(point)
     }
 
     // MARK: - Кнопки
@@ -277,6 +301,11 @@ final class MusicPlayerView: UIView {
         UIView.animate(withDuration: 0.12, animations: { self.likeButton.transform = CGAffineTransform(scaleX: 1.3, y: 1.3) }) { _ in
             UIView.animate(withDuration: 0.2) { self.likeButton.transform = .identity }
         }
+    }
+
+    @objc private func volumeChanged() {
+        Settings.youtubeVolume = Double(volumeSlider.value)
+        onVolume?(Double(volumeSlider.value))
     }
 
     @objc private func sliderChanged() {
@@ -357,5 +386,9 @@ final class MusicPlayerView: UIView {
         nextButton.center = CGPoint(x: cx + offset, y: cy)
         loopButton.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
         loopButton.center = CGPoint(x: x + width - 18, y: cy)
+        let vy = y + 222
+        volumeLow.frame = CGRect(x: x, y: vy, width: 20, height: 30)
+        volumeHigh.frame = CGRect(x: x + width - 24, y: vy, width: 24, height: 30)
+        volumeSlider.frame = CGRect(x: x + 28, y: vy, width: max(0, width - 60), height: 30)
     }
 }

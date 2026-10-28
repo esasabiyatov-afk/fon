@@ -8,3 +8,11 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "musicMode") }
     }
 }
+
+extension Settings {
+    /// Своя громкость YouTube (0…1), отдельно от громкости телефона: музыку можно сделать тише игры.
+    static var youtubeVolume: Double {
+        get { UserDefaults.standard.object(forKey: "youtubeVolume") as? Double ?? 1 }
+        set { UserDefaults.standard.set(newValue, forKey: "youtubeVolume") }
+    }
+}
