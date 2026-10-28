@@ -350,11 +350,22 @@ enum YouTubeStreams {
         var note = "список \(code)"
         guard code == 200, let text = data.flatMap({ String(data: $0, encoding: .utf8) }) else { return note }
         note += text.contains("/pot/") || text.contains("pot=") ? " (с токеном)" : " (без токена)"
-        guard let line = text.components(separatedBy: .newlines).first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
-              let segment = URL(string: line.trimmingCharacters(in: .whitespaces), relativeTo: stream.url)?.absoluteURL else { return note }
-        if line.contains(".m3u8") { return note + ", вложенный список" }
-        let (segmentCode, _) = await get(segment, range: true)
-        return note + ", кусок \(segmentCode)"
+        var playlist = text, base = stream.url
+        for _ in 0..<2 {
+            guard let line = playlist.components(separatedBy: .newlines).first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
+                  let next = URL(string: line.trimmingCharacters(in: .whitespaces), relativeTo: base)?.absoluteURL else { return note }
+            guard line.contains(".m3u8") || line.contains("/playlist") else {
+                let (segmentCode, _) = await get(next, range: true)
+                return note + ", кусок \(segmentCode)"
+            }
+            // Главный список — открываем вложенный (вариант качества) и берём его первый кусок.
+            let (innerCode, innerData) = await get(next, range: false)
+            note += ", вложенный \(innerCode)"
+            guard innerCode == 200, let inner = innerData.flatMap({ String(data: $0, encoding: .utf8) }) else { return note }
+            playlist = inner
+            base = next
+        }
+        return note
     }
 
     private static func string(in data: Data, after marker: String) -> String? {
@@ -400,6 +411,8 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     private var webView: WKWebView?
     private var completion: ((URL?, String, String?) -> Void)?
+    /// User-Agent окна — с ним же AVPlayer открывает поток.
+    private(set) var userAgent: String?
     private var keepAlive: SafariStream?
 
     /// Поток трека и название страницы (для очереди без названий).
@@ -411,11 +424,12 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                     result.log.append("Safari: нет окна")
                     return continuation.resume(returning: result)
                 }
-                SafariStream().start(videoID, in: host) { url, note, title in
+                let finder = SafariStream()
+                finder.start(videoID, in: host) { url, note, title in
                     result.log.append("Safari: " + note)
                     if let url {
                         let hls = url.absoluteString.contains("m3u8") || url.host?.hasPrefix("manifest") == true
-                        result.streams = [AudioStream(url: url, headers: ["User-Agent": WebViewFactory.safariUserAgent()],
+                        result.streams = [AudioStream(url: url, headers: ["User-Agent": finder.userAgent ?? WebViewFactory.safariUserAgent()],
                                                       client: hls ? "Safari HLS" : "Safari файл", isMaster: hls)]
                     }
                     let name = (title ?? "").replacingOccurrences(of: " - YouTube", with: "").trimmingCharacters(in: .whitespaces)
@@ -439,8 +453,12 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         config.userContentController.add(WeakScriptHandler(self), name: "fonSrc")
         config.userContentController.addUserScript(WKUserScript(source: Scripts.safariSource, injectionTime: .atDocumentStart,
                                                                 forMainFrameOnly: false))
+        // User-Agent ровно как у Safari: WebKit сам подставляет версию iOS так, как это делает Safari (в iOS 26 —
+        // «iPhone OS 18_6»), а мы дописываем хвост Safari. В 1.60 со своим UA («iPhone OS 26_…») YouTube дал окну
+        // свой плеер (blob:, без HLS), а Safari владельца — системный.
+        let parts = UIDevice.current.systemVersion.split(separator: ".")
+        config.applicationNameForUserAgent = "Version/\(parts.first ?? "18").\(parts.count > 1 ? parts[1] : "0") Mobile/15E148 Safari/604.1"
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
-        webView.customUserAgent = WebViewFactory.safariUserAgent()
         webView.alpha = 0.01
         webView.isUserInteractionEnabled = false
         webView.navigationDelegate = self
@@ -454,6 +472,7 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let text = body["src"] as? String, let url = URL(string: text) else { return }
+        userAgent = body["ua"] as? String
         finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл", title: body["title"] as? String)
     }
 

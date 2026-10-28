@@ -1441,9 +1441,15 @@ enum Scripts {
     /// системным плеером iOS по обычной ссылке HLS (наблюдение владельца). Ловим эту ссылку, звук не нужен.
     static let safariSource = #"""
 (() => {
+  // В 1.60 плеер YouTube в этом окне взял ManagedMediaSource (blob:, без HLS). В Safari владельца видео шло
+  // системным плеером по обычной ссылке — прячем MediaSource, чтобы плеер выбрал её (только в этом окне).
+  for (const n of ['MediaSource', 'ManagedMediaSource', 'WebKitMediaSource']) {
+    try { delete window[n]; } catch (e) {}
+    if (n in window) { try { Object.defineProperty(window, n, { value: undefined, configurable: true, writable: true }); } catch (e) {} }
+  }
   const send = (u) => {
     try {
-      if (u && /^https?:/.test(String(u))) window.webkit.messageHandlers.fonSrc.postMessage({ src: String(u), title: document.title || '' });
+      if (u && /^https?:/.test(String(u))) window.webkit.messageHandlers.fonSrc.postMessage({ src: String(u), title: document.title || '', ua: navigator.userAgent });
     } catch (e) {}
   };
   const proto = HTMLMediaElement.prototype;
