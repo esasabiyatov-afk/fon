@@ -343,6 +343,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func setFullscreen(_ on: Bool, vertical: Bool = false) {
         guard on != isFullscreen else { return }
         isFullscreen = on
+        sentSafeArea = nil // страница могла перезагрузиться — отступы передаём заново
         updateVisibility()
         setNeedsLayout()
         onFullscreenChanged?(on, vertical)
@@ -502,9 +503,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             progressView.frame = CGRect(x: 0, y: h - 2, width: w * progress, height: 2)
         case .expanded:
             if isFullscreen {
-                // Не под «чёлкой»/Dynamic Island и не у полоски «домой»: туда не дотянуться пальцем,
-                // и она закрывала кнопки YouTube (субтитры, ⚙). Поля остаются чёрными.
-                webView.frame = bounds.inset(by: safeAreaInsets)
+                // Видео — на весь экран (с полями видео стало мельче — владельцу не понравилось),
+                // а кнопки YouTube — в безопасной области: странице передаём отступы «чёлки» и полоски «домой».
+                webView.frame = bounds
+                sendSafeArea()
                 return
             }
             let top = safeAreaInsets.top
@@ -517,6 +519,15 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY,
                                    width: w - safeAreaInsets.left - safeAreaInsets.right, height: bounds.height - topBar.frame.maxY)
         }
+    }
+
+    private var sentSafeArea: UIEdgeInsets?
+
+    private func sendSafeArea() {
+        let i = safeAreaInsets
+        guard i != sentSafeArea else { return }
+        sentSafeArea = i
+        runJS("window.__fon && __fon.setSafe && __fon.setSafe(\(i.top), \(i.right), \(i.bottom), \(i.left))")
     }
 
     override func safeAreaInsetsDidChange() {

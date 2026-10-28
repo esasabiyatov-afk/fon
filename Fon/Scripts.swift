@@ -418,11 +418,15 @@ enum Scripts {
       position: absolute !important; top: 0 !important; left: 0 !important;
       width: 100% !important; height: 100% !important;
     }
-    /* Панель управления YouTube (пауза, перемотка, ⚙ качество, выход) — поверх растянутого видео. */
+    /* Панель управления YouTube (пауза, перемотка, ⚙ качество, выход) — поверх растянутого видео.
+       Видео — на весь экран, а панель — внутри безопасной области (не под «чёлкой» и не у полоски
+       «домой»): отступы передаёт приложение (--fon-safe-*). */
     html.fon-full #player-control-overlay,
     html.fon-full ytm-custom-control {
-      position: fixed !important; top: 0 !important; left: 0 !important;
-      width: 100vw !important; height: 100vh !important;
+      position: fixed !important;
+      top: var(--fon-safe-top, 0px) !important; left: var(--fon-safe-left, 0px) !important;
+      width: calc(100vw - var(--fon-safe-left, 0px) - var(--fon-safe-right, 0px)) !important;
+      height: calc(100vh - var(--fon-safe-top, 0px) - var(--fon-safe-bottom, 0px)) !important;
       z-index: 2147483610 !important;
     }
     /* Меню, которые открывают кнопки панели (⚙ качество и скорость, субтитры, «ещё»), YouTube
@@ -713,6 +717,13 @@ enum Scripts {
   const watchMenus = () => { try { new MutationObserver(checkMenuSoon).observe(document.body, { childList: true, subtree: true }); } catch (e) {} };
   if (document.body) watchMenus(); else document.addEventListener('DOMContentLoaded', watchMenus);
   fon.setFull = setFull;
+  fon.setSafe = (top, right, bottom, left) => {
+    const st = document.documentElement.style;
+    st.setProperty('--fon-safe-top', top + 'px');
+    st.setProperty('--fon-safe-right', right + 'px');
+    st.setProperty('--fon-safe-bottom', bottom + 'px');
+    st.setProperty('--fon-safe-left', left + 'px');
+  };
   const getter = (obj, name, get) => { try { Object.defineProperty(obj, name, { get, configurable: true }); } catch (e) {} };
   const VP = HTMLVideoElement.prototype;
   for (const n of ['webkitEnterFullscreen', 'webkitEnterFullScreen']) VP[n] = function () { setFull(!fon.isFull, this); };
