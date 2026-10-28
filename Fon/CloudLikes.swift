@@ -22,7 +22,11 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
 
     private var webView: WKWebView?
     private var ready = false
-    private var waiting: [() -> Void] = []
+    /// Запросы идут строго по одному: иначе два одновременных «плейлиста ещё нет» создавали два плейлиста.
+    private var pending: [() -> Void] = []
+    private var running = false
+    private var refreshCompletions: [() -> Void]?
+    private var migrating = false
 
     func isLiked(_ id: String) -> Bool { tracks.contains { $0.id == id } }
 
@@ -51,9 +55,7 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         ready = true
-        let queued = waiting
-        waiting = []
-        queued.forEach { $0() }
+        runNext()
         if !loaded { refresh() }
     }
 
@@ -65,7 +67,13 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
     // MARK: - Операции
 
     func refresh(completion: (() -> Void)? = nil) {
-        call("__fonCloud.list(pid)", ["pid": playlistID ?? NSNull()]) { [weak self] result in
+        // Обновление уже в очереди — просто дождаться его.
+        if refreshCompletions != nil {
+            if let completion { refreshCompletions?.append(completion) }
+            return
+        }
+        refreshCompletions = completion.map { [$0] } ?? []
+        call("__fonCloud.list(pid)", { ["pid": self.playlistID ?? NSNull()] }) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let value):
@@ -84,7 +92,9 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
                 self.lastError = Self.describe(error)
             }
             NotificationCenter.default.post(name: Self.didChange, object: nil)
-            completion?()
+            let completions = self.refreshCompletions ?? []
+            self.refreshCompletions = nil
+            completions.forEach { $0() }
         }
     }
 
@@ -95,11 +105,16 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
         NotificationCenter.default.post(name: Self.didChange, object: nil)
 
         let js = liked ? "__fonCloud.like(pid, [id])" : "__fonCloud.unlike(pid, id)"
-        call(js, ["pid": playlistID ?? NSNull(), "id": track.id]) { [weak self] result in
+        call(js, { ["pid": self.playlistID ?? NSNull(), "id": track.id] }) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let value):
                 if let pid = value as? String { self.playlistID = pid }
+                // Обновление списка из очереди могло прийти раньше и затереть ♡ — вернуть его.
+                if liked != self.isLiked(track.id) {
+                    if liked { self.tracks.append(track) } else { self.tracks.removeAll { $0.id == track.id } }
+                    NotificationCenter.default.post(name: Self.didChange, object: nil)
+                }
             case .failure(let error):
                 self.tracks = before
                 self.lastError = Self.describe(error)
@@ -111,13 +126,17 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
 
     /// Лайки из прошлых версий (хранились на телефоне) — один раз переносим в облачный плейлист.
     private func migrateLegacyLikes() {
+        guard !migrating else { return }
         let missing = Library.shared.legacyLiked.filter { !isLiked($0.id) }
         guard !missing.isEmpty else {
             if !Library.shared.legacyLiked.isEmpty { Library.shared.clearLegacyLiked() }
             return
         }
-        call("__fonCloud.like(pid, ids)", ["pid": playlistID ?? NSNull(), "ids": missing.map(\.id)]) { [weak self] result in
-            guard let self, case .success(let value) = result else { return }
+        migrating = true
+        call("__fonCloud.like(pid, ids)", { ["pid": self.playlistID ?? NSNull(), "ids": missing.map(\.id)] }) { [weak self] result in
+            guard let self else { return }
+            self.migrating = false
+            guard case .success(let value) = result else { return }
             if let pid = value as? String { self.playlistID = pid }
             Library.shared.clearLegacyLiked()
             self.refresh()
@@ -126,15 +145,25 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
 
     // MARK: - Вызов скрипта в скрытом окне
 
-    private func call(_ expression: String, _ arguments: [String: Any], completion: @escaping (Result<Any, Error>) -> Void) {
-        let run = { [weak self] in
-            guard let webView = self?.webView else { return }
+    /// arguments считаются в момент запуска — так запрос из очереди видит id плейлиста, созданного предыдущим.
+    private func call(_ expression: String, _ arguments: @escaping () -> [String: Any],
+                      completion: @escaping (Result<Any, Error>) -> Void) {
+        pending.append { [weak self] in
+            guard let self, let webView = self.webView else { return }
             webView.callAsyncJavaScript(Scripts.cloud + "\nreturn await " + expression,
-                                        arguments: arguments, in: nil, in: .page) { result in
+                                        arguments: arguments(), in: nil, in: .page) { [weak self] result in
                 completion(result)
+                self?.running = false
+                self?.runNext()
             }
         }
-        if ready { run() } else { waiting.append(run) }
+        runNext()
+    }
+
+    private func runNext() {
+        guard ready, !running, !pending.isEmpty else { return }
+        running = true
+        pending.removeFirst()()
     }
 
     private static func describe(_ error: Error) -> String {

@@ -784,8 +784,9 @@ enum Scripts {
 
   window.__fonCloud = {
     // { playlistId, tracks: [{ id, title, artist }] } — в порядке плейлиста.
+    // Плейлист ищем по названию каждый раз: если лишний удалили в YouTube, берём оставшийся.
     async list(pid) {
-      pid = pid || await findPlaylist();
+      pid = (await findPlaylist()) || pid;
       if (!pid) return { playlistId: null, tracks: [] };
       const tracks = [];
       const seen = new Set();
