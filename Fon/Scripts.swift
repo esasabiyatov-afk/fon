@@ -706,13 +706,15 @@ enum Scripts {
   document.addEventListener('enterpictureinpicture', () => setTimeout(applyQuality, 300), true);
   document.addEventListener('leavepictureinpicture', () => setTimeout(applyQuality, 300), true);
 
-  // --- 5. Ссылки не на видео (канал, поиск) открываем в основном окне.
+  // --- 5. Ссылки на каналы, поиск, плейлисты и ленты открываем в основном окне.
+  // Только они: остальное (ответы в комментариях, описание, меню) YouTube показывает сам на этой странице.
+  const BROWSE_PATH = /^\/(@|channel\/|c\/|user\/|results|playlist|feed\/|hashtag\/|shorts\/|gaming|premium|account)/;
   window.addEventListener('click', (e) => {
     const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
     if (!a) return;
     const u = fon.absURL(a.getAttribute('href'));
     if (!u || !/youtube\.com$/.test(u.hostname)) return;
-    if (u.pathname === '/watch') return;
+    if (u.pathname === '/watch' || !BROWSE_PATH.test(u.pathname)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     fon.post({ type: 'browse', url: u.href });
@@ -840,6 +842,55 @@ enum Scripts {
   };
   const RENDERERS = ['playlistVideoRenderer', 'playlistPanelVideoRenderer', 'videoWithContextRenderer', 'compactVideoRenderer'];
 
+  // Видео из ответа YouTube (старая и новая вёрстка), без Shorts и плейлистов.
+  // Значок официального исполнителя или «аудио» у видео — признак музыки.
+  const musicBadge = (v) => findAll(v, 'iconType').concat(findAll(v, 'imageName'))
+    .some((t) => typeof t === 'string' && /OFFICIAL_ARTIST|AUDIO_BADGE|MUSIC/.test(t));
+  const collectVideos = (r, out, seen) => {
+    const add = (v) => { if (v.id && !seen.has(v.id) && v.title) { seen.add(v.id); out.push(v); } };
+    for (const name of ['videoWithContextRenderer', 'videoRenderer', 'gridVideoRenderer', 'compactVideoRenderer']) {
+      for (const v of findAll(r, name)) {
+        if (!v || !v.videoId || findAll(v, 'reelWatchEndpoint').length) continue;
+        const by = v.shortBylineText || v.longBylineText || v.ownerText;
+        add({ id: v.videoId, title: text(v.headline || v.title), channel: text(by),
+              channelId: findAll(by, 'browseId')[0] || '', published: text(v.publishedTimeText), music: musicBadge(v) });
+      }
+    }
+    for (const l of findAll(r, 'lockupViewModel')) {
+      if (!l || !l.contentId || (l.contentType && l.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO')) continue;
+      if (findAll(l, 'reelWatchEndpoint').length) continue;
+      const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
+      const rows = (findAll(meta, 'metadataRows')[0] || []).map((row) =>
+        (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean));
+      add({ id: l.contentId, title: (meta.title && meta.title.content) || '',
+            channel: (rows[0] && rows[0][0]) || '',
+            channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
+            published: (rows[1] && rows[1][rows[1].length - 1]) || '', music: musicBadge(l) });
+    }
+    return out;
+  };
+  // Миксы YouTube («Микс: …») — плейлисты RD с первым видео.
+  const collectMixes = (r, out, seen) => {
+    const add = (m) => {
+      if (!m.playlistId || !m.videoId || !m.title || seen.has(m.playlistId)) return;
+      seen.add(m.playlistId);
+      out.push(m);
+    };
+    for (const name of ['radioRenderer', 'compactRadioRenderer']) {
+      for (const m of findAll(r, name)) {
+        const w = findAll(m, 'watchEndpoint')[0] || {};
+        add({ title: text(m.title || m.headline), playlistId: m.playlistId || w.playlistId, videoId: w.videoId });
+      }
+    }
+    for (const l of findAll(r, 'lockupViewModel')) {
+      if (!l || l.contentType !== 'LOCKUP_CONTENT_TYPE_PLAYLIST' || !/^RD/.test(l.contentId || '')) continue;
+      const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
+      const w = findAll(l, 'watchEndpoint')[0] || {};
+      add({ title: (meta.title && meta.title.content) || '', playlistId: l.contentId, videoId: w.videoId });
+    }
+    return out;
+  };
+
   window.__fonCloud = {
     // { playlistId, tracks: [{ id, title, artist }] } — в порядке плейлиста.
     // Плейлист ищем по названию каждый раз: если лишний удалили в YouTube, берём оставшийся.
@@ -879,33 +930,37 @@ enum Scripts {
     async subscriptionVideos(pages) {
       const out = [];
       const seen = new Set();
-      const add = (v) => { if (v.id && !seen.has(v.id) && v.title) { seen.add(v.id); out.push(v); } };
       let r = await api('browse', { browseId: 'FEsubscriptions' });
       for (let page = 0; page < (pages || 3) && r; page++) {
-        for (const name of ['videoWithContextRenderer', 'videoRenderer', 'gridVideoRenderer', 'compactVideoRenderer']) {
-          for (const v of findAll(r, name)) {
-            if (!v || !v.videoId || findAll(v, 'reelWatchEndpoint').length) continue;
-            const by = v.shortBylineText || v.longBylineText || v.ownerText;
-            add({ id: v.videoId, title: text(v.headline || v.title), channel: text(by),
-                  channelId: findAll(by, 'browseId')[0] || '', published: text(v.publishedTimeText) });
-          }
-        }
-        // Новая вёрстка YouTube: lockupViewModel вместо videoRenderer.
-        for (const l of findAll(r, 'lockupViewModel')) {
-          if (!l || !l.contentId || (l.contentType && l.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO')) continue;
-          if (findAll(l, 'reelWatchEndpoint').length) continue;
-          const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
-          const rows = (findAll(meta, 'metadataRows')[0] || []).map((row) =>
-            (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean));
-          add({ id: l.contentId, title: (meta.title && meta.title.content) || '',
-                channel: (rows[0] && rows[0][0]) || '',
-                channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
-                published: (rows[1] && rows[1][rows[1].length - 1]) || '' });
-        }
+        collectVideos(r, out, seen);
         const next = findAll(r, 'continuationCommand')[0];
         r = next && next.token ? await api('browse', { continuation: next.token }) : null;
       }
       return out;
+    },
+    // Запасные подборки, если YouTube Music недоступен: главная YouTube с фильтром «Музыка».
+    // { chip, videos: [...], mixes: [{ title, playlistId, videoId }] }
+    async musicFeed() {
+      const home = await api('browse', { browseId: 'FEwhat_to_watch' });
+      const chips = findAll(home, 'chipCloudChipRenderer').concat(findAll(home, 'chipViewModel'));
+      const chip = chips.find((c) => /музык|music/i.test(text(c.text) || (typeof c.text === 'string' ? c.text : '')));
+      let r = null;
+      if (chip) {
+        const cc = findAll(chip, 'continuationCommand')[0];
+        const be = findAll(chip, 'browseEndpoint')[0];
+        if (cc && cc.token) r = await api('browse', { continuation: cc.token });
+        else if (be) r = await api('browse', be);
+      }
+      if (!r) return { chip: false, videos: [], mixes: [] };
+      const videos = [], mixes = [], seen = new Set();
+      for (let page = 0; page < 3 && r; page++) {
+        collectVideos(r, videos, seen);
+        collectMixes(r, mixes, seen);
+        const next = findAll(r, 'continuationCommand').filter((c) => c && c.token).pop();
+        r = null;
+        if (next && videos.length < 40) { try { r = await api('browse', { continuation: next.token }); } catch (e) {} }
+      }
+      return { chip: true, videos, mixes };
     },
     async unlike(pid, id) {
       pid = pid || await findPlaylist();
@@ -1017,30 +1072,46 @@ enum Scripts {
   const playable = (i) => i && i.title && (i.videoId || i.playlistId || i.browseId);
 
   // Полки главной YouTube Music по порядку: { title, kind: songs | cards | artists, items }.
+  // Ищем полки по всему ответу (вёрстка у разных клиентов разная), внутрь найденной полки не спускаемся.
+  const SHELVES = ['musicCarouselShelfRenderer', 'musicImmersiveCarouselShelfRenderer', 'musicShelfRenderer', 'gridRenderer'];
+  const walkShelves = (obj, out) => {
+    if (obj && typeof obj === 'object') {
+      for (const k in obj) {
+        if (SHELVES.includes(k)) out.push(obj[k]);
+        else walkShelves(obj[k], out);
+      }
+    }
+    return out;
+  };
   const parseShelves = (r) => {
-    const list = findAll(r, 'sectionListRenderer')[0];
-    const cont = r && r.continuationContents && r.continuationContents.sectionListContinuation;
-    const sections = (list && list.contents) || (cont && cont.contents) || [];
     const out = [];
-    for (const sec of sections) {
-      const s = sec.musicCarouselShelfRenderer || sec.musicImmersiveCarouselShelfRenderer;
-      if (!s) continue;
-      const items = (s.contents || []).map(parseItem).filter(playable);
+    for (const s of walkShelves(r, [])) {
+      const contents = s.contents || s.items || [];
+      const items = contents.map(parseItem).filter(playable);
       if (!items.length) continue;
-      const songs = (s.contents || []).some((c) => c.musicResponsiveListItemRenderer);
+      const songs = contents.some((c) => c.musicResponsiveListItemRenderer);
       out.push({
-        title: text(findAll(s.header, 'title')[0]) || 'Подборка',
+        title: text(findAll(s.header, 'title')[0]) || text(s.title) || 'Подборка',
         kind: items.every((i) => i.artist) ? 'artists' : (songs ? 'songs' : 'cards'),
         items
       });
     }
     return out;
   };
+  // Коротко, что ответил YouTube, — если полок не нашлось (для скриншота владельца).
+  const describe = (r) => {
+    try {
+      const keys = Object.keys(r || {}).filter((k) => k !== 'responseContext' && k !== 'trackingParams');
+      const body = JSON.stringify(r.contents || r.alerts || r.error || r).replace(/"(clickTrackingParams|trackingParams)":"[^"]*",?/g, '');
+      return keys.join(',') + ' ' + body.slice(0, 140);
+    } catch (e) { return String(e); }
+  };
 
   window.__fonMusic = {
     signedIn: () => !!sapisid(),
     async home() {
-      let r = await api('browse', { browseId: 'FEmusic_home' });
+      const first = await api('browse', { browseId: 'FEmusic_home' });
+      let r = first;
       const shelves = parseShelves(r);
       let c = nextCont(r);
       for (let page = 0; page < 3 && c; page++) {
@@ -1048,7 +1119,7 @@ enum Scripts {
         shelves.push(...parseShelves(r));
         c = nextCont(r);
       }
-      return { signedIn: !!sapisid(), shelves };
+      return { signedIn: !!sapisid(), shelves, diag: shelves.length ? '' : describe(first) };
     },
     // Исполнители, на которых вы подписаны (Медиатека YouTube Music → Подписки).
     async artists() {

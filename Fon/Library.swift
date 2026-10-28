@@ -126,10 +126,9 @@ final class ArtworkLoader {
         }.resume()
     }
 
-    /// Квадратная обложка из превью. Сначала берём кадр 16:9 (у превью 4:3 сверху и снизу чёрные полосы).
-    /// Если по бокам кадра однотонные поля — в центре обложка альбома, вырезаем квадрат.
-    /// Если картинка на весь кадр — показываем её целиком, а сверху и снизу размытую копию,
-    /// чтобы не отрезать края (например, текст на обложке). wide — вместо этого кадр 16:9 как есть (для плеера).
+    /// Обложка из превью. Сначала берём кадр 16:9 (у превью 4:3 сверху и снизу чёрные полосы).
+    /// Если по бокам кадра однотонные поля — в центре обложка альбома, вырезаем этот квадрат.
+    /// Иначе для карточек — центральный квадрат кадра (без полей), а для плеера (wide) — кадр 16:9 целиком.
     static func squareArtwork(_ image: UIImage, maxSide: CGFloat, wide: Bool = false) -> UIImage? {
         guard let cg = image.cgImage else { return image }
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
@@ -140,36 +139,20 @@ final class ArtworkLoader {
         }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
+        format.opaque = true
 
-        if hasFlatSides(band) {
-            let bw = CGFloat(band.width), bh = CGFloat(band.height)
-            guard let square = band.cropping(to: CGRect(x: (bw - bh) / 2, y: 0, width: bh, height: bh).integral) else { return image }
-            let side = min(bh, maxSide)
-            return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
-                UIImage(cgImage: square).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
-            }
-        }
-
-        if wide {
+        if wide && !hasFlatSides(band) {
             let bw = min(CGFloat(band.width), maxSide)
             let bh = bw * CGFloat(band.height) / CGFloat(band.width)
             return UIGraphicsImageRenderer(size: CGSize(width: bw, height: bh), format: format).image { _ in
                 UIImage(cgImage: band).draw(in: CGRect(x: 0, y: 0, width: bw, height: bh))
             }
         }
-
-        let side = min(CGFloat(band.width), maxSide)
-        let backdrop = blurred(band)
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
-            let full = CGRect(x: 0, y: 0, width: side, height: side)
-            if let backdrop {
-                let fillW = side * 16 / 9
-                UIImage(cgImage: backdrop).draw(in: CGRect(x: (side - fillW) / 2, y: 0, width: fillW, height: side))
-            }
-            UIColor(white: 0, alpha: 0.3).setFill()
-            ctx.fill(full)
-            let fitH = side * CGFloat(band.height) / CGFloat(band.width)
-            UIImage(cgImage: band).draw(in: CGRect(x: 0, y: (side - fitH) / 2, width: side, height: fitH))
+        let bw = CGFloat(band.width), bh = CGFloat(band.height)
+        guard let square = band.cropping(to: CGRect(x: (bw - bh) / 2, y: 0, width: bh, height: bh).integral) else { return image }
+        let side = min(bh, maxSide)
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+            UIImage(cgImage: square).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
         }
     }
 
@@ -203,16 +186,6 @@ final class ArtworkLoader {
             let right = stats((width - strip + 1)..<width)
             return left.deviation < 0.06 && right.deviation < 0.06 && abs(left.mean - right.mean) < 0.08
         }
-    }
-
-    private static func blurred(_ image: CGImage) -> CGImage? {
-        let input = CIImage(cgImage: image)
-        guard let filter = CIFilter(name: "CIGaussianBlur", parameters: [
-                kCIInputImageKey: input.clampedToExtent(),
-                kCIInputRadiusKey: max(8, Double(image.width) / 25)
-              ]),
-              let output = filter.outputImage?.cropped(to: input.extent) else { return nil }
-        return ciContext.createCGImage(output, from: input.extent)
     }
 
     static func averageColor(_ image: UIImage) -> UIColor? {

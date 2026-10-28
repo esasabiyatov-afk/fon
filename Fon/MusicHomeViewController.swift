@@ -185,7 +185,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             }))
         }
         if MusicFeed.shared.isLoadingHome {
-            result.append(Section(title: "", style: .message, items: [Item(title: "Загружаем подборки YouTube Music…")]))
+            result.append(Section(title: "", style: .message, items: [Item(title: "Загружаем подборки…")]))
         } else if let error = MusicFeed.shared.homeError {
             result.append(Section(title: "", style: .message, items: [Item(title: error + "\nПотяните вниз, чтобы повторить.")]))
         }
@@ -388,22 +388,17 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     // MARK: - Ячейки
 
     /// Картинка карточки: обложка YouTube Music по ссылке или квадрат из превью видео по id.
-    fileprivate static func setArtwork(_ item: Item, on imageView: UIImageView, large: Bool, isCurrent: @escaping (String) -> Bool) -> String? {
-        imageView.image = nil
+    /// Ключ ячейка запоминает ДО загрузки: картинка из кэша приходит сразу, в том же вызове.
+    fileprivate static func artworkKey(_ item: Item) -> String? {
+        item.artworkURL?.absoluteString ?? item.artworkID
+    }
+
+    fileprivate static func loadArtwork(_ item: Item, large: Bool, completion: @escaping (String, UIImage?) -> Void) {
         if let url = item.artworkURL {
-            let key = url.absoluteString
-            ArtworkLoader.shared.load(url: url) { image in
-                if isCurrent(key) { imageView.image = image }
-            }
-            return key
+            ArtworkLoader.shared.load(url: url) { completion(url.absoluteString, $0) }
+        } else if let id = item.artworkID {
+            ArtworkLoader.shared.load(id, size: large ? .large : .small) { image, _ in completion(id, image) }
         }
-        if let id = item.artworkID {
-            ArtworkLoader.shared.load(id, size: large ? .large : .small) { image, _ in
-                if isCurrent(id) { imageView.image = image }
-            }
-            return id
-        }
-        return nil
     }
 
     /// Заголовок раздела; у первого (приветствие) справа — лупа поиска.
@@ -469,7 +464,11 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             if item.artworkID != nil || item.artworkURL != nil {
                 artwork.contentMode = .scaleAspectFill
                 artwork.backgroundColor = UIColor(white: 0.2, alpha: 1)
-                artworkKey = MusicHomeViewController.setArtwork(item, on: artwork, large: false) { [weak self] in self?.artworkKey == $0 }
+                artwork.image = nil
+                artworkKey = MusicHomeViewController.artworkKey(item)
+                MusicHomeViewController.loadArtwork(item, large: false) { [weak self] key, image in
+                    if self?.artworkKey == key { self?.artwork.image = image }
+                }
             } else {
                 artworkKey = nil
                 artwork.image = UIImage(systemName: item.symbol ?? "music.note", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .bold))
@@ -519,10 +518,12 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             subtitleLabel.textAlignment = titleLabel.textAlignment
             placeholder.image = UIImage(systemName: item.symbol ?? "music.note", withConfiguration: UIImage.SymbolConfiguration(pointSize: 30, weight: .medium))
             placeholder.isHidden = false
-            artworkKey = MusicHomeViewController.setArtwork(item, on: artwork, large: large) { [weak self] key in
-                guard self?.artworkKey == key else { return false }
-                self?.placeholder.isHidden = true
-                return true
+            artwork.image = nil
+            artworkKey = MusicHomeViewController.artworkKey(item)
+            MusicHomeViewController.loadArtwork(item, large: large) { [weak self] key, image in
+                guard let self, self.artworkKey == key, let image else { return }
+                self.artwork.image = image
+                self.placeholder.isHidden = true
             }
             setNeedsLayout()
         }
@@ -563,7 +564,11 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         fileprivate func configure(_ item: Item) {
             titleLabel.text = item.title
             subtitleLabel.text = item.subtitle
-            artworkKey = MusicHomeViewController.setArtwork(item, on: artwork, large: false) { [weak self] in self?.artworkKey == $0 }
+            artwork.image = nil
+            artworkKey = MusicHomeViewController.artworkKey(item)
+            MusicHomeViewController.loadArtwork(item, large: false) { [weak self] key, image in
+                if self?.artworkKey == key { self?.artwork.image = image }
+            }
         }
 
         override func layoutSubviews() {

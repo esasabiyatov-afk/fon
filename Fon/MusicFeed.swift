@@ -111,20 +111,65 @@ final class MusicFeed {
             case .success(let value):
                 let dict = value as? [String: Any] ?? [:]
                 let shelves = Self.parseShelves(dict["shelves"])
-                if !shelves.isEmpty {
-                    self.cache.shelves = shelves
-                    self.cache.homeDate = Date()
-                    self.save()
+                if shelves.isEmpty {
+                    self.loadFeedFallback(reason: "YT Music: " + (dict["diag"] as? String ?? "пусто"))
+                } else {
+                    self.finishHome(shelves, error: nil)
                 }
-                self.homeError = shelves.isEmpty ? "Подборки YouTube Music не загрузились." : nil
             case .failure(let error):
-                self.homeError = CloudLikes.describe(error)
+                self.loadFeedFallback(reason: "YT Music: " + Self.message(error))
             }
-            let completions = self.homeCompletions ?? []
-            self.homeCompletions = nil
-            self.notify()
-            completions.forEach { $0() }
         }
+    }
+
+    /// YouTube Music недоступен (например, не работает в стране) — подборки из ленты YouTube с фильтром «Музыка»:
+    /// миксы YouTube, «Быстрый выбор» и рекомендации — в том же виде, что и полки YouTube Music.
+    private func loadFeedFallback(reason: String) {
+        HiddenPage.youtube.call("__fonCloud.musicFeed()", { [:] }) { [weak self] result in
+            guard let self else { return }
+            let dict: [String: Any]
+            switch result {
+            case .success(let value):
+                dict = value as? [String: Any] ?? [:]
+            case .failure(let error):
+                self.finishHome([], error: "Подборки не загрузились (\(reason); лента: \(Self.message(error))).")
+                return
+            }
+            let mixes: [MusicItem] = (dict["mixes"] as? [[String: Any]] ?? []).compactMap { mix in
+                guard let title = mix["title"] as? String, let id = mix["videoId"] as? String else { return nil }
+                return MusicItem(title: title, subtitle: "Микс YouTube", thumb: nil, videoId: id, playlistId: mix["playlistId"] as? String)
+            }
+            let videos: [MusicItem] = (dict["videos"] as? [[String: Any]] ?? []).compactMap { video in
+                guard let id = video["id"] as? String else { return nil }
+                let clean = TrackTitle.clean(title: video["title"] as? String ?? "", artist: video["channel"] as? String ?? "")
+                return MusicItem(title: clean.title, subtitle: clean.artist, thumb: nil, videoId: id)
+            }
+            var shelves: [MusicShelf] = []
+            if !mixes.isEmpty { shelves.append(MusicShelf(title: "Миксы для вас", kind: .cards, items: mixes)) }
+            if !videos.isEmpty { shelves.append(MusicShelf(title: "Быстрый выбор", kind: .songs, items: Array(videos.prefix(16)))) }
+            if videos.count > 16 { shelves.append(MusicShelf(title: "Рекомендации", kind: .cards, items: Array(videos.dropFirst(16)))) }
+            let chip = dict["chip"] as? Bool ?? false
+            self.finishHome(shelves, error: shelves.isEmpty ? "Подборки не загрузились (\(reason); лента: \(chip ? "пусто" : "нет фильтра «Музыка»"))." : nil)
+        }
+    }
+
+    private func finishHome(_ shelves: [MusicShelf], error: String?) {
+        if !shelves.isEmpty {
+            cache.shelves = shelves
+            cache.homeDate = Date()
+            save()
+        }
+        homeError = error
+        let completions = homeCompletions ?? []
+        homeCompletions = nil
+        notify()
+        completions.forEach { $0() }
+    }
+
+    /// Короткий текст ошибки скрипта — для пояснения на экране.
+    private static func message(_ error: Error) -> String {
+        let text = ((error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String) ?? error.localizedDescription
+        return String(text.prefix(80))
     }
 
     private static func parseShelves(_ raw: Any?) -> [MusicShelf] {
@@ -157,16 +202,65 @@ final class MusicFeed {
                 let artists = (value as? [[String: Any]] ?? []).compactMap(MusicItem.init)
                 self.signedOut = false
                 if artists.isEmpty {
-                    self.finishSubscriptions(artists: [], releases: [])
+                    self.loadSubscriptionsFallback()
                 } else {
                     self.loadReleases(of: artists)
                 }
+            case .failure(let error):
+                if CloudLikes.isSignedOut(error) {
+                    self.signedOut = true
+                    self.subscriptionsError = CloudLikes.describe(error)
+                    self.finishSubscriptions(artists: nil, releases: nil)
+                } else {
+                    self.loadSubscriptionsFallback()
+                }
+            }
+        }
+    }
+
+    /// YouTube Music недоступен — музыка из ленты подписок YouTube: видео со значком официального
+    /// исполнителя, каналы «- Topic»/VEVO, названия вида «(Official Video)», «клип». Исполнители — их каналы.
+    private func loadSubscriptionsFallback() {
+        HiddenPage.youtube.call("__fonCloud.subscriptionVideos(4)", { [:] }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                var artists: [MusicItem] = []
+                var seen = Set<String>()
+                let releases: [MusicItem] = (value as? [[String: Any]] ?? []).compactMap { video in
+                    guard let id = video["id"] as? String else { return nil }
+                    let title = video["title"] as? String ?? ""
+                    let channel = video["channel"] as? String ?? ""
+                    guard video["music"] as? Bool == true || Self.looksLikeMusic(title: title, channel: channel) else { return nil }
+                    let key = Self.normalized(channel)
+                    if !key.isEmpty, !seen.contains(key) {
+                        seen.insert(key)
+                        let name = channel.replacingOccurrences(of: " - Topic", with: "")
+                        artists.append(MusicItem(title: name, subtitle: "", thumb: nil, videoId: id, artist: true))
+                    }
+                    let clean = TrackTitle.clean(title: title, artist: channel)
+                    let published = video["published"] as? String ?? ""
+                    return MusicItem(title: clean.title,
+                                     subtitle: [clean.artist, published].filter { !$0.isEmpty }.joined(separator: " · "),
+                                     thumb: nil, videoId: id)
+                }
+                self.signedOut = false
+                self.finishSubscriptions(artists: artists, releases: releases)
             case .failure(let error):
                 self.signedOut = CloudLikes.isSignedOut(error)
                 self.subscriptionsError = CloudLikes.describe(error)
                 self.finishSubscriptions(artists: nil, releases: nil)
             }
         }
+    }
+
+    private static let musicTitle = try! NSRegularExpression(
+        pattern: #"(official\s+(music\s+)?(video|audio|visuali[sz]er)|lyric|\(audio\)|\[audio\]|music video|\bmv\b|клип|премьера трека|альбом|\bremix\b|feat\.|ft\.)"#,
+        options: [.caseInsensitive])
+
+    private static func looksLikeMusic(title: String, channel: String) -> Bool {
+        if channel.hasSuffix(" - Topic") || channel.lowercased().contains("vevo") { return true }
+        return musicTitle.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil
     }
 
     /// Лента подписок YouTube, только видео ваших исполнителей (по id канала или по имени).
