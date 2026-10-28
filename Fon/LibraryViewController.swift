@@ -1,10 +1,11 @@
 import UIKit
 
-typealias PlayTracksHandler = (_ tracks: [Track], _ start: Int, _ shuffle: Bool, _ name: String) -> Void
+/// Что включить в плеере: ссылка, подпись «Играет из» и id треков своей очереди (если есть).
+typealias PlayHandler = (_ url: URL, _ source: String, _ queue: [String]?) -> Void
 
-/// Медиатека режима музыки: «Понравившиеся» и свои плейлисты.
+/// Медиатека режима музыки: «Понравившиеся» (плейлист YouTube «Fon — музыка») и «Недавно слушали».
 final class LibraryViewController: UITableViewController {
-    var onPlay: PlayTracksHandler?
+    var onPlay: PlayHandler?
 
     init() {
         super.init(style: .insetGrouped)
@@ -17,25 +18,25 @@ final class LibraryViewController: UITableViewController {
         super.viewDidLoad()
         tableView.backgroundColor = .black
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        NotificationCenter.default.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
+        refreshControl = UIRefreshControl()
+        refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil)
     }
 
     @objc private func reload() { tableView.reloadData() }
 
-    private var playlists: [Playlist] { Library.shared.playlists }
-
-    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? 1 : playlists.count + 1
+    @objc private func pullToRefresh() {
+        CloudLikes.shared.refresh { [weak self] in self?.refreshControl?.endRefreshing() }
     }
 
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        section == 1 ? "Плейлисты" : nil
-    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 2 }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == 1 ? Signature.untilText : nil
+        let cloud = CloudLikes.shared
+        let status = cloud.lastError ?? "Понравившиеся хранятся в вашем аккаунте YouTube — плейлист «Fon — музыка»."
+        return [status, Signature.untilText].compactMap { $0 }.joined(separator: "\n\n")
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -45,20 +46,15 @@ final class LibraryViewController: UITableViewController {
         content.imageProperties.tintColor = PlayerView.accent
         cell.accessoryType = .disclosureIndicator
         cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
-        if indexPath.section == 0 {
+        if indexPath.row == 0 {
+            let cloud = CloudLikes.shared
             content.text = "Понравившиеся"
-            content.secondaryText = LibraryViewController.tracksCount(Library.shared.liked.count)
+            content.secondaryText = cloud.loaded ? LibraryViewController.tracksCount(cloud.tracks.count) : "Загрузка…"
             content.image = UIImage(systemName: "heart.fill")
-        } else if indexPath.row == 0 {
-            content.text = "Новый плейлист"
-            content.textProperties.color = PlayerView.accent
-            content.image = UIImage(systemName: "plus")
-            cell.accessoryType = .none
         } else {
-            let playlist = playlists[indexPath.row - 1]
-            content.text = playlist.name
-            content.secondaryText = LibraryViewController.tracksCount(playlist.tracks.count)
-            content.image = UIImage(systemName: "music.note.list")
+            content.text = "Недавно слушали"
+            content.secondaryText = LibraryViewController.tracksCount(Library.shared.history.count)
+            content.image = UIImage(systemName: "clock.arrow.circlepath")
         }
         cell.contentConfiguration = content
         return cell
@@ -66,56 +62,9 @@ final class LibraryViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        if indexPath.section == 0 {
-            open(.liked)
-        } else if indexPath.row == 0 {
-            LibraryViewController.askName(title: "Новый плейлист", initial: "", from: self) { [weak self] name in
-                let playlist = Library.shared.createPlaylist(named: name)
-                self?.open(.playlist(playlist.id))
-            }
-        } else {
-            open(.playlist(playlists[indexPath.row - 1].id))
-        }
-    }
-
-    private func open(_ source: TrackListSource) {
-        let list = TrackListViewController(source: source)
+        let list = TrackListViewController(kind: indexPath.row == 0 ? .liked : .history)
         list.onPlay = onPlay
         navigationController?.pushViewController(list, animated: true)
-    }
-
-    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard indexPath.section == 1, indexPath.row > 0 else { return nil }
-        let playlist = playlists[indexPath.row - 1]
-        let delete = UIContextualAction(style: .destructive, title: "Удалить") { _, _, done in
-            Library.shared.deletePlaylist(playlist.id)
-            done(true)
-        }
-        let rename = UIContextualAction(style: .normal, title: "Имя") { [weak self] _, _, done in
-            guard let self else { return done(false) }
-            LibraryViewController.askName(title: "Переименовать", initial: playlist.name, from: self) { name in
-                Library.shared.renamePlaylist(playlist.id, to: name)
-            }
-            done(true)
-        }
-        return UISwipeActionsConfiguration(actions: [delete, rename])
-    }
-
-    // MARK: - Общие помощники
-
-    static func askName(title: String, initial: String, from presenter: UIViewController, done: @escaping (String) -> Void) {
-        let alert = UIAlertController(title: title, message: nil, preferredStyle: .alert)
-        alert.addTextField { field in
-            field.text = initial
-            field.placeholder = "Название"
-            field.autocapitalizationType = .sentences
-        }
-        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Готово", style: .default) { _ in
-            let name = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            done(name.isEmpty ? "Мой плейлист" : name)
-        })
-        presenter.present(alert, animated: true)
     }
 
     static func tracksCount(_ n: Int) -> String {
@@ -128,15 +77,16 @@ final class LibraryViewController: UITableViewController {
     }
 }
 
-/// Список треков плейлиста или «Понравившихся»: слушать, перемешать, удалить, поменять порядок.
+/// Список треков: «Понравившиеся» (облако) или «Недавно слушали» (на телефоне).
 final class TrackListViewController: UITableViewController {
-    var onPlay: PlayTracksHandler?
-    private let source: TrackListSource
-    private var tracks: [Track] = []
-    private var editingLocally = false
+    enum Kind { case liked, history }
 
-    init(source: TrackListSource) {
-        self.source = source
+    var onPlay: PlayHandler?
+    private let kind: Kind
+    private var tracks: [Track] = []
+
+    init(kind: Kind) {
+        self.kind = kind
         super.init(style: .plain)
     }
 
@@ -144,26 +94,34 @@ final class TrackListViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        title = kind == .liked ? "Понравившиеся" : "Недавно слушали"
         tableView.backgroundColor = .black
         tableView.rowHeight = 64
         tableView.separatorInset.left = 76
         tableView.register(TrackCell.self, forCellReuseIdentifier: "track")
-        navigationItem.rightBarButtonItem = editButtonItem
         tableView.tableHeaderView = makeHeader()
-        NotificationCenter.default.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
+        if kind == .liked {
+            refreshControl = UIRefreshControl()
+            refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
+        } else {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Очистить", style: .plain, target: self, action: #selector(clearHistory))
+        }
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(reload), name: kind == .liked ? CloudLikes.didChange : Library.didChange, object: nil)
         reload()
     }
 
     @objc private func reload() {
-        guard !editingLocally else { return }
-        title = Library.shared.title(of: source)
-        tracks = Library.shared.tracks(in: source)
+        tracks = kind == .liked ? CloudLikes.shared.tracks : Library.shared.history
         tableView.reloadData()
         if tracks.isEmpty {
             let label = UILabel()
-            label.text = source == .liked
-                ? "Нажмите ♡ в плеере,\nчтобы трек появился здесь"
-                : "Добавляйте треки кнопкой ⊕ в плеере"
+            if kind == .liked {
+                label.text = CloudLikes.shared.lastError
+                    ?? (CloudLikes.shared.loaded ? "Нажмите ♡ в плеере —\nтрек сохранится в ваш плейлист\nYouTube «Fon — музыка»" : "Загрузка…")
+            } else {
+                label.text = "Здесь появятся треки,\nкоторые вы слушали в режиме музыки"
+            }
             label.numberOfLines = 0
             label.textAlignment = .center
             label.textColor = .secondaryLabel
@@ -172,6 +130,17 @@ final class TrackListViewController: UITableViewController {
             tableView.backgroundView = nil
         }
         tableView.tableHeaderView?.isHidden = tracks.isEmpty
+    }
+
+    @objc private func pullToRefresh() {
+        CloudLikes.shared.refresh { [weak self] in self?.refreshControl?.endRefreshing() }
+    }
+
+    @objc private func clearHistory() {
+        let alert = UIAlertController(title: "Очистить историю?", message: nil, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Очистить", style: .destructive) { _ in Library.shared.clearHistory() })
+        present(alert, animated: true)
     }
 
     private func makeHeader() -> UIView {
@@ -199,9 +168,19 @@ final class TrackListViewController: UITableViewController {
         return header
     }
 
+    private var sourceName: String { title ?? "Медиатека" }
+
     private func playAll(shuffle: Bool) {
-        guard !tracks.isEmpty else { return }
-        onPlay?(tracks, shuffle ? Int.random(in: 0..<tracks.count) : 0, shuffle, title ?? "Плейлист")
+        guard let first = tracks.first else { return }
+        let ids = tracks.map(\.id)
+        if shuffle {
+            let shuffled = Array(ids.shuffled().prefix(50))
+            if let url = YouTubeLinks.queue(shuffled) { onPlay?(url, sourceName, shuffled) }
+        } else if kind == .liked, let url = CloudLikes.shared.playURL(startingAt: first.id) {
+            onPlay?(url, sourceName, ids) // настоящий плейлист YouTube
+        } else if let url = YouTubeLinks.queue(ids) {
+            onPlay?(url, sourceName, Array(ids.prefix(50)))
+        }
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { tracks.count }
@@ -214,30 +193,27 @@ final class TrackListViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        onPlay?(tracks, indexPath.row, false, title ?? "Плейлист")
+        let track = tracks[indexPath.row]
+        if kind == .liked, let url = CloudLikes.shared.playURL(startingAt: track.id) {
+            onPlay?(url, sourceName, tracks.map(\.id))
+        } else if let url = YouTubeLinks.mix(track.id) {
+            onPlay?(url, "Микс", nil) // из истории — трек и похожие на него
+        }
     }
 
-    override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
-        guard editingStyle == .delete else { return }
-        editingLocally = true
-        Library.shared.removeTrack(at: indexPath.row, from: source)
-        tracks.remove(at: indexPath.row)
-        tableView.deleteRows(at: [indexPath], with: .automatic)
-        editingLocally = false
-        if tracks.isEmpty { reload() }
-    }
-
-    override func tableView(_ tableView: UITableView, titleForDeleteConfirmationButtonForRowAt indexPath: IndexPath) -> String? {
-        "Удалить"
-    }
-
-    override func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool { true }
-
-    override func tableView(_ tableView: UITableView, moveRowAt from: IndexPath, to: IndexPath) {
-        editingLocally = true
-        Library.shared.moveTrack(from: from.row, to: to.row, in: source)
-        tracks.insert(tracks.remove(at: from.row), at: to.row)
-        editingLocally = false
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        let track = tracks[indexPath.row]
+        let title = kind == .liked ? "Убрать" : "Удалить"
+        let action = UIContextualAction(style: .destructive, title: title) { [weak self] _, _, done in
+            guard let self else { return done(false) }
+            if self.kind == .liked {
+                CloudLikes.shared.setLiked(track, false)
+            } else {
+                Library.shared.removeFromHistory(track.id)
+            }
+            done(true)
+        }
+        return UISwipeActionsConfiguration(actions: [action])
     }
 }
 

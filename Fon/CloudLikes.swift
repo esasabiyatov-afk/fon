@@ -1,0 +1,147 @@
+import UIKit
+import WebKit
+
+/// «Понравившиеся» в облаке: приватный плейлист «Fon — музыка» в аккаунте YouTube.
+/// Запросы идут из скрытого окна m.youtube.com (тот же вход в Google, что в приложении)
+/// через внутренний API YouTube — скрипт `Scripts.cloud`. Список держим в памяти:
+/// ♡ отвечает сразу, а запрос уходит следом (при ошибке — откат и сообщение).
+final class CloudLikes: NSObject, WKNavigationDelegate {
+    static let shared = CloudLikes()
+    static let didChange = Notification.Name("FonCloudLikesDidChange")
+    /// object — текст ошибки для пользователя.
+    static let didFail = Notification.Name("FonCloudLikesDidFail")
+
+    private(set) var tracks: [Track] = []
+    private(set) var loaded = false
+    private(set) var lastError: String?
+
+    private var playlistID: String? {
+        get { UserDefaults.standard.string(forKey: "cloudPlaylistID") }
+        set { UserDefaults.standard.set(newValue, forKey: "cloudPlaylistID") }
+    }
+
+    private var webView: WKWebView?
+    private var ready = false
+    private var waiting: [() -> Void] = []
+
+    func isLiked(_ id: String) -> Bool { tracks.contains { $0.id == id } }
+
+    /// Ссылка, чтобы играть «Понравившиеся» как настоящий плейлист YouTube, начиная с трека.
+    func playURL(startingAt id: String) -> URL? {
+        guard let pid = playlistID else { return nil }
+        var components = URLComponents(string: "https://m.youtube.com/watch")!
+        components.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "list", value: pid)]
+        return components.url
+    }
+
+    /// Создаёт скрытое окно (крошечная страница m.youtube.com — без тяжёлой ленты) и грузит список.
+    func start(in view: UIView) {
+        guard webView == nil else { return }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 2, height: 2), configuration: config)
+        webView.customUserAgent = WebViewFactory.safariUserAgent()
+        webView.alpha = 0.01
+        webView.isUserInteractionEnabled = false
+        webView.navigationDelegate = self
+        view.insertSubview(webView, at: 0)
+        self.webView = webView
+        webView.load(URLRequest(url: URL(string: "https://m.youtube.com/robots.txt")!))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        ready = true
+        let queued = waiting
+        waiting = []
+        queued.forEach { $0() }
+        if !loaded { refresh() }
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        ready = false
+        webView.reload()
+    }
+
+    // MARK: - Операции
+
+    func refresh(completion: (() -> Void)? = nil) {
+        call("__fonCloud.list(pid)", ["pid": playlistID ?? NSNull()]) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                let dict = value as? [String: Any] ?? [:]
+                if let pid = dict["playlistId"] as? String { self.playlistID = pid }
+                let raw = dict["tracks"] as? [[String: Any]] ?? []
+                self.tracks = raw.compactMap { item in
+                    guard let id = item["id"] as? String else { return nil }
+                    let clean = TrackTitle.clean(title: item["title"] as? String ?? "", artist: item["artist"] as? String ?? "")
+                    return Track(id: id, title: clean.title, artist: clean.artist)
+                }
+                self.loaded = true
+                self.lastError = nil
+                self.migrateLegacyLikes()
+            case .failure(let error):
+                self.lastError = Self.describe(error)
+            }
+            NotificationCenter.default.post(name: Self.didChange, object: nil)
+            completion?()
+        }
+    }
+
+    func setLiked(_ track: Track, _ liked: Bool) {
+        guard liked != isLiked(track.id) else { return }
+        let before = tracks
+        if liked { tracks.append(track) } else { tracks.removeAll { $0.id == track.id } }
+        NotificationCenter.default.post(name: Self.didChange, object: nil)
+
+        let js = liked ? "__fonCloud.like(pid, [id])" : "__fonCloud.unlike(pid, id)"
+        call(js, ["pid": playlistID ?? NSNull(), "id": track.id]) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                if let pid = value as? String { self.playlistID = pid }
+            case .failure(let error):
+                self.tracks = before
+                self.lastError = Self.describe(error)
+                NotificationCenter.default.post(name: Self.didChange, object: nil)
+                NotificationCenter.default.post(name: Self.didFail, object: self.lastError)
+            }
+        }
+    }
+
+    /// Лайки из прошлых версий (хранились на телефоне) — один раз переносим в облачный плейлист.
+    private func migrateLegacyLikes() {
+        let missing = Library.shared.legacyLiked.filter { !isLiked($0.id) }
+        guard !missing.isEmpty else {
+            if !Library.shared.legacyLiked.isEmpty { Library.shared.clearLegacyLiked() }
+            return
+        }
+        call("__fonCloud.like(pid, ids)", ["pid": playlistID ?? NSNull(), "ids": missing.map(\.id)]) { [weak self] result in
+            guard let self, case .success(let value) = result else { return }
+            if let pid = value as? String { self.playlistID = pid }
+            Library.shared.clearLegacyLiked()
+            self.refresh()
+        }
+    }
+
+    // MARK: - Вызов скрипта в скрытом окне
+
+    private func call(_ expression: String, _ arguments: [String: Any], completion: @escaping (Result<Any, Error>) -> Void) {
+        let run = { [weak self] in
+            guard let webView = self?.webView else { return }
+            webView.callAsyncJavaScript(Scripts.cloud + "\nreturn await " + expression,
+                                        arguments: arguments, in: nil, in: .page) { result in
+                completion(result)
+            }
+        }
+        if ready { run() } else { waiting.append(run) }
+    }
+
+    private static func describe(_ error: Error) -> String {
+        let message = ((error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String) ?? error.localizedDescription
+        if message.contains("signed-out") {
+            return "Войдите в аккаунт Google: режим «Видео» → вкладка «Вы». Понравившиеся хранятся в вашем плейлисте YouTube."
+        }
+        return "Не удалось связаться с YouTube. Проверьте интернет и попробуйте ещё раз."
+    }
+}

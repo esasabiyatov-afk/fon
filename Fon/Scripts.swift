@@ -52,6 +52,17 @@ enum Scripts {
 
   fon.absURL = (href) => { try { return new URL(href, location.href); } catch (e) { return null; } };
 
+  // --- Контекст API YouTube (версия клиента и т.п.) — для облачного окна «Понравившихся»,
+  // где своей страницы YouTube нет. Сохраняем, когда страница его выдаст.
+  const saveContext = () => {
+    try {
+      const ctx = window.ytcfg && ytcfg.get && ytcfg.get('INNERTUBE_CONTEXT');
+      if (ctx && ctx.client) localStorage.setItem('fon-ctx', JSON.stringify({ client: ctx.client }));
+    } catch (e) {}
+  };
+  setTimeout(saveContext, 4000);
+  setTimeout(saveContext, 15000);
+
   // --- Shorts не нужны: прячем полки, карточки и фильтр «Shorts» в ленте, поиске и под видео.
   fon.addStyle(`
     ytm-reel-shelf-renderer, ytm-shorts-shelf-renderer, ytm-reel-item-renderer,
@@ -468,7 +479,8 @@ enum Scripts {
     const v = fon.video();
     fullEl = on ? (el || document.getElementById('player-container-id') || v || document.documentElement) : null;
     document.documentElement.classList.toggle('fon-full', on);
-    fon.post({ type: 'fullscreen', on });
+    // Вертикальное видео — полный экран остаётся вертикальным (приложение не поворачивает телефон).
+    fon.post({ type: 'fullscreen', on, vertical: !!(v && v.videoHeight > v.videoWidth) });
     if (v) fire(v, on ? 'webkitbeginfullscreen' : 'webkitendfullscreen');
     fire(document, 'fullscreenchange');
     fire(document, 'webkitfullscreenchange');
@@ -611,6 +623,8 @@ enum Scripts {
   let lastId = null;
   let lastThumbId = null;
   let nearEndId = null;
+  let playedId = null;   // трек, который сейчас считаем для истории «Недавно слушали»
+  let playedSecs = 0;
   setInterval(() => {
     const v = fon.video();
     const id = currentId();
@@ -639,6 +653,12 @@ enum Scripts {
       } catch (e) {}
     }
 
+    // Трек отыграл 20 секунд (в том числе в фоне) — в историю «Недавно слушали».
+    if (!v.paused) {
+      if (playedId !== id) { playedId = id; playedSecs = 0; }
+      if (++playedSecs === 20) fon.post({ type: 'played', id, title, artist });
+    }
+
     // В фоне за несколько секунд до конца трека просим приложение не засыпать на смене трека.
     if (fon.realHidden && !v.paused && nearEnd(v) && nearEndId !== id) {
       nearEndId = id;
@@ -652,6 +672,119 @@ enum Scripts {
       paused: v.paused, loop: !!v.loop, time: v.currentTime || 0, duration: isFinite(v.duration) ? v.duration : 0
     });
   }, 1000);
+})();
+"""#
+
+    // MARK: - Облако: плейлист «Fon — музыка» в аккаунте YouTube
+
+    /// Выполняется в скрытом окне m.youtube.com (CloudLikes). Внутренний API YouTube (как у кнопки
+    /// «Сохранить в плейлист» на сайте) с авторизацией по куки вошедшего аккаунта (SAPISIDHASH).
+    static let cloud = #"""
+(() => {
+  if (window.__fonCloud) return;
+  const TITLE = 'Fon — музыка';
+  const PROBE = 'jNQXAC9IVRw'; // любое публичное видео — чтобы получить список своих плейлистов
+
+  const cookie = (name) => {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[-_.]/g, '\\$&') + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : null;
+  };
+  const sha1 = async (s) => {
+    const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+  const context = () => {
+    try { if (window.ytcfg && ytcfg.get && ytcfg.get('INNERTUBE_CONTEXT')) return ytcfg.get('INNERTUBE_CONTEXT'); } catch (e) {}
+    try { const saved = localStorage.getItem('fon-ctx'); if (saved) return JSON.parse(saved); } catch (e) {}
+    return { client: { clientName: 'MWEB', clientVersion: '2.20251020.01.00', hl: 'ru' } };
+  };
+  const api = async (endpoint, body) => {
+    const sapisid = cookie('SAPISID') || cookie('__Secure-3PAPISID');
+    if (!sapisid) throw new Error('signed-out');
+    const ctx = context();
+    const origin = location.origin;
+    const ts = Math.floor(Date.now() / 1000);
+    const hash = await sha1(ts + ' ' + sapisid + ' ' + origin);
+    const res = await fetch('/youtubei/v1/' + endpoint + '?prettyPrint=false', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'SAPISIDHASH ' + ts + '_' + hash,
+        'X-Origin': origin,
+        'X-Goog-AuthUser': '0',
+        'X-Youtube-Client-Name': '2',
+        'X-Youtube-Client-Version': (ctx.client && ctx.client.clientVersion) || ''
+      },
+      body: JSON.stringify(Object.assign({ context: ctx }, body))
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('signed-out');
+    if (!res.ok) throw new Error('http-' + res.status);
+    return res.json();
+  };
+  const findAll = (obj, key, out) => {
+    out = out || [];
+    if (obj && typeof obj === 'object') {
+      for (const k in obj) {
+        if (k === key) out.push(obj[k]);
+        findAll(obj[k], key, out);
+      }
+    }
+    return out;
+  };
+  const text = (t) => (t ? (t.simpleText || (t.runs || []).map((r) => r.text).join('')) : '');
+  const findPlaylist = async () => {
+    const r = await api('playlist/get_add_to_playlist', { videoIds: [PROBE], excludeWatchLater: true });
+    const option = findAll(r, 'playlistAddToOptionRenderer').find((o) => text(o.title) === TITLE);
+    return option ? option.playlistId : null;
+  };
+  const RENDERERS = ['playlistVideoRenderer', 'playlistPanelVideoRenderer', 'videoWithContextRenderer', 'compactVideoRenderer'];
+
+  window.__fonCloud = {
+    // { playlistId, tracks: [{ id, title, artist }] } — в порядке плейлиста.
+    async list(pid) {
+      pid = pid || await findPlaylist();
+      if (!pid) return { playlistId: null, tracks: [] };
+      const tracks = [];
+      const seen = new Set();
+      let r = await api('browse', { browseId: 'VL' + pid });
+      for (let page = 0; page < 10 && r; page++) {
+        for (const name of RENDERERS) {
+          for (const v of findAll(r, name)) {
+            if (!v || !v.videoId || seen.has(v.videoId)) continue;
+            seen.add(v.videoId);
+            tracks.push({ id: v.videoId, title: text(v.title || v.headline), artist: text(v.shortBylineText || v.longBylineText) });
+          }
+        }
+        const next = findAll(r, 'continuationCommand')[0];
+        r = next && next.token ? await api('browse', { continuation: next.token }) : null;
+      }
+      return { playlistId: pid, tracks };
+    },
+    // Добавить треки; плейлиста ещё нет — создать (приватный). Возвращает id плейлиста.
+    async like(pid, ids) {
+      pid = pid || await findPlaylist();
+      if (!pid) {
+        const r = await api('playlist/create', { title: TITLE, privacyStatus: 'PRIVATE', videoIds: ids });
+        return r.playlistId || findAll(r, 'playlistId')[0] || null;
+      }
+      await api('browse/edit_playlist', {
+        playlistId: pid,
+        actions: ids.map((id) => ({ action: 'ACTION_ADD_VIDEO', addedVideoId: id }))
+      });
+      return pid;
+    },
+    async unlike(pid, id) {
+      pid = pid || await findPlaylist();
+      if (pid) {
+        await api('browse/edit_playlist', {
+          playlistId: pid,
+          actions: [{ action: 'ACTION_REMOVE_VIDEO_BY_VIDEO_ID', removedVideoId: id }]
+        });
+      }
+      return pid;
+    }
+  };
 })();
 """#
 

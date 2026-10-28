@@ -11,8 +11,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onClose: (() -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
     var onMusicModeChanged: (() -> Void)?
-    var onAddToPlaylist: ((Track) -> Void)?
-    var onFullscreenChanged: ((Bool) -> Void)?
+    /// (включён ли, вертикальное ли видео)
+    var onFullscreenChanged: ((Bool, Bool) -> Void)?
     var onSearch: ((String?) -> Void)?
     /// Трек вот-вот закончится (или закончился) в фоне — приложению надо продержаться до следующего.
     var onTrackEnding: (() -> Void)?
@@ -94,7 +94,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
-        musicView.onAddToPlaylist = { [weak self] track in self?.onAddToPlaylist?(track) }
         addSubview(musicView)
 
         // Шапка развёрнутого плеера
@@ -288,12 +287,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     // MARK: - Полный экран
 
-    private func setFullscreen(_ on: Bool) {
+    private func setFullscreen(_ on: Bool, vertical: Bool = false) {
         guard on != isFullscreen else { return }
         isFullscreen = on
         updateVisibility()
         setNeedsLayout()
-        onFullscreenChanged?(on)
+        onFullscreenChanged?(on, vertical)
         // После поворота экрана — ещё раз перерисовать видео, когда раскладка устоится.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.repaint() }
     }
@@ -479,10 +478,14 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             }
         case "search":
             onSearch?(body["query"] as? String)
+        case "played":
+            guard musicMode, let id = body["id"] as? String else { return }
+            let clean = TrackTitle.clean(title: body["title"] as? String ?? "", artist: body["artist"] as? String ?? "")
+            Library.shared.recordPlay(Track(id: id, title: clean.title, artist: clean.artist))
         case "trackEnding":
             onTrackEnding?()
         case "fullscreen":
-            setFullscreen(body["on"] as? Bool == true)
+            setFullscreen(body["on"] as? Bool == true, vertical: body["vertical"] as? Bool == true)
         case "browse":
             if let s = body["url"] as? String, let url = URL(string: s) { onOpenInBrowse?(url) }
         default:

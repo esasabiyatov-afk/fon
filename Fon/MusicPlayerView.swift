@@ -8,7 +8,6 @@ final class MusicPlayerView: UIView {
     var onCollapse: (() -> Void)?
     var onShowQueue: (() -> Void)?
     var onVideoMode: (() -> Void)?
-    var onAddToPlaylist: ((Track) -> Void)?
 
     private(set) var track: Track?
     var sourceName: String = "YouTube" { didSet { sourceLabel.text = sourceName } }
@@ -27,7 +26,6 @@ final class MusicPlayerView: UIView {
     private let slider = UISlider()
     private let elapsedLabel = UILabel()
     private let remainingLabel = UILabel()
-    private let addButton = UIButton(type: .system)
     private let prevButton = UIButton(type: .system)
     private let playButton = UIButton(type: .system)
     private let nextButton = UIButton(type: .system)
@@ -106,12 +104,10 @@ final class MusicPlayerView: UIView {
         }
         remainingLabel.textAlignment = .right
 
-        setup(addButton, "plus.circle", 22, #selector(addTapped))
         setup(prevButton, "backward.fill", 28, #selector(prevTapped))
         setup(playButton, "play.fill", 30, #selector(playTapped))
         setup(nextButton, "forward.fill", 28, #selector(nextTapped))
         setup(loopButton, "repeat.1", 20, #selector(loopTapped))
-        addButton.accessibilityLabel = "Добавить в плейлист"
         loopButton.accessibilityLabel = "Повтор трека"
         playButton.backgroundColor = .white
         playButton.tintColor = .black
@@ -121,7 +117,7 @@ final class MusicPlayerView: UIView {
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         ticker = t
-        NotificationCenter.default.addObserver(self, selector: #selector(updateLike), name: Library.didChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(updateLike), name: CloudLikes.didChange, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -209,11 +205,10 @@ final class MusicPlayerView: UIView {
     }
 
     @objc private func updateLike() {
-        let liked = track.map { Library.shared.isLiked($0.id) } ?? false
+        let liked = track.map { CloudLikes.shared.isLiked($0.id) } ?? false
         setSymbol(likeButton, liked ? "heart.fill" : "heart", 22)
         likeButton.tintColor = liked ? PlayerView.accent : .white
         likeButton.isEnabled = track != nil
-        addButton.isEnabled = track != nil
     }
 
     /// На паузе обложка чуть уменьшается — как в Apple Music.
@@ -267,14 +262,10 @@ final class MusicPlayerView: UIView {
     @objc private func likeTapped() {
         guard let track else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        Library.shared.toggleLike(track)
+        CloudLikes.shared.setLiked(track, !CloudLikes.shared.isLiked(track.id))
         UIView.animate(withDuration: 0.12, animations: { self.likeButton.transform = CGAffineTransform(scaleX: 1.3, y: 1.3) }) { _ in
             UIView.animate(withDuration: 0.2) { self.likeButton.transform = .identity }
         }
-    }
-
-    @objc private func addTapped() {
-        if let track { onAddToPlaylist?(track) }
     }
 
     @objc private func sliderChanged() {
@@ -353,9 +344,7 @@ final class MusicPlayerView: UIView {
         prevButton.center = CGPoint(x: cx - offset, y: cy)
         nextButton.bounds = prevButton.bounds
         nextButton.center = CGPoint(x: cx + offset, y: cy)
-        addButton.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
-        addButton.center = CGPoint(x: x + 18, y: cy)
-        loopButton.bounds = addButton.bounds
+        loopButton.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
         loopButton.center = CGPoint(x: x + width - 18, y: cy)
     }
 }

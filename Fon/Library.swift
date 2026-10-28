@@ -7,26 +7,17 @@ struct Track: Codable, Hashable {
     var artist: String
 }
 
-struct Playlist: Codable {
-    let id: UUID
-    var name: String
-    var tracks: [Track]
-}
-
-/// Откуда список треков: «Понравившиеся» или свой плейлист.
-enum TrackListSource: Equatable {
-    case liked
-    case playlist(UUID)
-}
-
-/// Своя медиатека режима музыки: «Понравившиеся» и плейлисты. Хранится в JSON на телефоне.
+/// Данные на телефоне: история прослушивания (для подборок на главной) и старые локальные лайки,
+/// которые один раз переносятся в облачный плейлист YouTube (см. CloudLikes).
 final class Library {
     static let shared = Library()
     static let didChange = Notification.Name("FonLibraryDidChange")
+    private static let historyLimit = 100
 
+    // Старые поля (liked, playlists) читаются для переноса; лишние ключи в файле JSON игнорируются.
     private struct Store: Codable {
-        var liked: [Track] = []
-        var playlists: [Playlist] = []
+        var liked: [Track]?
+        var history: [Track]?
     }
 
     private var store = Store()
@@ -41,84 +32,31 @@ final class Library {
         }
     }
 
-    var liked: [Track] { store.liked }
-    var playlists: [Playlist] { store.playlists }
+    /// Недавно слушали — новые сверху, без повторов.
+    var history: [Track] { store.history ?? [] }
 
-    func isLiked(_ id: String) -> Bool { store.liked.contains { $0.id == id } }
+    /// Лайки из прошлых версий (хранились на телефоне) — ждут переноса в облако.
+    var legacyLiked: [Track] { store.liked ?? [] }
 
-    func toggleLike(_ track: Track) {
-        if let i = store.liked.firstIndex(where: { $0.id == track.id }) {
-            store.liked.remove(at: i)
-        } else {
-            store.liked.insert(track, at: 0)
-        }
+    func clearLegacyLiked() {
+        store.liked = nil
         save()
     }
 
-    func title(of source: TrackListSource) -> String {
-        switch source {
-        case .liked: return "Понравившиеся"
-        case .playlist(let id): return store.playlists.first { $0.id == id }?.name ?? "Плейлист"
-        }
-    }
-
-    func tracks(in source: TrackListSource) -> [Track] {
-        switch source {
-        case .liked: return store.liked
-        case .playlist(let id): return store.playlists.first { $0.id == id }?.tracks ?? []
-        }
-    }
-
-    func contains(_ trackID: String, in source: TrackListSource) -> Bool {
-        tracks(in: source).contains { $0.id == trackID }
-    }
-
-    /// Добавляет трек в конец списка. false — если он там уже был.
-    @discardableResult
-    func add(_ track: Track, to source: TrackListSource) -> Bool {
-        guard !contains(track.id, in: source) else { return false }
-        mutate(source) { $0.append(track) }
-        return true
-    }
-
-    func removeTrack(at index: Int, from source: TrackListSource) {
-        mutate(source) { if $0.indices.contains(index) { $0.remove(at: index) } }
-    }
-
-    func moveTrack(from: Int, to: Int, in source: TrackListSource) {
-        mutate(source) { tracks in
-            guard tracks.indices.contains(from), tracks.indices.contains(to) else { return }
-            tracks.insert(tracks.remove(at: from), at: to)
-        }
-    }
-
-    @discardableResult
-    func createPlaylist(named name: String) -> Playlist {
-        let playlist = Playlist(id: UUID(), name: name, tracks: [])
-        store.playlists.insert(playlist, at: 0)
-        save()
-        return playlist
-    }
-
-    func renamePlaylist(_ id: UUID, to name: String) {
-        guard let i = store.playlists.firstIndex(where: { $0.id == id }) else { return }
-        store.playlists[i].name = name
+    func recordPlay(_ track: Track) {
+        var list = history.filter { $0.id != track.id }
+        list.insert(track, at: 0)
+        store.history = Array(list.prefix(Self.historyLimit))
         save()
     }
 
-    func deletePlaylist(_ id: UUID) {
-        store.playlists.removeAll { $0.id == id }
+    func removeFromHistory(_ id: String) {
+        store.history = history.filter { $0.id != id }
         save()
     }
 
-    private func mutate(_ source: TrackListSource, _ change: (inout [Track]) -> Void) {
-        switch source {
-        case .liked:
-            change(&store.liked)
-        case .playlist(let id):
-            guard let i = store.playlists.firstIndex(where: { $0.id == id }) else { return }
-            change(&store.playlists[i].tracks)
-        }
+    func clearHistory() {
+        store.history = []
         save()
     }
 
@@ -288,5 +226,30 @@ enum TrackTitle {
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         by = by.trimmingCharacters(in: .whitespacesAndNewlines)
         return (name.isEmpty ? title : name, by.isEmpty ? artist : by)
+    }
+}
+
+/// Ссылки m.youtube.com для плеера.
+enum YouTubeLinks {
+    private static let base = "https://m.youtube.com"
+
+    static func watch(_ id: String, list: String? = nil) -> URL? {
+        var components = URLComponents(string: base + "/watch")!
+        components.queryItems = [URLQueryItem(name: "v", value: id)] + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
+        return components.url
+    }
+
+    /// Mix YouTube по треку: бесконечная подборка похожей музыки.
+    static func mix(_ id: String) -> URL? { watch(id, list: "RD" + id) }
+
+    /// «Мой микс» — личный микс YouTube по аккаунту, стартует с трека.
+    static func myMix(seed id: String) -> URL? { watch(id, list: "RDMM") }
+
+    /// Временный плейлист YouTube из своих треков (до 50): «следующий» и автопереход работают как у плейлиста.
+    static func queue(_ ids: [String]) -> URL? {
+        guard !ids.isEmpty else { return nil }
+        var components = URLComponents(string: base + "/watch_videos")!
+        components.queryItems = [URLQueryItem(name: "video_ids", value: ids.prefix(50).joined(separator: ","))]
+        return components.url
     }
 }

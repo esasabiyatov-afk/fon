@@ -15,13 +15,16 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case mode // переключатель «Видео / Музыка»
     }
 
-    private enum TabContent { case web(String), library, none }
+    private enum TabContent { case web(String), library, musicHome, none }
 
     private let browseContainer = UIView()
     private var browseViews: [Int: WKWebView] = [:]
     private var browseRoots: [Int: String] = [:] // какой корневой путь загружен во вкладке
     private var urlObservations: [Int: NSKeyValueObservation] = [:]
     private var libraryNav: UINavigationController?
+    private var homeNav: UINavigationController?
+    /// В режиме музыки на «Главной» вместо подборок открыта лента YouTube (или результаты поиска).
+    private var musicFeedShown = false
     private var currentTab = 0
     private var browseBottomInset: CGFloat = 0
 
@@ -85,8 +88,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             self?.setPlayerState(.mini)
         }
         playerView.onMusicModeChanged = { [weak self] in self?.musicModeChanged() }
-        playerView.onAddToPlaylist = { [weak self] track in self?.presentAddToPlaylist(track) }
-        playerView.onFullscreenChanged = { [weak self] on in self?.fullscreenChanged(on) }
+        playerView.onFullscreenChanged = { [weak self] on, vertical in self?.fullscreenChanged(on, vertical: vertical) }
         playerView.onSearch = { [weak self] query in self?.presentSearch(prefill: query) }
         playerView.onTrackEnding = { [weak self] in
             guard UIApplication.shared.applicationState != .active else { return }
@@ -98,7 +100,9 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         nc.addObserver(self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioRouteChanged(_:)), name: AVAudioSession.routeChangeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(cloudFailed(_:)), name: CloudLikes.didFail, object: nil)
 
+        CloudLikes.shared.start(in: view)
         showTab(0)
     }
 
@@ -140,41 +144,18 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return components.url ?? url
     }
 
-    /// Свой плейлист играем через временный плейлист YouTube (watch_videos):
-    /// тогда «следующий», экран блокировки и автопереход работают как у обычного плейлиста.
-    private func playTracks(_ tracks: [Track], from start: Int, shuffle: Bool, name: String) {
-        guard tracks.indices.contains(start) else { return }
-        var list = Array(tracks[start...]) + Array(tracks[..<start])
-        if shuffle { list.shuffle() }
-        var components = URLComponents(string: base + "/watch_videos")!
-        components.queryItems = [URLQueryItem(name: "video_ids", value: list.prefix(50).map(\.id).joined(separator: ","))]
-        guard let url = components.url else { return }
-        playerView.load(url, source: name, queue: list.prefix(50).map(\.id))
+    /// Включить подборку, плейлист или трек из медиатеки и главной.
+    private func play(_ url: URL, source: String, queue: [String]?) {
+        playerView.load(url, source: source, queue: queue)
         setPlayerState(.expanded)
     }
 
-    private func presentAddToPlaylist(_ track: Track) {
-        let style: UIAlertController.Style = traitCollection.userInterfaceIdiom == .pad ? .alert : .actionSheet
-        let sheet = UIAlertController(title: "Добавить в плейлист", message: track.title, preferredStyle: style)
-        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        for playlist in Library.shared.playlists {
-            let source = TrackListSource.playlist(playlist.id)
-            let has = Library.shared.contains(track.id, in: source)
-            sheet.addAction(UIAlertAction(title: (has ? "✓ " : "") + playlist.name, style: .default) { [weak self] _ in
-                let added = Library.shared.add(track, to: source)
-                self?.view.showToast(added ? "Добавлено в «\(playlist.name)»" : "Уже есть в «\(playlist.name)»", at: center)
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "Новый плейлист…", style: .default) { [weak self] _ in
-            guard let self else { return }
-            LibraryViewController.askName(title: "Новый плейлист", initial: "", from: self) { name in
-                let playlist = Library.shared.createPlaylist(named: name)
-                Library.shared.add(track, to: .playlist(playlist.id))
-                self.view.showToast("Добавлено в «\(playlist.name)»", at: center)
-            }
-        })
-        sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        present(sheet, animated: true)
+    /// ♡ не сохранился в облако (нет входа в Google, нет сети) — коротко объясняем.
+    @objc private func cloudFailed(_ note: Notification) {
+        guard let message = note.object as? String else { return }
+        let alert = UIAlertController(title: "Не сохранилось в «Понравившиеся»", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        (presentedViewController ?? self).present(alert, animated: true)
     }
 
     private func setPlayerState(_ state: PlayerState) {
@@ -213,14 +194,16 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
-    /// Свой полный экран: прячем статус-бар, на iPhone поворачиваем экран горизонтально.
-    private func fullscreenChanged(_ on: Bool) {
+    /// Свой полный экран: прячем статус-бар. На iPhone горизонтальное видео поворачиваем горизонтально,
+    /// вертикальное остаётся вертикальным на весь экран; при выходе — снова вертикально.
+    private func fullscreenChanged(_ on: Bool, vertical: Bool) {
         if on && playerState != .expanded { setPlayerState(.expanded) }
         setNeedsStatusBarAppearanceUpdate()
         setNeedsUpdateOfHomeIndicatorAutoHidden()
         guard traitCollection.userInterfaceIdiom == .phone, let scene = view.window?.windowScene else { return }
         setNeedsUpdateOfSupportedInterfaceOrientations()
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: on ? .landscapeRight : .portrait)) { _ in }
+        let landscape = on && !vertical
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait)) { _ in }
     }
 
     /// Чтобы мини-плеер не закрывал низ ленты.
@@ -228,6 +211,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         browseBottomInset = inset
         browseViews.values.forEach { applyBottomInset(to: $0) }
         libraryNav?.additionalSafeAreaInsets.bottom = inset
+        homeNav?.additionalSafeAreaInsets.bottom = inset
     }
 
     private func applyBottomInset(to webView: WKWebView) {
@@ -261,10 +245,33 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private func libraryController() -> UINavigationController {
         if let libraryNav { return libraryNav }
         let library = LibraryViewController()
-        library.onPlay = { [weak self] tracks, start, shuffle, name in
-            self?.playTracks(tracks, from: start, shuffle: shuffle, name: name)
+        library.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
+        let nav = embed(library)
+        libraryNav = nav
+        return nav
+    }
+
+    private func homeController() -> UINavigationController {
+        if let homeNav { return homeNav }
+        let home = MusicHomeViewController()
+        home.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
+        home.onOpenLikes = { [weak self] in
+            let list = TrackListViewController(kind: .liked)
+            list.onPlay = { url, source, queue in self?.play(url, source: source, queue: queue) }
+            self?.homeNav?.pushViewController(list, animated: true)
         }
-        let nav = UINavigationController(rootViewController: library)
+        home.onOpenFeed = { [weak self] in
+            self?.musicFeedShown = true
+            self?.showTab(0)
+        }
+        let nav = embed(home)
+        homeNav = nav
+        return nav
+    }
+
+    /// Нативный раздел (медиатека, подборки) внутри области вкладок.
+    private func embed(_ root: UIViewController) -> UINavigationController {
+        let nav = UINavigationController(rootViewController: root)
         nav.navigationBar.prefersLargeTitles = true
         nav.navigationBar.tintColor = PlayerView.accent
         nav.overrideUserInterfaceStyle = .dark
@@ -275,13 +282,13 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         browseContainer.addSubview(nav.view)
         nav.didMove(toParent: self)
         nav.additionalSafeAreaInsets.bottom = browseBottomInset
-        libraryNav = nav
         return nav
     }
 
     private func content(for index: Int) -> TabContent {
         guard case let .web(video, music) = tabs[index].kind else { return .none }
         guard Settings.musicMode else { return .web(video) }
+        if index == 0 && !musicFeedShown { return .musicHome }
         if let music { return .web(music) }
         return .library
     }
@@ -289,13 +296,16 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private func showTab(_ index: Int) {
         currentTab = index
         tabBar.select(index)
-        switch content(for: index) {
+        let tabContent = content(for: index)
+        libraryNav?.view.isHidden = true
+        homeNav?.view.isHidden = true
+        if case .web = tabContent {} else { browseViews.values.forEach { $0.isHidden = true } }
+        switch tabContent {
         case .library:
-            let nav = libraryController()
-            nav.view.isHidden = false
-            browseViews.values.forEach { $0.isHidden = true }
+            libraryController().view.isHidden = false
+        case .musicHome:
+            homeController().view.isHidden = false
         case .web(let root):
-            libraryNav?.view.isHidden = true
             let webView = browseView(for: index)
             browseViews.forEach { $0.value.isHidden = $0.key != index }
             if browseRoots[index] != root {
@@ -307,9 +317,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
-    /// Куда грузить ссылку или поиск: в текущую вкладку, а если открыта медиатека — на главную.
+    /// Куда грузить ссылку или поиск: в текущую вкладку, а если открыт нативный раздел — в ленту «Главной».
     private func webViewForLoading() -> WKWebView {
         if case .web = content(for: currentTab) { return browseView(for: currentTab) }
+        musicFeedShown = true
         showTab(0)
         return browseView(for: 0)
     }
@@ -321,9 +332,21 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     /// Повторное нажатие на открытую вкладку: сначала наверх, потом к началу раздела.
     private func reselectTab(_ index: Int) {
+        // Лента на «Главной» в режиме музыки — повторное нажатие возвращает к подборкам.
+        if index == 0 && Settings.musicMode && musicFeedShown {
+            musicFeedShown = false
+            showTab(0)
+            return
+        }
         switch content(for: index) {
         case .library:
             libraryNav?.popToRootViewController(animated: true)
+        case .musicHome:
+            if homeNav?.viewControllers.count ?? 0 > 1 {
+                homeNav?.popToRootViewController(animated: true)
+            } else {
+                (homeNav?.viewControllers.first as? MusicHomeViewController)?.scrollToTop()
+            }
         case .web(let root):
             let webView = browseView(for: index)
             let scroll = webView.scrollView
@@ -385,6 +408,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     /// Сменился режим (из вкладки или кнопкой в плеере): обновляем вкладки и открытый раздел.
     private func musicModeChanged() {
+        musicFeedShown = false
         updateModeTabs()
         showTab(currentTab) // остальные вкладки обновятся при следующем открытии
     }
@@ -455,6 +479,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     @objc private func willEnterForeground() {
         playerView.stopBackgroundWatch()
         endBackgroundTask()
+        CloudLikes.shared.refresh() // лайки могли поменяться на другом устройстве
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self else { return }
             Signature.warnIfNeeded(from: self)
