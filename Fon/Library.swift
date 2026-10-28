@@ -145,7 +145,7 @@ final class ArtworkLoader {
     }
 
     private static func fileName(_ key: String) -> String {
-        let digest = Insecure.SHA1.hash(data: Data(key.utf8))
+        let digest = Insecure.SHA1.hash(data: Data(("v2|" + key).utf8)) // v2 — обложки без рамок
         return digest.map { String(format: "%02x", $0) }.joined() + ".jpg"
     }
 
@@ -217,11 +217,59 @@ final class ArtworkLoader {
             }
         }
         let bw = CGFloat(band.width), bh = CGFloat(band.height)
-        guard let square = band.cropping(to: CGRect(x: (bw - bh) / 2, y: 0, width: bh, height: bh).integral) else { return image }
-        let side = min(bh, maxSide)
+        var crop = CGRect(x: (bw - bh) / 2, y: 0, width: bh, height: bh)
+        // Обложка альбома на однотонном фоне (часто меньше высоты кадра) — режем точно по её краям,
+        // без чёрной рамки вокруг.
+        if hasFlatSides(band), let content = contentBounds(band) {
+            let side = max(content.width, content.height)
+            crop = CGRect(x: content.midX - side / 2, y: content.midY - side / 2, width: side, height: side)
+                .intersection(CGRect(x: 0, y: 0, width: bw, height: bh))
+        }
+        guard let square = band.cropping(to: crop.integral) else { return image }
+        let side = min(crop.width, maxSide)
         return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
             UIImage(cgImage: square).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
         }
+    }
+
+    /// Где на кадре сама картинка: всё, что заметно отличается от цвета фона (берём его с левого края).
+    /// nil — если картинка занимает почти весь кадр или её не найти.
+    private static func contentBounds(_ band: CGImage) -> CGRect? {
+        let width = 96, height = 54
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let found: (Int, Int, Int, Int)? = pixels.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            ctx.interpolationQuality = .medium
+            ctx.draw(band, in: CGRect(x: 0, y: 0, width: width, height: height))
+            var bg = [0.0, 0.0, 0.0]
+            for y in 0..<height {
+                for x in 0..<3 {
+                    let i = (y * width + x) * 4
+                    for c in 0..<3 { bg[c] += Double(buffer[i + c]) }
+                }
+            }
+            bg = bg.map { $0 / Double(height * 3) }
+            var minX = width, maxX = -1, minY = height, maxY = -1
+            for y in 0..<height {
+                for x in 0..<width {
+                    let i = (y * width + x) * 4
+                    let diff = (0..<3).reduce(0.0) { $0 + abs(Double(buffer[i + $1]) - bg[$1]) }
+                    guard diff > 48 else { continue }
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+            return maxX < 0 ? nil : (minX, maxX, minY, maxY)
+        }
+        guard let (minX, maxX, minY, maxY) = found else { return nil }
+        // Строки буфера идут сверху вниз — как и координаты для cropping.
+        let sx = CGFloat(band.width) / CGFloat(width), sy = CGFloat(band.height) / CGFloat(height)
+        let rect = CGRect(x: CGFloat(minX) * sx, y: CGFloat(minY) * sy,
+                          width: CGFloat(maxX - minX + 1) * sx, height: CGFloat(maxY - minY + 1) * sy)
+        guard rect.height > CGFloat(band.height) * 0.3, rect.height < CGFloat(band.height) * 0.97 else { return nil }
+        return rect
     }
 
     /// Однотонные ли поля слева и справа от центрального квадрата (как у видео «Topic» с обложкой альбома).
