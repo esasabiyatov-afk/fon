@@ -104,14 +104,27 @@ final class ArtworkLoader {
             completion(image)
             return
         }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            let image = data.flatMap(UIImage.init(data:))
+        fetchURL(url, attempt: 0) { [weak self] image in
             if let image { self?.images.setObject(image, forKey: key) }
             DispatchQueue.main.async { completion(image) }
+        }
+    }
+
+    private func fetchURL(_ url: URL, attempt: Int, done: @escaping (UIImage?) -> Void) {
+        URLSession.shared.dataTask(with: url) { data, response, _ in
+            if let image = data.flatMap(UIImage.init(data:)) {
+                done(image)
+            } else if response == nil, attempt < 2 {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { self.fetchURL(url, attempt: attempt + 1, done: done) }
+            } else {
+                done(nil)
+            }
         }.resume()
     }
 
-    private func fetch(_ id: String, names: ArraySlice<String>, maxSide: CGFloat, wide: Bool, done: @escaping (UIImage?) -> Void) {
+    /// Сбой сети (ответа нет вовсе) — повторяем тот же размер ещё дважды, а не сдаёмся с пустой обложкой.
+    private func fetch(_ id: String, names: ArraySlice<String>, maxSide: CGFloat, wide: Bool, attempt: Int = 0,
+                       done: @escaping (UIImage?) -> Void) {
         guard let name = names.first, let url = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg") else {
             done(nil)
             return
@@ -120,6 +133,10 @@ final class ArtworkLoader {
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             if ok, let data, let image = UIImage(data: data), image.size.width > 150 {
                 done(ArtworkLoader.squareArtwork(image, maxSide: maxSide, wide: wide))
+            } else if response == nil, attempt < 2 {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
+                    self.fetch(id, names: names, maxSide: maxSide, wide: wide, attempt: attempt + 1, done: done)
+                }
             } else {
                 self.fetch(id, names: names.dropFirst(), maxSide: maxSide, wide: wide, done: done)
             }

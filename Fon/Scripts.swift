@@ -464,6 +464,8 @@ enum Scripts {
       transform: translateX(-50%) !important; width: auto !important; max-width: 90% !important; text-align: center !important;
     }
     /* Вертикальный полный экран: субтитры сразу под картинкой, а не внизу экрана. */
+    /* Ряд «Нравится/Поделиться/Сохранить» и «Другие видео» в полном экране наезжали на время и главу. */
+    html.fon-full .fon-hidden-full { display: none !important; }
     html.fon-full.fon-cap-below .caption-window {
       top: var(--fon-cap-top, auto) !important; bottom: auto !important;
     }
@@ -496,7 +498,7 @@ enum Scripts {
     if (v) fire(v, on ? 'webkitbeginfullscreen' : 'webkitendfullscreen');
     fire(document, 'fullscreenchange');
     fire(document, 'webkitfullscreenchange');
-    setTimeout(() => { fire(window, 'resize'); try { applyQuality(); } catch (e) {} try { fon.placeCaptions(); } catch (e) {} }, 300);
+    setTimeout(() => { fire(window, 'resize'); try { applyQuality(); } catch (e) {} try { fon.placeCaptions(); fon.tidyFullscreen(); } catch (e) {} }, 300);
     for (const t of [400, 1200]) setTimeout(() => fon.repaint(), t);
   };
 
@@ -591,6 +593,75 @@ enum Scripts {
   document.addEventListener('loadedmetadata', placeCaptions, true);
   document.addEventListener('resize', placeCaptions, true); // у video: сменились размеры кадра
   fon.placeCaptions = placeCaptions;
+
+  // Полный экран: YouTube рисует поверх видео ряд «Нравится / Не нравится / Поделиться / Сохранить»
+  // и «Другие видео» — они наезжали на время и название главы. Прячем их (только в полном экране):
+  // остаются время, глава, прогресс, ⚙, субтитры и кнопки плеера.
+  const ACTION = /^(нравится|не нравится|поделиться|сохранить|like|dislike|share|save)/i;
+  const MORE = /^(другие видео|more videos)$/i;
+  const tidyFullscreen = () => {
+    if (!fon.isFull) return;
+    for (const root of [document.getElementById('player-control-overlay'), document.getElementById('player-container-id')]) {
+      if (!root) continue;
+      const buttons = Array.from(root.querySelectorAll('button[aria-label], [role="button"][aria-label]'))
+        .filter((b) => ACTION.test((b.getAttribute('aria-label') || '').trim()));
+      if (buttons.length >= 2) {
+        let row = buttons[0].parentElement;
+        while (row && row !== root && !buttons.every((b) => row.contains(b))) row = row.parentElement;
+        if (row && row !== root) row.classList.add('fon-hidden-full');
+      } else {
+        for (const b of buttons) b.classList.add('fon-hidden-full');
+      }
+      for (const el of root.querySelectorAll('span, div, button, a, yt-formatted-string')) {
+        if (el.children.length || !MORE.test((el.textContent || '').trim())) continue;
+        const box = el.closest('button, [role="button"], a') || el.parentElement;
+        let target = box;
+        // Подняться до блока с превью рядом с надписью, но не выше самой панели.
+        while (target && target.parentElement && target.parentElement !== root && target.parentElement.querySelector('img') && !target.querySelector('img')) {
+          target = target.parentElement;
+        }
+        if (target && target !== root) target.classList.add('fon-hidden-full');
+      }
+    }
+  };
+  setInterval(tidyFullscreen, 1000);
+  fon.tidyFullscreen = tidyFullscreen;
+
+  // Видео «зависло» на загрузке (часто после долгой паузы в свёрнутом приложении: WebKit выгружает буфер).
+  // Если должно играть, а время не идёт: через 6 с — перемотка на то же место, через 12 с — перезагрузить
+  // поток с этой секунды, через 20 с — перезагрузить страницу с этой секунды.
+  let stallSince = 0, stallStep = 0, lastTime = -1;
+  setInterval(() => {
+    const v = fon.video();
+    const mp = document.getElementById('movie_player');
+    let state = -2;
+    try { state = mp && mp.getPlayerState ? mp.getPlayerState() : -2; } catch (e) {}
+    const shouldPlay = v && !v.ended && !v.__fonUserPaused && (!v.paused || state === 3);
+    const t = v ? v.currentTime : 0;
+    if (!shouldPlay || fon.realHidden || t !== lastTime) {
+      lastTime = t;
+      stallSince = 0;
+      stallStep = 0;
+      return;
+    }
+    if (!stallSince) stallSince = Date.now();
+    const stuck = Date.now() - stallSince;
+    const id = currentId();
+    try {
+      if (stuck > 6000 && stallStep === 0) {
+        stallStep = 1;
+        if (mp && mp.seekTo) mp.seekTo(t, true); else v.currentTime = t;
+      } else if (stuck > 12000 && stallStep === 1 && id) {
+        stallStep = 2;
+        if (mp && mp.loadVideoById) mp.loadVideoById({ videoId: id, startSeconds: Math.floor(t) });
+      } else if (stuck > 20000 && stallStep === 2 && id) {
+        stallStep = 3;
+        const u = new URL(location.href);
+        u.searchParams.set('t', Math.floor(t) + 's');
+        location.replace(u.href);
+      }
+    } catch (e) {}
+  }, 1000);
 
   // Открыто меню YouTube (⚙, субтитры, «ещё»): тянуть его вниз — значит закрыть меню,
   // а не выйти из полного экрана или свернуть плеер. Сообщаем приложению, когда меню открыто.
