@@ -110,8 +110,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
-        musicView.onVolume = { [weak self] value in self?.webView.setMediaVolume(Float(value)) }
-        musicView.volumeAvailable = webView.supportsMediaVolume
+        musicView.onVolume = { [weak self] value, final in self?.setVolume(value, final: final) }
         addSubview(musicView)
 
         // Шапка развёрнутого плеера
@@ -217,8 +216,15 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// Передаём странице текущий вид: мини или нет, режим музыки или видео.
     private func applyPageState() {
         runJS("window.__fon && __fon.setMini && __fon.setMini(\(mode == .mini))")
+        // Громкость — до режима: при смене режима страница по ней решает, нужен ли простой поток.
+        setVolume(Settings.youtubeVolume, final: false)
         runJS("window.__fon && __fon.setMusic && __fon.setMusic(\(musicMode))")
-        webView.setMediaVolume(Float(Settings.youtubeVolume))
+    }
+
+    /// Своя громкость YouTube (0…1). final — палец отпустил ползунок: страница может перезагрузиться
+    /// с той же секунды, чтобы сменить поток (см. «Своя громкость» в Scripts.player).
+    private func setVolume(_ value: Double, final: Bool) {
+        runJS("window.__fon && __fon.setVolume && __fon.setVolume(\(value), \(final))")
     }
 
     private func updateMusicButton() {
@@ -608,6 +614,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             Library.shared.recordPlay(Track(id: id, title: clean.title, artist: clean.artist))
         case "trackEnding":
             onTrackEnding?()
+        case "volumeFailed":
+            Settings.youtubeVolume = 1
+            musicView.resetVolume()
+            showToast("YouTube не дал сделать тише", at: CGPoint(x: bounds.midX, y: safeAreaInsets.top + 90))
         case "menu":
             youTubeMenuOpen = body["open"] as? Bool == true
             youTubeMenuTop = CGFloat((body["top"] as? NSNumber)?.doubleValue ?? -1)
