@@ -414,6 +414,8 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     static let visible = false
 
     private static let shared = SafariStream()
+    /// Когда окно последний раз останавливало своё видео — прерывание звука сразу после этого вызвано окном.
+    static var lastStop = Date.distantPast
 
     private typealias Completion = (URL?, String, String?, String?) -> Void
     private var webView: WKWebView?
@@ -602,6 +604,7 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         // Сначала останавливаем видео окна и даём WebKit «отпустить» звук, потом отдаём ссылку плееру.
         // Иначе WebKit отпускал звук приложения уже после старта AVPlayer: время шло, звука не было (владелец).
         webView?.evaluateJavaScript("window.__fonStop && __fonStop()", completionHandler: nil)
+        Self.lastStop = Date()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             completion(url, note, title, userAgent)
             self?.runNext()
@@ -671,6 +674,12 @@ final class NativeAudio: NSObject {
     private var extending = false
     private var statusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
+    private var controlObservation: NSKeyValueObservation?
+    /// Пауза — от владельца (кнопка, экран блокировки, отключили наушники). Иначе остановку считаем случайной.
+    private var userPaused = false
+    /// Звонок или другое приложение забрали звук — сами не продолжаем, ждём конца прерывания.
+    private var interrupted = false
+    private var recoveries: [Date] = []
     private var stallTimer: Timer?
     /// 30 с без звука — трек уходит в обычный плеер (в 1.59–1.60 владелец оставался без музыки).
     private var deadline: Timer?
@@ -695,6 +704,46 @@ final class NativeAudio: NSObject {
                                                name: .AVPlayerItemDidPlayToEndTime, object: nil)
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] _ in
             self?.tick()
+        }
+        // Плеер встал — экран узнаёт сразу (периодический наблюдатель молчит, пока время стоит: раньше на экране
+        // «бежало» время при остановленном плеере — жалоба владельца), а случайная остановка — сразу продолжается.
+        controlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.statusChanged() }
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(interruption(_:)),
+                                               name: AVAudioSession.interruptionNotification, object: nil)
+    }
+
+    private func statusChanged() {
+        guard active else { return }
+        publish()
+        guard player.timeControlStatus == .paused, !userPaused, !interrupted, let item = player.currentItem,
+              playedOnceCurrent else { return }
+        let duration = item.duration.seconds
+        if duration.isFinite, player.currentTime().seconds > duration - 1 { return } // доиграл — дальше itemEnded
+        // Случайная пауза: скрытое окно, останавливая своё видео, отбирало звук у приложения (владелец: «играет
+        // чуть-чуть, потом будто пауза»). Продолжаем сами — не чаще 3 раз за 15 с, чтобы не спорить с iOS.
+        let now = Date()
+        recoveries = recoveries.filter { now.timeIntervalSince($0) < 15 }
+        guard recoveries.count < 3 else { return }
+        recoveries.append(now)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        player.play()
+        NativeAudio.lastLog += "; пауза не от вас — продолжил"
+    }
+
+    /// Звонок/другое приложение — не продолжаем сами до конца прерывания (продолжит MainViewController по
+    /// `.shouldResume`). Прерывание сразу после остановки видео скрытого окна — это само окно, не звонок.
+    @objc private func interruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        DispatchQueue.main.async {
+            if type == .began {
+                self.interrupted = Date().timeIntervalSince(SafariStream.lastStop) > 3
+                if !self.interrupted { self.statusChanged() }
+            } else {
+                self.interrupted = false
+            }
         }
     }
 
@@ -774,6 +823,7 @@ final class NativeAudio: NSObject {
         candidates = []
         triedSafari = false
         triedMain = false
+        userPaused = false
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
         listened = 0
@@ -920,18 +970,6 @@ final class NativeAudio: NSObject {
         }
     }
 
-    /// Подстраховка от «время идёт, звука нет»: через 1,5 с после старта — то, что помогало владельцу руками:
-    /// снова включить звук приложения и сделать короткую паузу + play (если скрытое окно всё же отпустило звук позже).
-    private func nudgeSound() {
-        let current = token
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, self.token == current, self.active, self.player.timeControlStatus == .playing else { return }
-            try? AVAudioSession.sharedInstance().setActive(true)
-            self.player.pause()
-            self.player.play()
-        }
-    }
-
     /// Трек — в обычный веб-плеер (системный не справился).
     private func fallBackToWeb() {
         guard let track = currentTrack else { return }
@@ -967,11 +1005,13 @@ final class NativeAudio: NSObject {
     }
 
     func play() {
+        userPaused = false
         if player.currentItem == nil { playCurrent() } else { player.play() }
         publish()
     }
 
     func pause() {
+        userPaused = true
         player.pause()
         publish()
     }
@@ -1050,7 +1090,6 @@ final class NativeAudio: NSObject {
                 let size = player.currentItem?.presentationSize ?? .zero
                 log(size.width > 0 ? "играет ✓, картинка \(Int(size.width))×\(Int(size.height))" : "играет ✓")
                 report()
-                nudgeSound()
             }
             endBackgroundTask()
             listened += 0.5
