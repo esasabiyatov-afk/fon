@@ -57,6 +57,14 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let dragGesture = UIPanGestureRecognizer()
     private var backgroundWatch: Timer?
     private var dragStartedInFullscreen = false
+    /// Скорость пальца в момент отпускания — чтобы анимация сворачивания/разворачивания продолжила движение.
+    private var releaseVelocity: CGFloat = 0
+
+    /// Скорость последнего свайпа (pt/с) для пружинной анимации; читается один раз.
+    func takeReleaseVelocity() -> CGFloat {
+        defer { releaseVelocity = 0 }
+        return releaseVelocity
+    }
     /// Открыто меню YouTube (⚙ и др.): свайп вниз закрывает его, а не плеер и не полный экран.
     private var youTubeMenuOpen = false
 
@@ -125,8 +133,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         // Мини: нажатие или свайп вверх — развернуть.
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniTapped))
         addGestureRecognizer(tap)
-        let swipeUp = UISwipeGestureRecognizer(target: self, action: #selector(miniTapped))
-        swipeUp.direction = .up
+        let swipeUp = UIPanGestureRecognizer(target: self, action: #selector(handleMiniDrag(_:)))
         addGestureRecognizer(swipeUp)
         miniGestures = [tap, swipeUp]
 
@@ -373,8 +380,18 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         // остаток свайпа сворачивал плеер, и видео пропадало (чёрный экран со звуком).
         if pan.state == .began { dragStartedInFullscreen = isFullscreen }
         if dragStartedInFullscreen {
-            if pan.state == .ended, isFullscreen, ty > 80 || velocity > 800 { exitFullscreen() }
-            if [.ended, .cancelled, .failed].contains(pan.state) { dragStartedInFullscreen = false }
+            // Видео в полном экране тоже едет за пальцем (с сопротивлением) и плавно возвращается.
+            switch pan.state {
+            case .changed:
+                webView.transform = CGAffineTransform(translationX: 0, y: rubberBand(ty, limit: bounds.height * 0.35))
+            case .ended, .cancelled, .failed:
+                let exit = pan.state == .ended && isFullscreen && (ty > 80 || velocity > 800)
+                springBack(webView, from: ty, velocity: velocity)
+                if exit { exitFullscreen() }
+                dragStartedInFullscreen = false
+            default:
+                break
+            }
             return
         }
 
@@ -385,23 +402,59 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             webView.scrollView.panGestureRecognizer.isEnabled = true
         case .changed:
             transform = CGAffineTransform(translationX: 0, y: ty)
-            layer.cornerRadius = min(18, ty / 8)
+            layer.cornerRadius = min(24, ty / 6)
         case .ended, .cancelled, .failed:
-            if pan.state == .ended, ty > 140 || velocity > 900 {
+            if pan.state == .ended, (ty > 140 && velocity > -200) || velocity > 900 {
                 let current = frame
                 transform = .identity
-                layer.cornerRadius = 0
                 frame = current
-                onCollapse?()
+                releaseVelocity = max(0, velocity)
+                onCollapse?() // дальше пружина от MainViewController со скоростью пальца
+                UIView.animate(withDuration: 0.3) { self.layer.cornerRadius = 0 }
             } else {
-                UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
-                               options: [.allowUserInteraction, .beginFromCurrentState]) {
-                    self.transform = .identity
-                    self.layer.cornerRadius = 0
-                }
+                springBack(self, from: ty, velocity: velocity)
+                UIView.animate(withDuration: 0.3) { self.layer.cornerRadius = 0 }
             }
         default:
             break
+        }
+    }
+
+    /// Мини-плеер: тянем вверх — полоска едет за пальцем, отпустили — разворачивается с той же скоростью.
+    @objc private func handleMiniDrag(_ pan: UIPanGestureRecognizer) {
+        guard mode == .mini else { return }
+        let dy = pan.translation(in: superview).y
+        let velocity = pan.velocity(in: superview).y
+        switch pan.state {
+        case .changed:
+            transform = CGAffineTransform(translationX: 0, y: dy < 0 ? -rubberBand(-dy, limit: 120) : rubberBand(dy, limit: 24))
+        case .ended, .cancelled, .failed:
+            if pan.state == .ended, dy < -30 || velocity < -400 {
+                let current = frame
+                transform = .identity
+                frame = current
+                releaseVelocity = max(0, -velocity)
+                onExpand?()
+            } else {
+                springBack(self, from: abs(dy), velocity: -abs(velocity))
+            }
+        default:
+            break
+        }
+    }
+
+    /// Сопротивление, как у прокрутки iOS: чем дальше тянешь, тем медленнее едет.
+    private func rubberBand(_ offset: CGFloat, limit: CGFloat) -> CGFloat {
+        guard offset > 0, limit > 0 else { return 0 }
+        return limit * (1 - 1 / (offset / limit * 0.55 + 1))
+    }
+
+    /// Вернуть вид на место пружиной, подхватив скорость пальца.
+    private func springBack(_ view: UIView, from distance: CGFloat, velocity: CGFloat) {
+        let initial = distance > 1 ? max(-8, min(8, -velocity / distance)) : 0
+        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: initial,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            view.transform = .identity
         }
     }
 

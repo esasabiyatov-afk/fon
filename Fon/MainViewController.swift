@@ -84,8 +84,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         // Плеер
         playerView.isHidden = true
         view.addSubview(playerView)
-        playerView.onExpand = { [weak self] in self?.setPlayerState(.expanded) }
-        playerView.onCollapse = { [weak self] in self?.setPlayerState(.mini) }
+        playerView.onExpand = { [weak self] in self?.setPlayerState(.expanded, velocity: self?.playerView.takeReleaseVelocity() ?? 0) }
+        playerView.onCollapse = { [weak self] in self?.setPlayerState(.mini, velocity: self?.playerView.takeReleaseVelocity() ?? 0) }
         playerView.onClose = { [weak self] in self?.setPlayerState(.hidden) }
         playerView.onOpenInBrowse = { [weak self] url in
             self?.webViewForLoading().load(URLRequest(url: url))
@@ -163,7 +163,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         (presentedViewController ?? self).present(alert, animated: true)
     }
 
-    private func setPlayerState(_ state: PlayerState) {
+    /// velocity — скорость свайпа (pt/с): пружина продолжает движение пальца, а не стартует с нуля.
+    private func setPlayerState(_ state: PlayerState, velocity: CGFloat = 0) {
+        let startY = playerView.frame.minY
+        let targetY: CGFloat = state == .mini ? tabBar.frame.minY - PlayerView.miniHeight : 0
+        let distance = abs(targetY - startY)
+        let springVelocity = distance > 1 ? min(10, velocity / distance) : 0
         playerState = state
         switch state {
         case .hidden: break
@@ -172,7 +177,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
         // Развёрнутый плеер закрывает вкладки, а мини-полоска никогда не должна закрывать их иконки.
         if state == .expanded { view.bringSubviewToFront(playerView) } else { view.bringSubviewToFront(tabBar) }
-        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0,
+        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: springVelocity,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.layoutPlayer()
             self.playerView.layoutIfNeeded()
