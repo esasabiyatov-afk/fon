@@ -1464,6 +1464,8 @@ enum Scripts {
   setInterval(() => {
     for (const v of document.querySelectorAll('video, audio')) {
       try { v.muted = true; } catch (e) {}
+      // Без playsinline iPhone открыл бы видео скрытого окна на весь экран поверх приложения.
+      try { v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.playsInline = true; } catch (e) {}
       send(v.currentSrc || v.src);
       // Ссылки всё нет — жмём «play» без звука: плеер может выбрать поток только при запуске.
       if (Date.now() - started > 2500 && v.paused && !v.__fonTried) {
