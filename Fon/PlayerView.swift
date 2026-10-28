@@ -14,6 +14,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onAddToPlaylist: ((Track) -> Void)?
     var onFullscreenChanged: ((Bool) -> Void)?
     var onSearch: ((String?) -> Void)?
+    /// Трек вот-вот закончится (или закончился) в фоне — приложению надо продержаться до следующего.
+    var onTrackEnding: (() -> Void)?
 
     static let miniHeight: CGFloat = 64
     static let accent = UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1)
@@ -477,6 +479,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             }
         case "search":
             onSearch?(body["query"] as? String)
+        case "trackEnding":
+            onTrackEnding?()
         case "fullscreen":
             setFullscreen(body["on"] as? Bool == true)
         case "browse":

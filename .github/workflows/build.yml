@@ -3,6 +3,7 @@ name: Build IPA
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md'] # правки описаний (CLAUDE.md, README) не создают новую версию приложения
   workflow_dispatch:
 
 permissions:

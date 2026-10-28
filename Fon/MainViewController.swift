@@ -88,6 +88,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         playerView.onAddToPlaylist = { [weak self] track in self?.presentAddToPlaylist(track) }
         playerView.onFullscreenChanged = { [weak self] on in self?.fullscreenChanged(on) }
         playerView.onSearch = { [weak self] query in self?.presentSearch(prefill: query) }
+        playerView.onTrackEnding = { [weak self] in
+            guard UIApplication.shared.applicationState != .active else { return }
+            self?.keepAliveUntilPlaying()
+        }
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -434,12 +438,17 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     @objc private func didEnterBackground() {
         try? AVAudioSession.sharedInstance().setActive(true)
+        keepAliveUntilPlaying()
+    }
+
+    /// Держим приложение (фоновая задача iOS, до ~25 с), пока видео не заиграет: при сворачивании
+    /// во время загрузки и на смене трека в фоне — иначе без звука iOS усыпляет приложение.
+    private func keepAliveUntilPlaying() {
         endBackgroundTask()
         backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
             self?.playerView.stopBackgroundWatch()
             self?.endBackgroundTask()
         }
-        // Держим приложение, пока видео не заиграет (или до лимита iOS).
         playerView.watchBackgroundStart { [weak self] in self?.endBackgroundTask() }
     }
 

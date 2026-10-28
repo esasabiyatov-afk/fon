@@ -146,7 +146,9 @@ enum Scripts {
     if (e.target instanceof HTMLMediaElement) { e.target.__fonUserPaused = false; applyActions(); }
   }, true);
   document.addEventListener('playing', (e) => {
-    if (e.target instanceof HTMLMediaElement) e.target.__fonPlayed = true;
+    if (!(e.target instanceof HTMLMediaElement)) return;
+    e.target.__fonPlayed = true;
+    if (!e.target.ended) endedInBg = null; // следующий трек пошёл
   }, true);
 
   // Сворачивание: WebKit ставит видео на паузу, потом страница становится скрытой.
@@ -179,12 +181,32 @@ enum Scripts {
   let wantPlay = false;
   const shouldForce = (v) =>
     !v.ended && !v.__fonHardPause && (!v.__fonUserPaused || !v.__fonPlayed);
+  // Трек доиграл в фоне: { id, at }. Пока грузится следующий, звука нет — iOS может усыпить
+  // приложение, поэтому приложение держится (trackEnding), а мы при необходимости жмём «следующий».
+  let endedInBg = null;
+  const nearEnd = (v) => !v.loop && isFinite(v.duration) && v.duration > 0 && v.duration - v.currentTime < 6;
+  document.addEventListener('ended', (e) => {
+    const v = e.target;
+    if (!(v instanceof HTMLMediaElement) || !fon.realHidden || v.loop) return;
+    endedInBg = { id: currentId(), at: Date.now() };
+    wantPlay = true;
+    fon.post({ type: 'trackEnding' });
+  }, true);
+
   fon.backgroundTick = (first) => {
     const v = fon.video();
-    if (first) wantPlay = !v || !v.paused || shouldForce(v); // видео ещё нет — значит, страница грузится
+    // Видео ещё нет — значит, страница грузится; трек доиграл в фоне — ждём следующий.
+    if (first) wantPlay = !v || !v.paused || shouldForce(v) || !!endedInBg;
     if (!wantPlay) return 'idle';
-    if (v && !v.paused && v.readyState >= 3) return 'playing';
+    // Трек вот-вот закончится — ещё не «играет стабильно»: держимся до начала следующего.
+    if (v && !v.paused && v.readyState >= 3) return nearEnd(v) ? 'waiting' : 'playing';
     clickContinue();
+    // YouTube сам не включил следующий трек (например, выключено автовоспроизведение) — включаем.
+    if (endedInBg && v && v.ended && currentId() === endedInBg.id && Date.now() - endedInBg.at > 3000) {
+      endedInBg.at = Date.now();
+      fon.cmd('next');
+      return 'waiting';
+    }
     if (v && v.paused && shouldForce(v)) {
       const p = origPlay.call(v);
       if (p && p.catch) p.catch(() => {});
@@ -541,6 +563,7 @@ enum Scripts {
   let ownMeta = false;
   let lastId = null;
   let lastThumbId = null;
+  let nearEndId = null;
   setInterval(() => {
     const v = fon.video();
     const id = currentId();
@@ -567,6 +590,12 @@ enum Scripts {
         ms.metadata = new MediaMetadata({ title, artist, artwork: [{ src: thumb, sizes: '480x360', type: 'image/jpeg' }] });
         ownMeta = true;
       } catch (e) {}
+    }
+
+    // В фоне за несколько секунд до конца трека просим приложение не засыпать на смене трека.
+    if (fon.realHidden && !v.paused && nearEnd(v) && nearEndId !== id) {
+      nearEndId = id;
+      fon.post({ type: 'trackEnding' });
     }
 
     if (fon.realHidden) return; // в фоне интерфейс не виден — не тратим энергию на сообщения
