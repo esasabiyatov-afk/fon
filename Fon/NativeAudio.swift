@@ -580,6 +580,26 @@ final class NativeAudio: NSObject {
         set { UserDefaults.standard.set(newValue, forKey: "nativeAudioLog") }
     }
 
+    /// Прошлые попытки (до 10, новые сверху) — для кнопки «Скопировать журнал» в настройках.
+    static var logHistory: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "nativeAudioLogHistory") ?? [] }
+        set { UserDefaults.standard.set(Array(newValue.prefix(10)), forKey: "nativeAudioLogHistory") }
+    }
+
+    /// Весь журнал одним текстом: текущая попытка и прошлые.
+    static var fullLog: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        return (["Fon \(version), iOS \(UIDevice.current.systemVersion)", lastLog] + logHistory).joined(separator: "\n\n")
+    }
+
+    /// Новая попытка: прошлая уходит в историю (с временем и id трека).
+    private static func startLog(for id: String) {
+        let previous = lastLog
+        if !previous.isEmpty, previous != "ещё не было" { logHistory = [previous] + logHistory }
+        let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        lastLog = "[\(time)] \(id)"
+    }
+
     private let player = AVPlayer()
     private var queue: [Track] = []
     private var index = 0
@@ -700,7 +720,7 @@ final class NativeAudio: NSObject {
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
         listened = 0
-        NativeAudio.lastLog = ""
+        NativeAudio.startLog(for: track.id)
         step = nil
         deadline?.invalidate()
         let limit = Timer(timeInterval: 30, repeats: false) { [weak self] _ in

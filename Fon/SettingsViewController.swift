@@ -29,13 +29,26 @@ final class SettingsViewController: UITableViewController {
         tableView.reloadData()
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 1 }
+    override func numberOfSections(in tableView: UITableView) -> Int { Settings.nativeAudio ? 2 : 1 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
 
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { "Воспроизведение" }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard indexPath.section == 1 else { return }
+        // Журнал — в буфер обмена: владелец вставляет его в чат (ссылки и номера видео целиком, без скриншотов).
+        UIPasteboard.general.string = NativeAudio.fullLog
+        let alert = UIAlertController(title: "Журнал скопирован", message: "Вставьте его в чат.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        section == 0 ? "Воспроизведение" : nil
+    }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard section == 0 else { return "Текущая и 10 прошлых попыток — одним текстом." }
         var text = "Экспериментально. В режиме музыки звук играет системный плеер iOS напрямую, без веб-страницы YouTube: "
             + "стабильнее в фоне и на экране блокировки, меньше расход батареи и трафика. "
             + "Только с ним работает ползунок громкости в плеере (музыку можно сделать тише игры). "
@@ -48,6 +61,17 @@ final class SettingsViewController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if indexPath.section == 1 {
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            var content = cell.defaultContentConfiguration()
+            content.text = "Скопировать журнал"
+            content.textProperties.color = PlayerView.accent
+            content.image = UIImage(systemName: "doc.on.doc")
+            content.imageProperties.tintColor = PlayerView.accent
+            cell.contentConfiguration = content
+            cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+            return cell
+        }
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
         var content = cell.defaultContentConfiguration()
         content.text = "Системный плеер для музыки"
