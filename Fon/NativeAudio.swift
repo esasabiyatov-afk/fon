@@ -410,7 +410,7 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     static weak var host: UIView?
     /// Временно (просьба владельца 29.10.2026): окно видно поверх приложения, чтобы видеть, что показывает
     /// YouTube; можно нажимать. После результата остаётся на экране 5 с. Убрать, когда путь заработает.
-    static let visible = true
+    static let visible = false // 1.62: путь заработал — окно снова скрыто (включить для проверки)
 
     private var frameView: UIView?
 

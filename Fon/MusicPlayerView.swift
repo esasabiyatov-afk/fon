@@ -197,6 +197,11 @@ final class MusicPlayerView: UIView {
         self.duration = duration
         stamp = CACurrentMediaTime()
         slider.maximumValue = Float(max(duration, 1))
+        if duration <= 0 {
+            // Новый трек ещё ищется: длины нет — ползунок в начало (иначе он оставался в конце от прошлого трека).
+            slider.value = 0
+            showTimes(0)
+        }
         if paused != self.paused || loop != looping || isNew {
             let pauseChanged = paused != self.paused
             self.paused = paused
