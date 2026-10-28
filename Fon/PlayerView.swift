@@ -49,6 +49,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let topTitleLabel = UILabel()
     private let musicButton = UIButton(type: .system)
     private let pipButton = UIButton(type: .system)
+    /// ♡ в режиме видео — сохраняет видео в «Понравившиеся» режима музыки (плейлист «Fon — музыка»).
+    private let likeButton = UIButton(type: .system)
+    private var currentTrack: Track?
+    private var likeShown: Bool?
     private var miniGestures: [UIGestureRecognizer] = []
     private let dragGesture = UIPanGestureRecognizer()
     private var backgroundWatch: Timer?
@@ -109,7 +113,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         pipButton.tintColor = .white
         pipButton.accessibilityLabel = "Картинка в картинке"
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
-        [collapseButton, pipButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
+        likeButton.tintColor = .white
+        likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
+        updateLikeButton()
+        NotificationCenter.default.addObserver(self, selector: #selector(updateLikeButton), name: CloudLikes.didChange, object: nil)
+        [collapseButton, likeButton, pipButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
         addSubview(topBar)
 
         // Мини: нажатие или свайп вверх — развернуть.
@@ -138,6 +146,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     func load(_ url: URL, source: String? = nil, queue: [String]? = nil) {
         queueIDs = queue.map { Set($0) }
         currentVideoID = Self.videoID(from: url)
+        currentTrack = nil
+        updateLikeButton()
         let list = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "list" }?.value
         musicView.sourceName = source ?? (list?.hasPrefix("RD") == true ? "Микс" : "YouTube")
         musicView.reset(id: currentVideoID)
@@ -186,6 +196,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.isHidden = !nativeMusic
         topBar.isHidden = isMini || nativeMusic || isFullscreen
         pipButton.isHidden = musicMode
+        likeButton.isHidden = musicMode // в режиме музыки ♡ — в самом музыкальном плеере
         updateMusicButton()
     }
 
@@ -233,6 +244,29 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         UIView.transition(with: self, duration: 0.25, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.updateVisibility()
         }
+    }
+
+    @objc private func updateLikeButton() {
+        let liked = currentTrack.map { CloudLikes.shared.isLiked($0.id) } ?? false
+        likeButton.isEnabled = currentTrack != nil
+        guard liked != likeShown else { return }
+        likeShown = liked
+        likeButton.setImage(UIImage(systemName: liked ? "heart.fill" : "heart",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
+        likeButton.tintColor = liked ? Self.accent : .white
+        likeButton.accessibilityLabel = liked ? "Убрать из «Понравившихся»" : "Добавить в «Понравившиеся»"
+    }
+
+    @objc private func likeTapped() {
+        guard let track = currentTrack else { return }
+        let liked = !CloudLikes.shared.isLiked(track.id)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CloudLikes.shared.setLiked(track, liked)
+        UIView.animate(withDuration: 0.12, animations: { self.likeButton.transform = CGAffineTransform(scaleX: 1.3, y: 1.3) }) { _ in
+            UIView.animate(withDuration: 0.2) { self.likeButton.transform = .identity }
+        }
+        showToast(liked ? "Добавлено в «Понравившиеся»" : "Убрано из «Понравившихся»",
+                  at: CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40))
     }
 
     /// «Картинка в картинке». Вызов из приложения WebKit считает нажатием пользователя, поэтому PiP разрешён.
@@ -405,8 +439,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             topBar.frame = CGRect(x: 0, y: 0, width: w, height: top + 44)
             collapseButton.frame = CGRect(x: safeAreaInsets.left + 4, y: top, width: 48, height: 44)
             pipButton.frame = CGRect(x: w - safeAreaInsets.right - 100, y: top, width: 48, height: 44)
+            likeButton.frame = CGRect(x: w - safeAreaInsets.right - 148, y: top, width: 48, height: 44)
             musicButton.frame = CGRect(x: w - safeAreaInsets.right - 52, y: top, width: 48, height: 44)
-            topTitleLabel.frame = CGRect(x: 104, y: top, width: max(0, w - 208), height: 44)
+            topTitleLabel.frame = CGRect(x: safeAreaInsets.left + 56, y: top, width: max(0, w - safeAreaInsets.left - safeAreaInsets.right - 56 - 152), height: 44)
             webView.frame = CGRect(x: 0, y: topBar.frame.maxY, width: w, height: bounds.height - topBar.frame.maxY)
         }
     }
@@ -468,6 +503,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             if mode == .mini { progressView.frame.size.width = bounds.width * progress }
             if let id = body["id"] as? String {
                 currentVideoID = id
+                if currentTrack?.id != id {
+                    let clean = TrackTitle.clean(title: title, artist: artist)
+                    currentTrack = Track(id: id, title: clean.title, artist: clean.artist)
+                    updateLikeButton()
+                }
                 if let queue = queueIDs, !queue.contains(id) {
                     queueIDs = nil
                     musicView.sourceName = "Похожие треки"
