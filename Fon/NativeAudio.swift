@@ -50,9 +50,24 @@ enum YouTubeStreams {
         var log: [String] = []
     }
 
-    /// Все найденные потоки трека — по порядку предпочтения.
+    /// Все найденные потоки трека — по порядку предпочтения. Сначала — запросом самой страницы m.youtube
+    /// (вход в аккаунт, Safari): так YouTube отвечает охотнее всего; затем — клиенты напрямую.
     static func resolve(_ videoID: String) async -> Result {
         var result = Result()
+        if let page = await viaPage(videoID) {
+            let headers = ["User-Agent": WebViewFactory.safariUserAgent()]
+            if let hls = (page["hls"] as? String).flatMap(URL.init(string:)) {
+                result.streams.append(AudioStream(url: hls, headers: headers, client: "MWEB HLS"))
+            }
+            for url in (page["audio"] as? [String] ?? []).prefix(1).compactMap(URL.init(string:)) {
+                result.streams.append(AudioStream(url: url, headers: headers, client: "MWEB m4a"))
+            }
+            result.title = page["title"] as? String
+            result.author = page["author"] as? String
+            result.log.append("MWEB: " + (page["diag"] as? String ?? "?"))
+        } else {
+            result.log.append("MWEB: нет ответа")
+        }
         for client in clients {
             var context: [String: Any] = ["clientName": client.name, "clientVersion": client.version, "hl": "ru"]
             context.merge(client.extra) { $1 }
@@ -86,9 +101,28 @@ enum YouTubeStreams {
                 result.streams.append(AudioStream(url: url, headers: headers, client: client.name + " m4a"))
                 found += 1
             }
-            result.log.append("\(client.name): \(found == 0 ? "нет ссылок" : "ок")")
+            let kinds = result.streams.filter { $0.client.hasPrefix(client.name + " ") }.map { $0.client.replacingOccurrences(of: client.name + " ", with: "") }
+            result.log.append("\(client.name): \(found == 0 ? "нет ссылок" : kinds.joined(separator: "+"))")
         }
         return result
+    }
+
+    /// Запрос из скрытого окна m.youtube (`__fonCloud.stream`). Не ответило за 10 с — nil.
+    private static func viaPage(_ id: String) async -> [String: Any]? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                var done = false
+                let finish: ([String: Any]?) -> Void = { value in
+                    guard !done else { return }
+                    done = true
+                    continuation.resume(returning: value)
+                }
+                HiddenPage.youtube.call("__fonCloud.stream(id)", { ["id": id] }) { result in
+                    if case .success(let value) = result { finish(value as? [String: Any]) } else { finish(nil) }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10) { finish(nil) }
+            }
+        }
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
@@ -308,7 +342,7 @@ final class NativeAudio: NSObject {
                 case .readyToPlay:
                     self.player.play()
                 case .failed:
-                    NativeAudio.lastLog += "; \(stream.client): \(item.error?.localizedDescription ?? "ошибка")"
+                    NativeAudio.lastLog += "; \(stream.client): \(Self.describe(item))"
                     self.tryNextCandidate()
                 default:
                     break
@@ -330,6 +364,18 @@ final class NativeAudio: NSObject {
     }
 
     private var playedOnceCurrent: Bool { player.currentTime().seconds > 0.5 }
+
+    /// Почему поток не открылся: код HTTP из журнала AVPlayer (403 — YouTube не пустил) или код ошибки.
+    private static func describe(_ item: AVPlayerItem) -> String {
+        if let event = item.errorLog()?.events.last, event.errorStatusCode != 0 {
+            return "HTTP \(event.errorStatusCode)"
+        }
+        guard let error = item.error as NSError? else { return "ошибка" }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return "\(error.code)/\(underlying.code)"
+        }
+        return "\(error.code)"
+    }
 
     /// Первый трек не заиграл (или два подряд) — переходим на веб-плеер с этим же треком.
     private func trackFailed() {
