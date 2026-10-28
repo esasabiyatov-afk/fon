@@ -433,6 +433,12 @@ enum Scripts {
     html.fon-full .ytm-popup-container {
       z-index: 2147483647 !important;
     }
+    /* «Фоновая подсветка» (размытое свечение вокруг видео) в полном экране не нужна: вокруг и так
+       чёрные поля, а лишний слой тратит батарею и мешает отрисовке видео. */
+    html.fon-full ytm-cinematic-container-renderer,
+    html.fon-full #cinematics,
+    html.fon-full #cinematics-container,
+    html.fon-full .cinematic-container { display: none !important; }
     html.fon-full video,
     html.fon-full.fon-music video {
       position: absolute !important; top: 0 !important; left: 0 !important;
@@ -472,15 +478,37 @@ enum Scripts {
 
   // После поворота, выхода из полного экрана или возврата в приложение WebKit иногда теряет
   // картинку видео (чёрный экран, звук идёт). Заставляем его перерисовать слой видео.
+  // Видео на один кадр убираем и возвращаем — WebKit пересоздаёт слой с картинкой (звук не прерывается).
+  const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : (f) => setTimeout(f, 16);
+  let repainting = false;
+  let quietUntil = 0; // перестройки страницы в ответ на нашу же перерисовку не считаем — без зацикливания
   fon.repaint = () => {
     const v = fon.video();
+    quietUntil = Date.now() + 1200;
     fire(window, 'resize');
-    if (!v) return;
-    const prev = v.style.transform;
-    v.style.transform = 'translateZ(0)';
-    const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : (f) => setTimeout(f, 16);
-    raf(() => raf(() => { v.style.transform = prev; }));
+    if (!v || repainting) return;
+    repainting = true;
+    const prev = v.style.display;
+    v.style.display = 'none';
+    raf(() => raf(() => { v.style.display = prev; repainting = false; }));
   };
+  let repaintTimer = null;
+  const repaintSoon = (delay) => {
+    if (Date.now() < quietUntil) return;
+    clearTimeout(repaintTimer);
+    repaintTimer = setTimeout(() => { if (!fon.realHidden) fon.repaint(); }, delay || 400);
+  };
+  // Меню ⚙ и другие окна YouTube меняют классы/стили body и добавляют в него элементы —
+  // после этого картинка видео пропадала. Ловим такие перестройки и перерисовываем.
+  const watchLayout = () => {
+    try {
+      new MutationObserver(() => repaintSoon()).observe(document.body, { attributes: true, attributeFilter: ['class', 'style'], childList: true });
+      new MutationObserver(() => repaintSoon()).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) {}
+  };
+  if (document.body) watchLayout(); else document.addEventListener('DOMContentLoaded', watchLayout);
+  // Прокрутка в полном экране (например, списка в меню) — тоже повод перерисовать.
+  window.addEventListener('touchend', () => { if (fon.isFull) repaintSoon(500); }, true);
   fon.setFull = setFull;
   const getter = (obj, name, get) => { try { Object.defineProperty(obj, name, { get, configurable: true }); } catch (e) {} };
   const VP = HTMLVideoElement.prototype;
