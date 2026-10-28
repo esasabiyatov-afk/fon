@@ -73,7 +73,8 @@ final class Library {
 /// Квадратные обложки треков из превью YouTube, с кэшем в памяти.
 final class ArtworkLoader {
     static let shared = ArtworkLoader()
-    enum Size { case small, large }
+    /// player — для плеера: обложка как есть (квадрат альбома или кадр 16:9 без полей).
+    enum Size { case small, large, player }
 
     private let images = NSCache<NSString, UIImage>()
     private let colors = NSCache<NSString, UIColor>()
@@ -88,8 +89,8 @@ final class ArtworkLoader {
         }
         // mqdefault — 16:9 без чёрных полос; maxres есть не у всех видео, тогда берём поменьше.
         let names = size == .small ? ["mqdefault", "hqdefault"] : ["maxresdefault", "sddefault", "hqdefault"]
-        fetch(id, names: names[...], maxSide: size == .small ? 160 : 900) { [weak self] image in
-            let color = (size == .large ? image.flatMap(ArtworkLoader.averageColor) : nil)
+        fetch(id, names: names[...], maxSide: size == .small ? 160 : 900, wide: size == .player) { [weak self] image in
+            let color = (size != .small ? image.flatMap(ArtworkLoader.averageColor) : nil)
             if let image { self?.images.setObject(image, forKey: key) }
             if let color { self?.colors.setObject(color, forKey: key) }
             DispatchQueue.main.async { completion(image, color) }
@@ -110,7 +111,7 @@ final class ArtworkLoader {
         }.resume()
     }
 
-    private func fetch(_ id: String, names: ArraySlice<String>, maxSide: CGFloat, done: @escaping (UIImage?) -> Void) {
+    private func fetch(_ id: String, names: ArraySlice<String>, maxSide: CGFloat, wide: Bool, done: @escaping (UIImage?) -> Void) {
         guard let name = names.first, let url = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg") else {
             done(nil)
             return
@@ -118,9 +119,9 @@ final class ArtworkLoader {
         URLSession.shared.dataTask(with: url) { data, response, _ in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             if ok, let data, let image = UIImage(data: data), image.size.width > 150 {
-                done(ArtworkLoader.squareArtwork(image, maxSide: maxSide))
+                done(ArtworkLoader.squareArtwork(image, maxSide: maxSide, wide: wide))
             } else {
-                self.fetch(id, names: names.dropFirst(), maxSide: maxSide, done: done)
+                self.fetch(id, names: names.dropFirst(), maxSide: maxSide, wide: wide, done: done)
             }
         }.resume()
     }
@@ -128,8 +129,8 @@ final class ArtworkLoader {
     /// Квадратная обложка из превью. Сначала берём кадр 16:9 (у превью 4:3 сверху и снизу чёрные полосы).
     /// Если по бокам кадра однотонные поля — в центре обложка альбома, вырезаем квадрат.
     /// Если картинка на весь кадр — показываем её целиком, а сверху и снизу размытую копию,
-    /// чтобы не отрезать края (например, текст на обложке).
-    static func squareArtwork(_ image: UIImage, maxSide: CGFloat) -> UIImage? {
+    /// чтобы не отрезать края (например, текст на обложке). wide — вместо этого кадр 16:9 как есть (для плеера).
+    static func squareArtwork(_ image: UIImage, maxSide: CGFloat, wide: Bool = false) -> UIImage? {
         guard let cg = image.cgImage else { return image }
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
         let bandH = min(h, w * 9 / 16)
@@ -146,6 +147,14 @@ final class ArtworkLoader {
             let side = min(bh, maxSide)
             return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
                 UIImage(cgImage: square).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+            }
+        }
+
+        if wide {
+            let bw = min(CGFloat(band.width), maxSide)
+            let bh = bw * CGFloat(band.height) / CGFloat(band.width)
+            return UIGraphicsImageRenderer(size: CGSize(width: bw, height: bh), format: format).image { _ in
+                UIImage(cgImage: band).draw(in: CGRect(x: 0, y: 0, width: bw, height: bh))
             }
         }
 

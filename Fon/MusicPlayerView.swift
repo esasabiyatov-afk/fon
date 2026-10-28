@@ -20,6 +20,8 @@ final class MusicPlayerView: UIView {
     private let videoButton = UIButton(type: .system)
     private let artworkContainer = UIView()
     private let artworkView = UIImageView()
+    /// Ширина к высоте у текущей обложки: 1 — квадрат, 16/9 — кадр видео.
+    private var artworkAspect: CGFloat = 1
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
     private let likeButton = UIButton(type: .system)
@@ -176,12 +178,21 @@ final class MusicPlayerView: UIView {
     private func loadArtwork(_ id: String) {
         artworkView.image = UIImage(systemName: "music.note")
         artworkView.contentMode = .center
-        ArtworkLoader.shared.load(id, size: .large) { [weak self] image, color in
+        ArtworkLoader.shared.load(id, size: .player) { [weak self] image, color in
             guard let self, self.track == nil || self.track?.id == id else { return }
             if let image {
+                // Обложка как есть: квадрат альбома или кадр видео 16:9 — без чёрных полей.
+                let aspect = image.size.width > 0 ? min(2, max(1, image.size.width / image.size.height)) : 1
                 UIView.transition(with: self.artworkView, duration: 0.3, options: .transitionCrossDissolve) {
                     self.artworkView.contentMode = .scaleAspectFill
                     self.artworkView.image = image
+                }
+                if aspect != self.artworkAspect {
+                    self.artworkAspect = aspect
+                    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                        self.setNeedsLayout()
+                        self.layoutIfNeeded()
+                    }
                 }
             }
             if let color { self.setTint(color) }
@@ -321,7 +332,7 @@ final class MusicPlayerView: UIView {
             art = max(120, min(pw, space))
             artCenter = CGPoint(x: w / 2, y: contentTop + space / 2 + 4)
         }
-        artworkContainer.bounds = CGRect(x: 0, y: 0, width: art, height: art)
+        artworkContainer.bounds = CGRect(x: 0, y: 0, width: art, height: art / artworkAspect)
         artworkContainer.center = artCenter
         artworkView.frame = artworkContainer.bounds
         artworkContainer.layer.shadowPath = UIBezierPath(roundedRect: artworkContainer.bounds, cornerRadius: 10).cgPath
