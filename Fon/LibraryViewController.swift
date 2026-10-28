@@ -20,12 +20,19 @@ final class LibraryViewController: UITableViewController {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         refreshControl = UIRefreshControl()
         refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
+        let settings = UIBarButtonItem(image: UIImage(systemName: "gearshape"), style: .plain, target: self, action: #selector(openSettings))
+        settings.accessibilityLabel = "Настройки"
+        navigationItem.rightBarButtonItem = settings
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
         nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil)
     }
 
     @objc private func reload() { tableView.reloadData() }
+
+    @objc private func openSettings() {
+        navigationController?.pushViewController(SettingsViewController(), animated: true)
+    }
 
     @objc private func pullToRefresh() {
         CloudLikes.shared.refresh { [weak self] in self?.refreshControl?.endRefreshing() }
