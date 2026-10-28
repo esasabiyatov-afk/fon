@@ -708,6 +708,38 @@ enum Scripts {
   for (const n of ['fullscreenElement', 'webkitFullscreenElement', 'webkitCurrentFullScreenElement']) getter(Document.prototype, n, () => fullEl);
   for (const n of ['fullscreen', 'webkitIsFullScreen']) getter(Document.prototype, n, () => fon.isFull);
   for (const n of ['fullscreenEnabled', 'webkitFullscreenEnabled']) getter(Document.prototype, n, () => true);
+  // Кнопка полного экрана YouTube в нашем полном экране не выводила из него (владелец: «кнопка свернуть
+  // не работает») — YouTube снова просил «войти». Пока полный экран включён, нажатие на неё — выход.
+  const FULL_BUTTON = /полноэкран|full\s?screen/i;
+  const shown = (el) => {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.1) return false;
+    }
+    return true;
+  };
+  const fullButton = (target) => {
+    if (!fon.isFull || !target || !target.closest) return null;
+    const b = target.closest('.fullscreen-icon, button, [role="button"]');
+    if (!b) return null;
+    const label = b.getAttribute('aria-label') || b.getAttribute('title') || '';
+    if (!b.classList.contains('fullscreen-icon') && !FULL_BUTTON.test(label)) return null;
+    return shown(b) ? b : null; // панель скрыта — касание лишь показывает её
+  };
+  window.addEventListener('click', (e) => {
+    if (!fullButton(e.target)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    setFull(false);
+  }, true);
+  // Если YouTube гасит click после касания — выходим по самому касанию (без сдвига пальца).
+  let tapX = 0, tapY = 0;
+  window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (t) { tapX = t.clientX; tapY = t.clientY; } }, true);
+  window.addEventListener('touchend', (e) => {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t || Math.abs(t.clientX - tapX) > 12 || Math.abs(t.clientY - tapY) > 12 || !fullButton(e.target)) return;
+    setTimeout(() => { if (fon.isFull) setFull(false); }, 350);
+  }, true);
 
   // --- 4b. Режим музыки и экономия: самое низкое качество видео, когда картинка не нужна.
   // YouTube запоминает выбранное качество в localStorage — из-за этого 144p «прилипало»
