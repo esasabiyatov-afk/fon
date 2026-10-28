@@ -108,7 +108,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
-        musicView.onVolume = { [weak self] value in self?.runJS("window.__fon && __fon.setVolume && __fon.setVolume(\(value))") }
+        musicView.onVolume = { [weak self] value in self?.webView.setMediaVolume(Float(value)) }
+        musicView.volumeAvailable = webView.supportsMediaVolume
         addSubview(musicView)
 
         // Шапка развёрнутого плеера
@@ -215,7 +216,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func applyPageState() {
         runJS("window.__fon && __fon.setMini && __fon.setMini(\(mode == .mini))")
         runJS("window.__fon && __fon.setMusic && __fon.setMusic(\(musicMode))")
-        runJS("window.__fon && __fon.setVolume && __fon.setVolume(\(Settings.youtubeVolume))")
+        webView.setMediaVolume(Float(Settings.youtubeVolume))
     }
 
     private func updateMusicButton() {

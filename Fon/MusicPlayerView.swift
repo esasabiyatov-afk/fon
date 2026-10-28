@@ -10,6 +10,10 @@ final class MusicPlayerView: UIView {
     var onVideoMode: (() -> Void)?
     /// Своя громкость YouTube (0…1), отдельно от громкости телефона.
     var onVolume: ((Double) -> Void)?
+    /// Нет регулятора громкости в WebKit этой версии iOS — ползунок не показываем.
+    var volumeAvailable = true {
+        didSet { [volumeSlider, volumeLow, volumeHigh].forEach { $0.isHidden = !volumeAvailable } }
+    }
 
     private(set) var track: Track?
     var sourceName: String = "YouTube" { didSet { sourceLabel.text = sourceName } }

@@ -206,7 +206,6 @@ enum Scripts {
 
   fon.backgroundTick = (first) => {
     const v = fon.video();
-    try { fon.wakeVolume(); } catch (e) {}
     // Видео ещё нет — значит, страница грузится; трек доиграл в фоне — ждём следующий.
     if (first) wantPlay = !v || !v.paused || shouldForce(v) || !!endedInBg;
     if (!wantPlay) return 'idle';
@@ -245,36 +244,6 @@ enum Scripts {
     v.muted = false;
   };
   fon.unmute = unmute;
-
-  // --- 1d. Своя громкость YouTube (ползунок в плеере): тише, чем игра или другие приложения.
-  // На iPhone video.volume не работает, поэтому звук пропускаем через Web Audio с регулятором.
-  // Пока громкость 100%, ничего не подключаем — звук идёт обычным путём.
-  let audioCtx = null, gainNode = null, wiredVideo = null;
-  fon.volume = 1;
-  fon.setVolume = (value) => {
-    fon.volume = Math.max(0, Math.min(1, Number(value) || 0));
-    const v = fon.video();
-    if (!v || (fon.volume >= 0.999 && !gainNode)) return;
-    try {
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        gainNode = audioCtx.createGain();
-        gainNode.connect(audioCtx.destination);
-      }
-      if (wiredVideo !== v) {
-        audioCtx.createMediaElementSource(v).connect(gainNode);
-        wiredVideo = v;
-      }
-      gainNode.gain.value = fon.volume;
-      if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
-    } catch (e) {}
-  };
-  // Регулятор не должен засыпать: при каждом запуске видео (и в фоне) будим его.
-  fon.wakeVolume = () => {
-    if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
-    if ((gainNode || fon.volume < 0.999) && fon.video() !== wiredVideo) fon.setVolume(fon.volume);
-  };
-  document.addEventListener('playing', () => fon.wakeVolume(), true);
   document.addEventListener('volumechange', (e) => {
     const v = e.target;
     if (!(v instanceof HTMLMediaElement)) return;

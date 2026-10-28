@@ -77,3 +77,19 @@ final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
         target?.userContentController(userContentController, didReceive: message)
     }
 }
+
+extension WKWebView {
+    private static let mediaVolumeSelector = NSSelectorFromString("_setMediaVolumeForTesting:")
+
+    /// Есть ли у WebKit свой регулятор громкости страницы (служебный метод, не из App Store API).
+    var supportsMediaVolume: Bool { responds(to: Self.mediaVolumeSelector) }
+
+    /// Громкость всех видео на странице (0…1) — отдельно от громкости телефона.
+    /// На iPhone `video.volume` из JavaScript не работает, а этот регулятор WebKit — внутри движка.
+    func setMediaVolume(_ volume: Float) {
+        guard supportsMediaVolume else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Float) -> Void
+        let setter = unsafeBitCast(method(for: Self.mediaVolumeSelector), to: Setter.self)
+        setter(self, Self.mediaVolumeSelector, max(0, min(1, volume)))
+    }
+}
