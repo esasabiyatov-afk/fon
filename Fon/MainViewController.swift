@@ -379,8 +379,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             } else {
                 load(path: root, in: webView)
             }
-        case .none:
-            break
+        case .search, .none:
+            break // повторное нажатие «Поиска» обрабатывает tabSelected
         }
     }
 
