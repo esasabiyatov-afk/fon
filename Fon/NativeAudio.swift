@@ -449,6 +449,17 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         finish(nil, "страница не открылась")
     }
 
+    /// На мобильной версии (m.youtube.com) системного плеера нет (проверил владелец) — туда не идём.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.targetFrame?.isMainFrame != false, navigationAction.request.url?.host == "m.youtube.com" {
+            decisionHandler(.cancel)
+            finish(nil, "YouTube перекинул на мобильную версию")
+            return
+        }
+        decisionHandler(.allow)
+    }
+
     private func finish(_ url: URL?, _ note: String) {
         guard let completion else { return }
         self.completion = nil
