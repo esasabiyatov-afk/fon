@@ -176,6 +176,61 @@ enum YouTubeStreams {
         return result
     }
 
+    /// User-Agent Safari на iPhone (как его пишет сам WebKit — версия iOS «заморожена»); скрытое окно
+    /// присылает настоящий, до этого — такой же по образцу.
+    static var iPhoneSafariUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+
+    /// Прямой путь, шаг 1 (просьба владельца — без окна, «прямой перехват»): та же страница, что открывает окно
+    /// (`app=desktop`, Safari на iPhone, вход), но запросом приложения. Только разведка для журнала: есть ли
+    /// файл itag 18, чем зашифрована ссылка (`signatureCipher`: s + sp, параметр n), где код плеера (base.js).
+    static func probeDirect(_ id: String) async -> String {
+        guard let url = URL(string: "\(origin)/watch?app=desktop&v=\(id)&hl=ru") else { return "нет ссылки" }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpShouldHandleCookies = false
+        request.setValue(iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return "нет ответа" }
+        let http = reply as? HTTPURLResponse
+        var notes = ["HTTP \(http?.statusCode ?? 0)"]
+        if let final = http?.url, final.host != url.host || !final.path.hasPrefix("/watch") {
+            notes.append("перекинуло на \(final.host ?? "?")\(final.path)")
+        }
+        guard let response = jsonObject(in: data, after: "ytInitialPlayerResponse = ") else {
+            return (notes + ["нет ответа плеера"]).joined(separator: ", ")
+        }
+        let playability = response["playabilityStatus"] as? [String: Any]
+        notes.append(playability?["status"] as? String ?? "?")
+        let streaming = response["streamingData"] as? [String: Any] ?? [:]
+        let formats = streaming["formats"] as? [[String: Any]] ?? []
+        let adaptive = streaming["adaptiveFormats"] as? [[String: Any]] ?? []
+        notes.append("файлы \(formats.count), раздельные \(adaptive.count)")
+        if streaming["hlsManifestUrl"] != nil { notes.append("HLS") }
+        if streaming["serverAbrStreamingUrl"] != nil { notes.append("SABR") }
+        if let f18 = formats.first(where: { ($0["itag"] as? Int) == 18 }) {
+            if let direct = f18["url"] as? String {
+                let names = URLComponents(string: direct)?.queryItems?.map(\.name) ?? []
+                notes.append("18: ссылка готова (\(["n", "sig", "pot"].filter(names.contains).joined(separator: ",")))")
+            } else if let cipher = f18["signatureCipher"] as? String {
+                let items = URLComponents(string: "?" + cipher)?.queryItems ?? []
+                let sp = items.first { $0.name == "sp" }?.value ?? "?"
+                let inner = items.first { $0.name == "url" }?.value.flatMap { URLComponents(string: $0)?.queryItems?.map(\.name) } ?? []
+                notes.append("18: шифр (sp=\(sp), n в ссылке: \(inner.contains("n") ? "да" : "нет"))")
+            } else {
+                notes.append("18: без ссылки")
+            }
+        } else {
+            notes.append("18: нет")
+        }
+        if let js = string(in: data, after: "\"jsUrl\":\"") {
+            notes.append("код: " + (js.components(separatedBy: "/").dropFirst(3).first ?? js.suffix(30).description))
+        } else {
+            notes.append("код: не найден")
+        }
+        return notes.joined(separator: ", ")
+    }
+
     /// Страница видео, как её получает Safari на Mac: ytInitialPlayerResponse + настройки клиента.
     private static func watchPage(_ id: String) async -> (response: [String: Any]?, note: String) {
         guard let url = URL(string: "\(origin)/watch?v=\(id)&has_verified=1&bpctr=9999999999&hl=ru") else { return (nil, "нет ссылки") }
@@ -544,6 +599,7 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         let names = Set(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.map(\.name) ?? [])
         let marks = ["pot", "n", "sig", "lsig", "itag"].filter(names.contains).joined(separator: ",")
         let itag = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "itag" }?.value ?? "?"
+        if let ua = body["ua"] as? String, !ua.isEmpty { YouTubeStreams.iPhoneSafariUserAgent = ua }
         finish(url, (text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл") + " (itag \(itag); \(marks))",
                title: body["title"] as? String, userAgent: body["ua"] as? String)
     }
@@ -936,6 +992,14 @@ final class NativeAudio: NSObject {
         triedSafari = true
         log("Safari: ищу ссылку…")
         let current = token
+        // Прямой путь, шаг 1 — только разведка в журнал, звук пока идёт через окно.
+        Task { [weak self] in
+            let note = await YouTubeStreams.probeDirect(track.id)
+            await MainActor.run {
+                guard let self, self.token == current else { return }
+                NativeAudio.lastLog += "; прямо: " + note
+            }
+        }
         Task { [weak self] in
             let found = await SafariStream.find(track.id)
             await MainActor.run {
