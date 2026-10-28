@@ -1460,12 +1460,39 @@ enum Scripts {
     if ((this instanceof HTMLMediaElement || this instanceof HTMLSourceElement) && String(name).toLowerCase() === 'src') send(value);
     return setAttr.call(this, name, value);
   };
+  const started = Date.now();
   setInterval(() => {
     for (const v of document.querySelectorAll('video, audio')) {
       try { v.muted = true; } catch (e) {}
       send(v.currentSrc || v.src);
+      // Ссылки всё нет — жмём «play» без звука: плеер может выбрать поток только при запуске.
+      if (Date.now() - started > 2500 && v.paused && !v.__fonTried) {
+        v.__fonTried = true;
+        try { const p = document.getElementById('movie_player'); if (p && p.playVideo) p.playVideo(); } catch (e) {}
+        try { const r = v.play(); if (r && r.catch) r.catch(() => {}); } catch (e) {}
+      }
     }
   }, 300);
+  // Для журнала, если ссылку не поймали: что на странице.
+  window.__fonDiag = () => {
+    const parts = [location.host + location.pathname];
+    const vids = Array.from(document.querySelectorAll('video'));
+    parts.push('видео ' + vids.length);
+    for (const v of vids.slice(0, 2)) parts.push(String(v.currentSrc || v.src || 'без src').slice(0, 40));
+    try {
+      const pr = window.ytInitialPlayerResponse;
+      if (pr) {
+        const sd = pr.streamingData || {};
+        parts.push((pr.playabilityStatus && pr.playabilityStatus.status) || '?');
+        parts.push(sd.hlsManifestUrl ? 'HLS есть' : 'HLS нет');
+        if (sd.serverAbrStreamingUrl) parts.push('SABR');
+      } else {
+        parts.push('нет ответа плеера');
+      }
+    } catch (e) {}
+    parts.push('MSE ' + (window.MediaSource ? 'да' : 'нет') + '/' + (window.ManagedMediaSource ? 'да' : 'нет'));
+    return parts.join(', ');
+  };
 })();
 """#
 }

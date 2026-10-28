@@ -432,7 +432,7 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent() // как Safari после очистки истории: без входа и cookies
         config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = .all
+        config.mediaTypesRequiringUserActionForPlayback = [] // звук и так выключен скриптом; «play» нужен для ссылки
         // Именно как iPhone: с «Запросом версии для компьютера» (UA Mac) YouTube включает свой плеер (проверил
         // владелец). На iPad WebKit по умолчанию просит версию для компьютера — запрещаем.
         config.defaultWebpagePreferences.preferredContentMode = .mobile
@@ -449,7 +449,7 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         // Компьютерная версия (`app=desktop`, не m.youtube): на iPhone её плеер играет системным плеером iOS
         // по обычной ссылке HLS — владелец проверил в Safari, в том числе со входом в аккаунт.
         webView.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?app=desktop&v=\(videoID)")!))
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.finish(nil, "ссылки нет (YouTube дал свой плеер)") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.timedOut() }
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -459,6 +459,15 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         finish(nil, "страница не открылась")
+    }
+
+    /// За 15 с ссылки нет — в журнал то, что видно на странице (адрес, видео, ответ плеера).
+    private func timedOut() {
+        guard completion != nil, let webView else { return }
+        webView.evaluateJavaScript("window.__fonDiag ? __fonDiag() : 'скрипт не работал'") { [weak self] value, _ in
+            self?.finish(nil, "ссылки нет (\(value as? String ?? "страница не ответила"))")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.finish(nil, "ссылки нет (страница не ответила)") }
     }
 
     /// На мобильной версии (m.youtube.com) системного плеера нет (проверил владелец) — туда не идём.
@@ -640,8 +649,13 @@ final class NativeAudio: NSObject {
     }
 
     /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
+    /// Журнал попытки (виден в ⚙) — по шагам, сразу, чтобы было видно, на чём остановилось.
+    private func log(_ text: String) {
+        NativeAudio.lastLog += (NativeAudio.lastLog.isEmpty ? "" : "; ") + text
+    }
+
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
-        NativeAudio.lastLog += (NativeAudio.lastLog.isEmpty ? "" : "; ") + result.log.joined(separator: "; ")
+        if !result.log.isEmpty { log(result.log.joined(separator: "; ")) }
         if queue.indices.contains(index), queue[index].id == track.id, queue[index].title.isEmpty, let title = result.title {
             let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
             queue[index] = Track(id: track.id, title: clean.title, artist: clean.artist)
@@ -654,6 +668,7 @@ final class NativeAudio: NSObject {
     private func tryMain() {
         guard !triedMain, let track = currentTrack else { return trackFailed() }
         triedMain = true
+        log("страница и токен: ищу…")
         let current = token
         Task { [weak self] in
             let result = await YouTubeStreams.resolve(track.id)
@@ -670,6 +685,7 @@ final class NativeAudio: NSObject {
         guard active else { return }
         guard !candidates.isEmpty else { return triedSafari ? tryMain() : trySafari() }
         let stream = candidates.removeFirst()
+        log("\(stream.client): пробую")
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
         let item = AVPlayerItem(asset: asset)
         if stream.isMaster {
@@ -694,10 +710,10 @@ final class NativeAudio: NSObject {
         }
         player.replaceCurrentItem(with: item)
         player.play()
-        // Не заиграл за 12 с — пробуем следующий поток.
+        // Не заиграл за 10 с — пробуем следующий поток.
         lastProgress = Date()
         stallTimer?.invalidate()
-        let timer = Timer(timeInterval: 12, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: 10, repeats: false) { [weak self] _ in
             guard let self, self.token == current, !self.playedOnceCurrent else { return }
             NativeAudio.lastLog += "; \(stream.client): не заиграл"
             self.tryNextCandidate()
@@ -710,6 +726,7 @@ final class NativeAudio: NSObject {
     private func trySafari() {
         guard !triedSafari, let track = currentTrack else { return tryMain() }
         triedSafari = true
+        log("Safari: ищу ссылку…")
         let current = token
         Task { [weak self] in
             let found = await SafariStream.find(track.id)
@@ -741,6 +758,7 @@ final class NativeAudio: NSObject {
         if !playedOnce || failuresInRow >= 2 {
             guard let track = currentTrack else { return }
             let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
+            log("→ обычный плеер")
             deactivate()
             if let url { onFallback?(url) }
             return
