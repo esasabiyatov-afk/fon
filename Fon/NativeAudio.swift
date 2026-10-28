@@ -979,7 +979,9 @@ final class NativeAudio: NSObject {
             stallTimer?.invalidate()
             deadline?.invalidate()
             if !reported {
-                log("играет ✓")
+                // Размер картинки потока — чтобы решить, годится ли этот путь для режима видео (владелец спросил).
+                let size = player.currentItem?.presentationSize ?? .zero
+                log(size.width > 0 ? "играет ✓, картинка \(Int(size.width))×\(Int(size.height))" : "играет ✓")
                 report()
             }
             endBackgroundTask()
