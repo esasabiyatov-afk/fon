@@ -8,12 +8,3 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "musicMode") }
     }
 }
-
-extension Settings {
-    /// Системный плеер для музыки (эксперимент, выключен по умолчанию): звук режима музыки играет
-    /// AVPlayer напрямую, без веб-страницы. Не вышло — тот же трек включается в обычном веб-плеере.
-    static var nativeAudio: Bool {
-        get { UserDefaults.standard.bool(forKey: "nativeAudio") }
-        set { UserDefaults.standard.set(newValue, forKey: "nativeAudio") }
-    }
-}

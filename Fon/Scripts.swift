@@ -1033,26 +1033,6 @@ enum Scripts {
       }
       return { chip: true, videos, mixes };
     },
-    // Поток трека для системного плеера — тем же запросом, что делает сама страница m.youtube
-    // (вход в аккаунт, Safari на iPhone). { hls, audio: [url], title, author, diag }
-    async stream(id) {
-      const out = { hls: null, audio: [], diag: '' };
-      const pr = await api('player', {
-        videoId: id, contentCheckOk: true, racyCheckOk: true,
-        playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } }
-      });
-      const status = (pr.playabilityStatus && pr.playabilityStatus.status) || '?';
-      const sd = pr.streamingData;
-      const formats = (sd && sd.adaptiveFormats) || [];
-      const audio = formats.filter((f) => /^audio\/mp4/.test(f.mimeType || ''));
-      const direct = audio.filter((f) => f.url).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-      if (sd && sd.hlsManifestUrl) out.hls = sd.hlsManifestUrl;
-      out.audio = direct.map((f) => f.url);
-      if (pr.videoDetails) { out.title = pr.videoDetails.title; out.author = pr.videoDetails.author; }
-      out.diag = status + (sd ? (sd.hlsManifestUrl ? ', HLS' : ', без HLS') + ', m4a ' + direct.length + '/' + audio.length
-        + (sd.serverAbrStreamingUrl ? ', SABR' : '') : ', без потоков');
-      return out;
-    },
     async unlike(pid, id) {
       pid = pid || await findPlaylist();
       if (pid) {
