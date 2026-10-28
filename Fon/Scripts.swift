@@ -1436,4 +1436,36 @@ enum Scripts {
   };
 })();
 """#
+
+    /// Скрытое окно «чистого Safari» (`SafariStream`): YouTube без входа иногда отдаёт iPhone видео обычной
+    /// ссылкой (системный плеер iOS вместо MediaSource — наблюдение владельца). Ловим эту ссылку, звук не нужен.
+    static let safariSource = #"""
+(() => {
+  const send = (u) => {
+    try {
+      if (u && /^https?:/.test(String(u))) window.webkit.messageHandlers.fonSrc.postMessage(String(u));
+    } catch (e) {}
+  };
+  const proto = HTMLMediaElement.prototype;
+  const desc = Object.getOwnPropertyDescriptor(proto, 'src');
+  if (desc && desc.set) {
+    Object.defineProperty(proto, 'src', {
+      configurable: true,
+      get() { return desc.get.call(this); },
+      set(value) { send(value); try { this.muted = true; } catch (e) {} desc.set.call(this, value); }
+    });
+  }
+  const setAttr = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    if ((this instanceof HTMLMediaElement || this instanceof HTMLSourceElement) && String(name).toLowerCase() === 'src') send(value);
+    return setAttr.call(this, name, value);
+  };
+  setInterval(() => {
+    for (const v of document.querySelectorAll('video, audio')) {
+      try { v.muted = true; } catch (e) {}
+      send(v.currentSrc || v.src);
+    }
+  }, 300);
+})();
+"""#
 }

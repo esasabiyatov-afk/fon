@@ -110,6 +110,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         CloudLikes.shared.start(in: view)
         MusicFeed.shared.start(in: view)
         HiddenPage.desktop.start(in: view) // токен для системного плеера
+        SafariStream.host = view
         showTab(0)
     }
 

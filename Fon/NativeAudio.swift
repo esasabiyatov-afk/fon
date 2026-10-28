@@ -391,6 +391,74 @@ enum YouTubeStreams {
     }
 }
 
+/// Запасной путь к потоку (наблюдение владельца 29.10.2026): Safari без входа и истории YouTube иногда
+/// играет системным плеером iOS — у видео обычная ссылка на поток, а не MediaSource. Открываем страницу
+/// так же — в скрытом окне с чистыми данными — и забираем эту ссылку для AVPlayer.
+final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    /// Куда вставить скрытое окно (без родителя WebKit не работает) — задаёт MainViewController.
+    static weak var host: UIView?
+
+    private var webView: WKWebView?
+    private var completion: ((URL?, String) -> Void)?
+    private var keepAlive: SafariStream?
+
+    static func find(_ videoID: String) async -> (stream: AudioStream?, note: String) {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                guard let host else { return continuation.resume(returning: (nil, "нет окна")) }
+                SafariStream().start(videoID, in: host) { url, note in
+                    guard let url else { return continuation.resume(returning: (nil, note)) }
+                    let hls = url.absoluteString.contains("m3u8") || url.host?.hasPrefix("manifest") == true
+                    let stream = AudioStream(url: url, headers: ["User-Agent": WebViewFactory.safariUserAgent()],
+                                             client: hls ? "Safari HLS" : "Safari файл", isMaster: hls)
+                    continuation.resume(returning: (stream, note))
+                }
+            }
+        }
+    }
+
+    private func start(_ videoID: String, in host: UIView, completion: @escaping (URL?, String) -> Void) {
+        self.completion = completion
+        keepAlive = self
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent() // как Safari после очистки истории: без входа и cookies
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = .all
+        config.userContentController.add(WeakScriptHandler(self), name: "fonSrc")
+        config.userContentController.addUserScript(WKUserScript(source: Scripts.safariSource, injectionTime: .atDocumentStart,
+                                                                forMainFrameOnly: false))
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
+        webView.customUserAgent = WebViewFactory.safariUserAgent()
+        webView.alpha = 0.01
+        webView.isUserInteractionEnabled = false
+        webView.navigationDelegate = self
+        host.insertSubview(webView, at: 0)
+        self.webView = webView
+        webView.load(URLRequest(url: URL(string: "https://m.youtube.com/watch?v=\(videoID)")!))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.finish(nil, "ссылки нет (YouTube дал свой плеер)") }
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let text = message.body as? String, let url = URL(string: text) else { return }
+        finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        finish(nil, "страница не открылась")
+    }
+
+    private func finish(_ url: URL?, _ note: String) {
+        guard let completion else { return }
+        self.completion = nil
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "fonSrc")
+        webView?.stopLoading()
+        webView?.removeFromSuperview()
+        webView = nil
+        completion(url, note)
+        keepAlive = nil
+    }
+}
+
 /// Системный плеер режима музыки (настройка «Системный плеер»): AVPlayer, своя очередь (микс или
 /// свой плейлист), экран блокировки через MPNowPlayingInfoCenter. Не нашлось потока для первого
 /// трека — `onFallback` отдаёт ссылку, и PlayerView включает её в обычном веб-плеере.
@@ -423,6 +491,7 @@ final class NativeAudio: NSObject {
     private var playlistID: String?
     private var loop = false
     private var candidates: [AudioStream] = []
+    private var triedSafari = false
     private var token = UUID()
     private var playedOnce = false
     private var failuresInRow = 0
@@ -526,6 +595,7 @@ final class NativeAudio: NSObject {
         let current = UUID()
         token = current
         candidates = []
+        triedSafari = false
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
         listened = 0
@@ -551,7 +621,7 @@ final class NativeAudio: NSObject {
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
     private func tryNextCandidate() {
         guard active else { return }
-        guard !candidates.isEmpty else { return trackFailed() }
+        guard !candidates.isEmpty else { return trySafari() }
         let stream = candidates.removeFirst()
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
         let item = AVPlayerItem(asset: asset)
@@ -587,6 +657,22 @@ final class NativeAudio: NSObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         stallTimer = timer
+    }
+
+    /// Основной поток не заиграл — пробуем ссылку, которую YouTube даёт «чистому» Safari (один раз на трек).
+    private func trySafari() {
+        guard !triedSafari, let track = currentTrack else { return trackFailed() }
+        triedSafari = true
+        let current = token
+        Task { [weak self] in
+            let found = await SafariStream.find(track.id)
+            await MainActor.run {
+                guard let self, self.token == current, self.active else { return }
+                NativeAudio.lastLog += "; Safari: " + found.note
+                if let stream = found.stream { self.candidates = [stream] }
+                self.tryNextCandidate()
+            }
+        }
     }
 
     private var playedOnceCurrent: Bool { player.currentTime().seconds > 0.5 }
