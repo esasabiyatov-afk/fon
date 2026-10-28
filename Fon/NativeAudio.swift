@@ -764,8 +764,12 @@ final class NativeAudio: NSObject {
     }
 
     /// Запасной путь: поток со страницы www.youtube.com + защитный токен (см. YouTubeStreams).
+    /// Путь «страница + токен» (YouTubeStreams.resolve + PoToken): в 1.57–1.62 ни разу не заиграл (куски — 403),
+    /// только оттягивал переход в обычный плеер — выключен. Код оставлен на случай, если пригодится.
+    static let useStreamFallback = false
+
     private func tryMain() {
-        guard !triedMain, let track = currentTrack else { return trackFailed() }
+        guard Self.useStreamFallback, !triedMain, let track = currentTrack else { return trackFailed() }
         triedMain = true
         log("страница и токен: ищу…")
         let current = token
@@ -998,7 +1002,7 @@ final class NativeAudio: NSObject {
         prefetching.insert(id)
         Task { [weak self] in
             var result = await SafariStream.find(id)
-            if result.streams.isEmpty { result = await YouTubeStreams.resolve(id) }
+            if result.streams.isEmpty, NativeAudio.useStreamFallback { result = await YouTubeStreams.resolve(id) }
             await MainActor.run {
                 guard let self else { return }
                 self.prefetching.remove(id)
