@@ -337,18 +337,21 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             self?.stopBackgroundWatch()
             done()
         }
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+        // Первый толчок — сразу (раньше ждали секунду, отсюда пауза ~1 с при сворачивании), дальше раз в 0,5 с.
+        let step: () -> Void = { [weak self] in
             guard let self else { return finish() }
             tick += 1
             let js = "window.__fon && __fon.backgroundTick ? __fon.backgroundTick(\(tick == 1)) : 'none'"
             self.webView.evaluateJavaScript(js) { result, _ in
                 let state = result as? String ?? "none"
                 playingTicks = state == "playing" ? playingTicks + 1 : 0
-                if playingTicks >= 2 || state == "idle" || tick >= 25 { finish() }
+                if playingTicks >= 3 || state == "idle" || tick >= 50 { finish() }
             }
         }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { _ in step() }
         RunLoop.main.add(timer, forMode: .common)
         backgroundWatch = timer
+        step()
     }
 
     func stopBackgroundWatch() {
