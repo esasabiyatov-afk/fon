@@ -608,6 +608,8 @@ final class NativeAudio: NSObject {
     private var candidates: [AudioStream] = []
     private var triedSafari = false
     private var triedMain = false
+    /// Журнал этой попытки уже ушёл на GitHub (`LogUploader`).
+    private var reported = false
     private var token = UUID()
     private var playedOnce = false
     private var failuresInRow = 0
@@ -721,6 +723,7 @@ final class NativeAudio: NSObject {
         player.replaceCurrentItem(with: nil)
         listened = 0
         NativeAudio.startLog(for: track.id)
+        reported = false
         step = nil
         deadline?.invalidate()
         let limit = Timer(timeInterval: 30, repeats: false) { [weak self] _ in
@@ -863,8 +866,17 @@ final class NativeAudio: NSObject {
         guard let track = currentTrack else { return }
         let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
         log("→ обычный плеер")
+        report()
         deactivate()
         if let url { onFallback?(url) }
+    }
+
+    /// Итог попытки (заиграло или ушло в обычный плеер) — в обсуждение GitHub, если владелец включил.
+    private func report() {
+        guard !reported else { return }
+        reported = true
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        LogUploader.send("Fon \(version), iOS \(UIDevice.current.systemVersion)\n" + NativeAudio.lastLog)
     }
 
     // MARK: - Команды
@@ -962,6 +974,10 @@ final class NativeAudio: NSObject {
             failuresInRow = 0
             stallTimer?.invalidate()
             deadline?.invalidate()
+            if !reported {
+                log("играет ✓")
+                report()
+            }
             endBackgroundTask()
             listened += 0.5
             prefetchNextIfNeeded(time: t)
