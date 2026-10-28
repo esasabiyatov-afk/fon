@@ -1437,8 +1437,9 @@ enum Scripts {
 })();
 """#
 
-    /// Скрытое окно `SafariStream`: компьютерная версия www.youtube.com (`app=desktop`) на iPhone играет видео
-    /// системным плеером iOS по обычной ссылке HLS (наблюдение владельца). Ловим эту ссылку, звук не нужен.
+    /// Постоянное скрытое окно `SafariStream`: компьютерная версия www.youtube.com (`app=desktop`) на iPhone играет
+    /// видео системным плеером iOS по обычной ссылке (находка владельца). Ловим ссылку, звук не нужен.
+    /// Окно грузится один раз; следующие треки — `__fonLoad(id)` (команда плеера YouTube, без перезагрузки).
     static let safariSource = #"""
 (() => {
   // В 1.60 плеер YouTube в этом окне взял ManagedMediaSource (blob:, без HLS). В Safari владельца видео шло
@@ -1447,9 +1448,15 @@ enum Scripts {
     try { delete window[n]; } catch (e) {}
     if (n in window) { try { Object.defineProperty(window, n, { value: undefined, configurable: true, writable: true }); } catch (e) {} }
   }
+  const player = () => document.getElementById('movie_player');
+  const videoInfo = () => {
+    try { const d = player() && player().getVideoData && player().getVideoData(); if (d && d.video_id) return d; } catch (e) {}
+    return null;
+  };
   // Остановить видео окна: WebKit, останавливая медиа, «отпускает» звук приложения — пусть это случится
   // до старта системного плеера, а не после (иначе время шло без звука, жалоба владельца).
   let done = false;
+  let started = Date.now();
   const stopAll = () => {
     for (const v of document.querySelectorAll('video, audio')) {
       try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
@@ -1460,10 +1467,24 @@ enum Scripts {
     try {
       if (!done && u && /^https?:/.test(String(u))) {
         done = true;
-        window.webkit.messageHandlers.fonSrc.postMessage({ src: String(u), title: document.title || '', ua: navigator.userAgent });
+        const info = videoInfo();
+        const id = info ? info.video_id : new URLSearchParams(location.search).get('v');
+        window.webkit.messageHandlers.fonSrc.postMessage({
+          src: String(u), id: id || '', title: (info && info.title) || document.title || '', ua: navigator.userAgent
+        });
         setTimeout(stopAll, 0);
       }
     } catch (e) {}
+  };
+  // Следующий трек без перезагрузки страницы. false — плеера нет (приложение загрузит страницу заново).
+  window.__fonLoad = (id) => {
+    const p = player();
+    if (!p || typeof p.loadVideoById !== 'function') return false;
+    done = false;
+    started = Date.now();
+    for (const v of document.querySelectorAll('video, audio')) v.__fonTried = false;
+    p.loadVideoById(id);
+    return true;
   };
   const proto = HTMLMediaElement.prototype;
   const desc = Object.getOwnPropertyDescriptor(proto, 'src');
@@ -1479,17 +1500,17 @@ enum Scripts {
     if ((this instanceof HTMLMediaElement || this instanceof HTMLSourceElement) && String(name).toLowerCase() === 'src') send(value);
     return setAttr.call(this, name, value);
   };
-  const started = Date.now();
   setInterval(() => {
+    if (done) return;
     for (const v of document.querySelectorAll('video, audio')) {
       try { v.muted = true; } catch (e) {}
       // Без playsinline iPhone открыл бы видео скрытого окна на весь экран поверх приложения.
       try { v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.playsInline = true; } catch (e) {}
       send(v.currentSrc || v.src);
-      // Ссылки всё нет — жмём «play» без звука: плеер может выбрать поток только при запуске.
-      if (!done && Date.now() - started > 2500 && v.paused && !v.__fonTried) {
+      // Ссылки всё нет — жмём «play» без звука: плеер выбирает поток только при запуске (так и в Safari).
+      if (!done && Date.now() - started > 1200 && v.paused && !v.__fonTried) {
         v.__fonTried = true;
-        try { const p = document.getElementById('movie_player'); if (p && p.playVideo) p.playVideo(); } catch (e) {}
+        try { const p = player(); if (p && p.playVideo) p.playVideo(); } catch (e) {}
         try { const r = v.play(); if (r && r.catch) r.catch(() => {}); } catch (e) {}
       }
     }

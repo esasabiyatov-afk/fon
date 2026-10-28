@@ -403,38 +403,39 @@ enum YouTubeStreams {
 }
 
 /// Поток по находке владельца (29.10.2026): www.youtube.com/watch?app=desktop в Safari на iPhone играет
-/// системным плеером iOS (и в приватной вкладке, и со входом) — у видео обычная ссылка на поток, а не MediaSource. Открываем страницу
-/// так же — в скрытом окне с чистыми данными — и забираем эту ссылку для AVPlayer.
+/// системным плеером iOS — у видео обычная ссылка на поток, а не MediaSource. Скрытое окно открывает такую
+/// страницу (со входом в аккаунт, UA как у Safari) и отдаёт ссылку AVPlayer. Окно **одно и постоянное**:
+/// страница грузится один раз, следующие треки — командой плеера YouTube `__fonLoad(id)` (быстрее, меньше
+/// запросов к Google — без капчи). Не вышло (нет плеера, капча, 15 с без ссылки) — страница грузится заново.
 final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Куда вставить скрытое окно (без родителя WebKit не работает) — задаёт MainViewController.
     static weak var host: UIView?
-    /// Временно (просьба владельца 29.10.2026): окно видно поверх приложения, чтобы видеть, что показывает
-    /// YouTube; можно нажимать. После результата остаётся на экране 5 с. Убрать, когда путь заработает.
-    static let visible = false // 1.62: путь заработал — окно снова скрыто (включить для проверки)
+    /// Для проверки (просьба владельца): окно видно поверх приложения карточкой, можно нажимать.
+    static let visible = false
 
-    private var frameView: UIView?
+    private static let shared = SafariStream()
 
+    private typealias Completion = (URL?, String, String?, String?) -> Void
     private var webView: WKWebView?
-    private var completion: ((URL?, String, String?) -> Void)?
-    /// User-Agent окна — с ним же AVPlayer открывает поток.
-    private(set) var userAgent: String?
-    private var keepAlive: SafariStream?
+    private var card: UIView?
+    private var cardLabel: UILabel?
+    /// Страница загружена, плеер YouTube на ней — следующий трек можно включать без перезагрузки.
+    private var pageReady = false
+    private var queue: [(id: String, completion: Completion)] = []
+    private var currentID: String?
+    private var completion: Completion?
+    private var attempt = 0
 
-    /// Поток трека и название страницы (для очереди без названий).
+    /// Поток трека и его название.
     static func find(_ videoID: String) async -> YouTubeStreams.Result {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
-                var result = YouTubeStreams.Result()
-                guard let host else {
-                    result.log.append("Safari: нет окна")
-                    return continuation.resume(returning: result)
-                }
-                let finder = SafariStream()
-                finder.start(videoID, in: host) { url, note, title in
+                shared.request(videoID) { url, note, title, userAgent in
+                    var result = YouTubeStreams.Result()
                     result.log.append("Safari: " + note)
                     if let url {
                         let hls = url.absoluteString.contains("m3u8") || url.host?.hasPrefix("manifest") == true
-                        result.streams = [AudioStream(url: url, headers: ["User-Agent": finder.userAgent ?? WebViewFactory.safariUserAgent()],
+                        result.streams = [AudioStream(url: url, headers: ["User-Agent": userAgent ?? WebViewFactory.safariUserAgent()],
                                                       client: hls ? "Safari HLS" : "Safari файл", isMaster: hls)]
                     }
                     let name = (title ?? "").replacingOccurrences(of: " - YouTube", with: "").trimmingCharacters(in: .whitespaces)
@@ -445,9 +446,43 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         }
     }
 
-    private func start(_ videoID: String, in host: UIView, completion: @escaping (URL?, String, String?) -> Void) {
-        self.completion = completion
-        keepAlive = self
+    /// Запросы — строго по одному (окно одно).
+    private func request(_ videoID: String, completion: @escaping Completion) {
+        queue.append((id: videoID, completion: completion))
+        runNext()
+    }
+
+    private func runNext() {
+        guard completion == nil, !queue.isEmpty else { return }
+        let next = queue.removeFirst()
+        guard let webView = ensureWebView() else { return next.completion(nil, "нет окна", nil, nil) }
+        completion = next.completion
+        currentID = next.id
+        attempt += 1
+        let current = attempt
+        setCard("Ищу: \(next.id)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, self.attempt == current else { return }
+            self.timedOut()
+        }
+        guard pageReady else { return load(next.id) }
+        let id = next.id.replacingOccurrences(of: "'", with: "")
+        webView.evaluateJavaScript("window.__fonLoad ? __fonLoad('\(id)') : false") { [weak self] value, _ in
+            guard let self, self.attempt == current, self.completion != nil else { return }
+            if value as? Bool != true { self.load(next.id) } // плеера на странице нет — грузим заново
+        }
+    }
+
+    private func load(_ videoID: String) {
+        pageReady = false
+        // Компьютерная версия (`app=desktop`, не m.youtube): на iPhone её плеер играет системным плеером iOS
+        // по обычной ссылке — владелец проверил в Safari, в том числе со входом в аккаунт.
+        webView?.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?app=desktop&v=\(videoID)")!))
+    }
+
+    private func ensureWebView() -> WKWebView? {
+        if let webView { return webView }
+        guard let host = Self.host else { return nil }
         let config = WKWebViewConfiguration()
         // С входом в аккаунт (общие cookies приложения): в 1.61 окно «без cookies» на каждый трек Google принял за бота
         // (google.com/sorry — капча). Владелец проверил: со входом в Safari системный плеер тоже работает.
@@ -457,14 +492,13 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         // Именно как iPhone: с «Запросом версии для компьютера» (UA Mac) YouTube включает свой плеер (проверил
         // владелец). На iPad WebKit по умолчанию просит версию для компьютера — запрещаем.
         config.defaultWebpagePreferences.preferredContentMode = .mobile
+        // User-Agent ровно как у Safari: WebKit сам подставляет версию iOS так, как это делает Safari (в iOS 26 —
+        // «iPhone OS 18_6»), а мы дописываем хвост Safari. Со своим UA («iPhone OS 26_…») YouTube давал свой плеер.
+        let parts = UIDevice.current.systemVersion.split(separator: ".")
+        config.applicationNameForUserAgent = "Version/\(parts.first ?? "18").\(parts.count > 1 ? parts[1] : "0") Mobile/15E148 Safari/604.1"
         config.userContentController.add(WeakScriptHandler(self), name: "fonSrc")
         config.userContentController.addUserScript(WKUserScript(source: Scripts.safariSource, injectionTime: .atDocumentStart,
                                                                 forMainFrameOnly: false))
-        // User-Agent ровно как у Safari: WebKit сам подставляет версию iOS так, как это делает Safari (в iOS 26 —
-        // «iPhone OS 18_6»), а мы дописываем хвост Safari. В 1.60 со своим UA («iPhone OS 26_…») YouTube дал окну
-        // свой плеер (blob:, без HLS), а Safari владельца — системный.
-        let parts = UIDevice.current.systemVersion.split(separator: ".")
-        config.applicationNameForUserAgent = "Version/\(parts.first ?? "18").\(parts.count > 1 ? parts[1] : "0") Mobile/15E148 Safari/604.1"
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         webView.navigationDelegate = self
         if Self.visible {
@@ -476,85 +510,97 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             card.layer.borderColor = PlayerView.accent.cgColor
             card.clipsToBounds = true
             let label = UILabel(frame: CGRect(x: 10, y: 0, width: card.bounds.width - 20, height: 26))
-            label.text = "Скрытое окно (проверка)"
             label.font = .systemFont(ofSize: 13, weight: .semibold)
             label.textColor = .white
             card.addSubview(label)
             webView.frame = CGRect(x: 0, y: 26, width: card.bounds.width, height: card.bounds.height - 26)
             card.addSubview(webView)
             host.addSubview(card)
-            frameView = card
+            self.card = card
+            cardLabel = label
         } else {
             webView.alpha = 0.01
             webView.isUserInteractionEnabled = false
             host.insertSubview(webView, at: 0)
         }
         self.webView = webView
-        // Компьютерная версия (`app=desktop`, не m.youtube): на iPhone её плеер играет системным плеером iOS
-        // по обычной ссылке HLS — владелец проверил в Safari, в том числе со входом в аккаунт.
-        webView.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?app=desktop&v=\(videoID)")!))
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.timedOut() }
+        return webView
+    }
+
+    private func setCard(_ text: String) {
+        guard let card, let cardLabel, let host = Self.host else { return }
+        cardLabel.text = text
+        host.bringSubviewToFront(card)
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let text = body["src"] as? String, let url = URL(string: text) else { return }
-        userAgent = body["ua"] as? String
-        finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл", title: body["title"] as? String)
+        guard completion != nil, let body = message.body as? [String: Any], let text = body["src"] as? String,
+              let url = URL(string: text) else { return }
+        // Ссылка от прошлого трека (плеер ещё не переключился) — не та.
+        if let id = body["id"] as? String, !id.isEmpty, let currentID, id != currentID { return }
+        finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл",
+               title: body["title"] as? String, userAgent: body["ua"] as? String)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pageReady = true
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        pageReady = false
         finish(nil, "страница не открылась")
     }
 
-    /// За 15 с ссылки нет — в журнал то, что видно на странице (адрес, видео, ответ плеера).
-    private func timedOut() {
-        guard completion != nil, let webView else { return }
-        webView.evaluateJavaScript("window.__fonDiag ? __fonDiag() : 'скрипт не работал'") { [weak self] value, _ in
-            self?.finish(nil, "ссылки нет (\(value as? String ?? "страница не ответила"))")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.finish(nil, "ссылки нет (страница не ответила)") }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        pageReady = false
+        finish(nil, "окно перезапущено")
     }
 
     /// На мобильной версии (m.youtube.com) системного плеера нет (проверил владелец) — туда не идём.
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if navigationAction.targetFrame?.isMainFrame != false, navigationAction.request.url?.host == "m.youtube.com" {
+        let main = navigationAction.targetFrame?.isMainFrame != false
+        if main, navigationAction.request.url?.host == "m.youtube.com" {
             decisionHandler(.cancel)
+            pageReady = false
             finish(nil, "YouTube перекинул на мобильную версию")
             return
         }
-        if navigationAction.targetFrame?.isMainFrame != false, let url = navigationAction.request.url,
-           url.host?.hasSuffix("google.com") == true, url.path.hasPrefix("/sorry") {
+        if main, let url = navigationAction.request.url, url.host?.hasSuffix("google.com") == true, url.path.hasPrefix("/sorry") {
             decisionHandler(.cancel)
+            pageReady = false
             finish(nil, "Google просит капчу (принял за бота)")
             return
         }
         decisionHandler(.allow)
     }
 
-    private func finish(_ url: URL?, _ note: String, title: String? = nil) {
+    /// За 15 с ссылки нет — в журнал то, что видно на странице; в следующий раз страница грузится заново.
+    private func timedOut() {
+        guard completion != nil, let webView else { return }
+        let current = attempt
+        pageReady = false
+        webView.evaluateJavaScript("window.__fonDiag ? __fonDiag() : 'скрипт не работал'") { [weak self] value, _ in
+            guard let self, self.attempt == current else { return }
+            self.finish(nil, "ссылки нет (\(value as? String ?? "страница не ответила"))")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.attempt == current else { return }
+            self.finish(nil, "ссылки нет (страница не ответила)")
+        }
+    }
+
+    private func finish(_ url: URL?, _ note: String, title: String? = nil, userAgent: String? = nil) {
         guard let completion else { return }
         self.completion = nil
-        let shownWeb = webView, card = frameView
-        webView = nil
-        frameView = nil
-        shownWeb?.configuration.userContentController.removeScriptMessageHandler(forName: "fonSrc")
+        attempt += 1 // таймеры этой попытки больше не действуют
+        setCard((url != nil ? "Найдено: " : "Нет: ") + note)
         // Сначала останавливаем видео окна и даём WebKit «отпустить» звук, потом отдаём ссылку плееру.
         // Иначе WebKit отпускал звук приложения уже после старта AVPlayer: время шло, звука не было (владелец).
-        shownWeb?.evaluateJavaScript("window.__fonStop && __fonStop()", completionHandler: nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            if let card, let label = card.subviews.first(where: { $0 is UILabel }) as? UILabel {
-                label.text = (url != nil ? "Найдено: " : "Нет: ") + note // видно ещё 5 с
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    shownWeb?.stopLoading()
-                    card.removeFromSuperview()
-                }
-            } else {
-                shownWeb?.stopLoading()
-                shownWeb?.removeFromSuperview()
-            }
-            completion(url, note, title)
-            self.keepAlive = nil
+        webView?.evaluateJavaScript("window.__fonStop && __fonStop()", completionHandler: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            completion(url, note, title, userAgent)
+            self?.runNext()
         }
     }
 }
@@ -1004,7 +1050,9 @@ final class NativeAudio: NSObject {
             }
             endBackgroundTask()
             listened += 0.5
-            prefetchNextIfNeeded(time: t)
+            // Заранее следующий трек не ищем: скрытое окно, останавливая своё видео посреди песни, могло
+            // выключить звук приложения; с постоянным окном поиск и так ~1–2 с.
+            // prefetchNextIfNeeded(time: t)
             // «Недавно слушали» — после 20 с, как у веб-плеера.
             if listened >= 20, let track = currentTrack, recordedID != track.id, !track.title.isEmpty {
                 recordedID = track.id
