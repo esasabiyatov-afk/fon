@@ -299,7 +299,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         stopBackgroundWatch()
         guard let url = webView.url, WebViewFactory.isYouTube(url) else { return done() }
         var tick = 0
-        var playingTicks = 0
         var finished = false
         let finish: () -> Void = { [weak self] in
             guard !finished else { return }
@@ -314,11 +313,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let js = "window.__fon && __fon.backgroundTick ? __fon.backgroundTick(\(tick == 1)) : 'none'"
             self.webView.evaluateJavaScript(js) { result, _ in
                 let state = result as? String ?? "none"
-                playingTicks = state == "playing" ? playingTicks + 1 : 0
-                // iOS ставит паузу не сразу при сворачивании, а через долю секунды — секунду. Поэтому следим
-                // минимум 5 с и отпускаем, только когда музыка стабильно играет 4 с подряд (в 1.52 отпускали
-                // через ~1 с — пауза от iOS приходила уже после, и музыка останавливалась).
-                if (playingTicks >= 8 && tick >= 10) || state == "idle" || tick >= 50 { finish() }
+                // iOS ставит паузу не сразу при сворачивании, а через долю секунды — секунду (в 1.52 следили
+                // ~1 с и пропускали её). Поэтому следим всё время, что iOS даёт фоновой задаче (~25 с),
+                // а раньше отпускаем, только если пользователь сам поставил паузу.
+                if state == "idle" || tick >= 50 { finish() }
             }
         }
         let timer = Timer(timeInterval: 0.5, repeats: true) { _ in step() }
