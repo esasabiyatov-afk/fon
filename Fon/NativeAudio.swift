@@ -534,6 +534,10 @@ final class NativeAudio: NSObject {
     private var statusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var stallTimer: Timer?
+    /// 30 с без звука — трек уходит в обычный плеер (в 1.59–1.60 владелец оставался без музыки).
+    private var deadline: Timer?
+    /// Текущий шаг поиска потока — виден в плеере вместо исполнителя, пока звука нет.
+    private var step: String?
     private var lastProgress = Date()
     private var listened: Double = 0
     private var recordedID: String?
@@ -636,6 +640,15 @@ final class NativeAudio: NSObject {
         player.replaceCurrentItem(with: nil)
         listened = 0
         NativeAudio.lastLog = ""
+        step = nil
+        deadline?.invalidate()
+        let limit = Timer(timeInterval: 30, repeats: false) { [weak self] _ in
+            guard let self, self.token == current, self.active, !self.playedOnceCurrent else { return }
+            self.log("30 с без звука")
+            self.fallBackToWeb()
+        }
+        RunLoop.main.add(limit, forMode: .common)
+        deadline = limit
         publish(loading: true)
         beginBackgroundTask()
         // Поток следующего трека найден заранее — сразу его; иначе сначала компьютерная версия (Safari),
@@ -652,6 +665,8 @@ final class NativeAudio: NSObject {
     /// Журнал попытки (виден в ⚙) — по шагам, сразу, чтобы было видно, на чём остановилось.
     private func log(_ text: String) {
         NativeAudio.lastLog += (NativeAudio.lastLog.isEmpty ? "" : "; ") + text
+        step = text
+        publish(loading: true)
     }
 
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
@@ -756,15 +771,19 @@ final class NativeAudio: NSObject {
     private func trackFailed() {
         failuresInRow += 1
         if !playedOnce || failuresInRow >= 2 {
-            guard let track = currentTrack else { return }
-            let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
-            log("→ обычный плеер")
-            deactivate()
-            if let url { onFallback?(url) }
-            return
+            fallBackToWeb()
         } else {
             next() // один трек недоступен (возраст, регион) — пропускаем
         }
+    }
+
+    /// Трек — в обычный веб-плеер (системный не справился).
+    private func fallBackToWeb() {
+        guard let track = currentTrack else { return }
+        let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
+        log("→ обычный плеер")
+        deactivate()
+        if let url { onFallback?(url) }
     }
 
     // MARK: - Команды
@@ -861,6 +880,7 @@ final class NativeAudio: NSObject {
             playedOnce = true
             failuresInRow = 0
             stallTimer?.invalidate()
+            deadline?.invalidate()
             endBackgroundTask()
             listened += 0.5
             prefetchNextIfNeeded(time: t)
@@ -904,8 +924,9 @@ final class NativeAudio: NSObject {
     private func publish(loading: Bool = false) {
         guard active, let track = currentTrack else { return }
         let duration = player.currentItem?.duration.seconds ?? 0
-        let state = State(id: track.id, title: loading && track.title.isEmpty ? "Загрузка…" : track.title,
-                          artist: track.artist, paused: player.timeControlStatus == .paused,
+        let waiting = !playedOnceCurrent
+        let state = State(id: track.id, title: track.title.isEmpty && (loading || waiting) ? "Загрузка…" : track.title,
+                          artist: waiting ? (step ?? track.artist) : track.artist, paused: player.timeControlStatus == .paused,
                           time: max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0),
                           duration: duration.isFinite ? duration : 0, loop: loop)
         onState?(state)
@@ -964,6 +985,7 @@ final class NativeAudio: NSObject {
         active = false
         token = UUID()
         stallTimer?.invalidate()
+        deadline?.invalidate()
         player.pause()
         player.replaceCurrentItem(with: nil)
         commandTargets.forEach { $0.0.removeTarget($0.1) }
