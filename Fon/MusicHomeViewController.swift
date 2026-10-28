@@ -89,7 +89,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     }
 
     @objc private func pullToRefresh() {
-        let done = { [weak self] in self?.collectionView.refreshControl?.endRefreshing() }
+        let done: () -> Void = { [weak self] in self?.collectionView.refreshControl?.endRefreshing() }
         switch kind {
         case .home:
             CloudLikes.shared.refresh()
