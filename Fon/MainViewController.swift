@@ -15,7 +15,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case mode // переключатель «Видео / Музыка»
     }
 
-    private enum TabContent { case web(String), library, musicHome, none }
+    private enum TabContent { case web(String), library, musicHome, search, none }
 
     private let browseContainer = UIView()
     private var browseViews: [Int: WKWebView] = [:]
@@ -23,6 +23,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var urlObservations: [Int: NSKeyValueObservation] = [:]
     private var libraryNav: UINavigationController?
     private var homeNav: UINavigationController?
+    private var searchVC: SearchViewController?
+    private let searchTabIndex = 1
     /// В режиме музыки на «Главной» вместо подборок открыта лента YouTube (или результаты поиска).
     private var musicFeedShown = false
     private var currentTab = 0
@@ -251,6 +253,19 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return nav
     }
 
+    private func searchController() -> SearchViewController {
+        if let searchVC { return searchVC }
+        let search = SearchViewController()
+        search.onSearch = { [weak self] query in self?.search(query) }
+        addChild(search)
+        search.view.frame = browseContainer.bounds
+        search.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        browseContainer.addSubview(search.view)
+        search.didMove(toParent: self)
+        searchVC = search
+        return search
+    }
+
     private func homeController() -> UINavigationController {
         if let homeNav { return homeNav }
         let home = MusicHomeViewController()
@@ -286,6 +301,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     private func content(for index: Int) -> TabContent {
+        if case .search = tabs[index].kind { return .search }
         guard case let .web(video, music) = tabs[index].kind else { return .none }
         guard Settings.musicMode else { return .web(video) }
         if index == 0 && !musicFeedShown { return .musicHome }
@@ -299,8 +315,15 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let tabContent = content(for: index)
         libraryNav?.view.isHidden = true
         homeNav?.view.isHidden = true
+        searchVC?.view.isHidden = true
         if case .web = tabContent {} else { browseViews.values.forEach { $0.isHidden = true } }
         switch tabContent {
+        case .search:
+            let search = searchController()
+            search.view.isHidden = false
+            let results = browseView(for: index)
+            search.setResultsView(results)
+            results.isHidden = false
         case .library:
             libraryController().view.isHidden = false
         case .musicHome:
@@ -361,10 +384,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
+    /// Результаты — во вкладке «Поиск», под полем поиска.
     private func search(_ query: String) {
         var components = URLComponents(string: base + "/results")!
         components.queryItems = [URLQueryItem(name: "search_query", value: query)]
-        if let url = components.url { webViewForLoading().load(URLRequest(url: url)) }
+        if currentTab != searchTabIndex { showTab(searchTabIndex) }
+        if let url = components.url { browseView(for: searchTabIndex).load(URLRequest(url: url)) }
         if playerState == .expanded { setPlayerState(.mini) }
     }
 
@@ -385,7 +410,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             if index == currentTab { reselectTab(index) } else { showTab(index) }
             if playerState == .expanded { setPlayerState(.mini) }
         case .search:
-            presentSearch(prefill: nil)
+            // Первое нажатие — открыть вкладку (с прошлыми результатами), повторное — сразу к вводу.
+            let wasOpen = currentTab == index
+            if !wasOpen { showTab(index) }
+            if wasOpen || !(searchVC?.hasResults ?? false) { searchVC?.beginSearch(prefill: nil) }
+            if playerState == .expanded { setPlayerState(.mini) }
         case .mode:
             Settings.musicMode.toggle()
             playerView.musicModeDidChange()
@@ -395,20 +424,17 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
     }
 
-    /// Свой поиск — и из вкладки, и из лупы в шапке страницы YouTube (её мы перехватываем).
+    /// Лупа в шапке страницы YouTube (её перехватывает скрипт) — открыть вкладку «Поиск» и начать ввод.
     private func presentSearch(prefill: String?) {
-        guard presentedViewController == nil else { return }
-        let searchVC = SearchViewController()
-        searchVC.initialText = prefill
-        searchVC.onSearch = { [weak self] query in self?.search(query) }
-        searchVC.modalPresentationStyle = .overFullScreen
-        searchVC.modalTransitionStyle = .crossDissolve
-        present(searchVC, animated: true)
+        if playerState == .expanded { setPlayerState(.mini) }
+        showTab(searchTabIndex)
+        searchVC?.beginSearch(prefill: prefill)
     }
 
     /// Сменился режим (из вкладки или кнопкой в плеере): обновляем вкладки и открытый раздел.
     private func musicModeChanged() {
         musicFeedShown = false
+        searchVC?.updatePlaceholder()
         updateModeTabs()
         showTab(currentTab) // остальные вкладки обновятся при следующем открытии
     }

@@ -1,13 +1,18 @@
 import UIKit
 
-/// Поиск как в приложении YouTube: история запросов и подсказки по мере ввода.
+/// Вкладка «Поиск» как в приложении YouTube: поле сверху, результаты (страница YouTube) прямо под ним,
+/// нижние вкладки и мини-плеер остаются на месте. «Недавние» и подсказки — только пока печатаете.
 final class SearchViewController: UIViewController, UISearchBarDelegate, UITableViewDataSource, UITableViewDelegate {
+    /// Запрос отправлен — приложение грузит результаты в окно результатов.
     var onSearch: ((String) -> Void)?
-    /// Текст в поле при открытии (например, текущий запрос со страницы результатов).
-    var initialText: String?
+
+    static let barHeight: CGFloat = 56
 
     private let searchBar = UISearchBar()
     private let tableView = UITableView(frame: .zero, style: .plain)
+    private weak var resultsView: UIView?
+    private(set) var hasResults = false
+    private var lastQuery = ""
     private var suggestions: [String] = []
     private var suggestTask: URLSessionDataTask?
     private static let historyKey = "searchHistory"
@@ -20,47 +25,80 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     private var showingHistory: Bool { (searchBar.text ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
     private var rows: [String] { showingHistory ? history : suggestions }
 
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
-
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(white: 0.06, alpha: 1)
+        view.backgroundColor = .black
         overrideUserInterfaceStyle = .dark
 
-        searchBar.placeholder = Settings.musicMode ? "Песни, исполнители, альбомы" : "Поиск на YouTube"
-        searchBar.text = initialText
-        searchBar.showsCancelButton = true
+        updatePlaceholder()
         searchBar.searchBarStyle = .minimal
         searchBar.delegate = self
         searchBar.returnKeyType = .search
-        searchBar.translatesAutoresizingMaskIntoConstraints = false
+        searchBar.tintColor = PlayerView.accent
         view.addSubview(searchBar)
 
-        tableView.backgroundColor = .clear
+        tableView.backgroundColor = .black
         tableView.dataSource = self
         tableView.delegate = self
         tableView.keyboardDismissMode = .onDrag
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         tableView.rowHeight = 50
         tableView.separatorStyle = .none
-        tableView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tableView)
-
-        NSLayoutConstraint.activate([
-            searchBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4),
-            searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4),
-            tableView.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
-            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
+        updateEmptyHint()
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let w = view.bounds.width
+        let below = CGRect(x: 0, y: Self.barHeight, width: w, height: max(0, view.bounds.height - Self.barHeight))
+        searchBar.frame = CGRect(x: 4, y: 0, width: w - 8, height: Self.barHeight)
+        tableView.frame = below
+        resultsView?.frame = below
+    }
+
+    func updatePlaceholder() {
+        searchBar.placeholder = Settings.musicMode ? "Песни, исполнители, альбомы" : "Поиск на YouTube"
+    }
+
+    /// Окно, где показываются результаты (страница YouTube) — под полем поиска.
+    func setResultsView(_ results: UIView) {
+        guard results !== resultsView else { return }
+        results.removeFromSuperview()
+        results.autoresizingMask = []
+        view.insertSubview(results, belowSubview: tableView)
+        resultsView = results
+        view.setNeedsLayout()
+        tableView.isHidden = hasResults
+    }
+
+    /// Начать ввод: показать «Недавние» или подсказки, поднять клавиатуру.
+    func beginSearch(prefill: String?) {
+        loadViewIfNeeded()
+        if let prefill, !prefill.isEmpty {
+            searchBar.text = prefill
+            textChanged(prefill)
+        }
+        showList(true)
         searchBar.becomeFirstResponder()
-        if let text = initialText, !text.isEmpty { loadSuggestions(for: text) }
+    }
+
+    private func showList(_ on: Bool) {
+        if !on && !hasResults { return } // без результатов под полем — всегда «Недавние»
+        tableView.reloadData()
+        updateEmptyHint()
+        UIView.transition(with: tableView, duration: 0.2, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.tableView.isHidden = !on
+        }
+    }
+
+    private func updateEmptyHint() {
+        guard rows.isEmpty else { tableView.backgroundView = nil; return }
+        let label = UILabel()
+        label.text = Settings.musicMode ? "Ищите песни, исполнителей и альбомы" : "Ищите видео, музыку и каналы"
+        label.textColor = .secondaryLabel
+        label.textAlignment = .center
+        tableView.backgroundView = label
     }
 
     // MARK: - Поиск
@@ -69,17 +107,34 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         history = [q] + history.filter { $0.caseInsensitiveCompare(q) != .orderedSame }
+        lastQuery = q
+        searchBar.text = q
+        hasResults = true
         searchBar.resignFirstResponder()
-        dismiss(animated: true) { [onSearch] in onSearch?(q) }
+        showList(false)
+        onSearch?(q)
     }
 
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         submit(searchBar.text ?? "")
     }
 
+    func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
+        searchBar.setShowsCancelButton(true, animated: true)
+        showList(true)
+    }
+
+    func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
+        searchBar.setShowsCancelButton(false, animated: true)
+    }
+
+    /// «Отмена» — убрать клавиатуру и вернуться к результатам (если они есть).
     func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
         searchBar.resignFirstResponder()
-        dismiss(animated: true)
+        if hasResults {
+            searchBar.text = lastQuery
+            showList(false)
+        }
     }
 
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {

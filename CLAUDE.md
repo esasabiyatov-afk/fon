@@ -26,10 +26,10 @@
 | `Fon/MusicHomeViewController.swift` | Подборки (compositional layout): приветствие + быстрый доступ («Понравившиеся», «Мой микс», последние), «Миксы для вас» (Mix по 10 разным исполнителям из истории и лайков), «Недавно слушали», «Понравившиеся», «Ещё → лента YouTube» |
 | `Fon/Signature.swift` | Срок подписи из `embedded.mobileprovision` (`ExpirationDate`): при <48 ч — алерт (не чаще раза в 12 ч) с кнопкой «Открыть SideStore» (`sidestore://`); дата в подвале медиатеки |
 | `Fon/TabBarView.swift` | Своя нижняя панель: 50 pt кнопок (иконка над подписью) + safe area; `setItem(_:title:icon:color:)`, `select(_:)` |
-| `Fon/SearchViewController.swift` | Нативный поиск: «Недавние» (UserDefaults `searchHistory`, кнопка «Очистить») + подсказки `suggestqueries.google.com` (client=firefox, ds=yt), «↖» подставляет строку в поле; `initialText` — текущий запрос. Лупа в шапке m.youtube (оба окна) перехватывается скриптом `common` → `{type:'search'}` → этот экран |
+| `Fon/SearchViewController.swift` | **Вкладка** «Поиск» (не модальный экран — владельцу не нравилось, что он закрывал всё): поле сверху (`barHeight` 56), под ним окно результатов — `browseViews[1]`, перенесённое внутрь (`setResultsView`); список «Недавние»/подсказки поверх результатов только при вводе, «Отмена» возвращает к результатам. Нативный поиск: «Недавние» (UserDefaults `searchHistory`, кнопка «Очистить») + подсказки `suggestqueries.google.com` (client=firefox, ds=yt), «↖» подставляет строку в поле; `initialText` — текущий запрос. Лупа в шапке m.youtube (оба окна) перехватывается скриптом `common` → `{type:'search'}` → этот экран |
 | `Fon/Scripts.swift` | JS, внедряемый в начале документа: `common` (оба окна), `player`, `browse` |
 | `Fon/WebViewFactory.swift` | Общая конфигурация WKWebView, Safari User-Agent, правила переходов |
-| `project.yml` | XcodeGen; `UIBackgroundModes: [audio]`, iOS 16+, iPhone + iPad (`TARGETED_DEVICE_FAMILY 1,2`), bundle id `com.personal.fon` |
+| `project.yml` | XcodeGen; язык разработки `ru` (`CFBundleDevelopmentRegion`/`CFBundleLocalizations`) — системные кнопки по-русски; `UIBackgroundModes: [audio]`, iOS 16+, iPhone + iPad (`TARGETED_DEVICE_FAMILY 1,2`), bundle id `com.personal.fon` |
 
 Оба WKWebView используют `WKWebsiteDataStore.default()` — вход в Google общий.
 

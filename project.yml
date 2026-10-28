@@ -1,6 +1,7 @@
 name: Fon
 options:
   bundleIdPrefix: com.personal
+  developmentLanguage: ru
   deploymentTarget:
     iOS: "16.0"
 targets:
@@ -13,6 +14,9 @@ targets:
       path: Support/Info.plist
       properties:
         CFBundleDisplayName: Fon
+        # Системные кнопки (Отмена, Назад, Изменить) — на русском.
+        CFBundleDevelopmentRegion: ru
+        CFBundleLocalizations: [ru]
         # Номер версии подставляет сборка в GitHub (1.<номер сборки>) — по нему SideStore видит обновления.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
