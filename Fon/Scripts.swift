@@ -401,7 +401,7 @@ enum Scripts {
       position: fixed !important; top: 0 !important; left: 0 !important;
       width: 100vw !important; height: 100vh !important; max-height: none !important;
       margin: 0 !important; padding: 0 !important; transform: none !important;
-      z-index: 2147483646 !important; background: #000 !important;
+      z-index: 2147483600 !important; background: #000 !important;
     }
     html.fon-full .html5-video-container {
       position: absolute !important; top: 0 !important; left: 0 !important;
@@ -412,6 +412,25 @@ enum Scripts {
     html.fon-full ytm-custom-control {
       position: fixed !important; top: 0 !important; left: 0 !important;
       width: 100vw !important; height: 100vh !important;
+      z-index: 2147483610 !important;
+    }
+    /* Меню, которые открывают кнопки панели (⚙ качество и скорость, субтитры, «ещё»), YouTube
+       добавляет отдельно в страницу — без этого они оказывались под растянутым плеером. */
+    html.fon-full bottom-sheet-container,
+    html.fon-full .bottom-sheet-container,
+    html.fon-full ytm-bottom-sheet-renderer,
+    html.fon-full bottom-sheet-layout,
+    html.fon-full ytm-menu-popup-renderer,
+    html.fon-full ytm-dialog,
+    html.fon-full .dialog-container,
+    html.fon-full [role="dialog"],
+    html.fon-full ytm-select,
+    html.fon-full .player-settings-menu,
+    html.fon-full ytm-engagement-panel-section-list-renderer,
+    html.fon-full tp-yt-paper-dialog,
+    html.fon-full c3-overlay,
+    html.fon-full .c3-overlay,
+    html.fon-full .ytm-popup-container {
       z-index: 2147483647 !important;
     }
     html.fon-full video,
