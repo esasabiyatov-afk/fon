@@ -491,18 +491,58 @@ enum Scripts {
   // После поворота, выхода из полного экрана или возврата в приложение WebKit иногда теряет
   // картинку видео (чёрный экран, звук идёт). Заставляем его перерисовать слой видео.
   // Видео на один кадр убираем и возвращаем — WebKit пересоздаёт слой с картинкой (звук не прерывается).
+  // Чтобы это не мигало, на эти кадры поверх видео кладём снимок текущего кадра (canvas).
   const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : (f) => setTimeout(f, 16);
   let repainting = false;
   let quietUntil = 0; // перестройки страницы в ответ на нашу же перерисовку не считаем — без зацикливания
+  let cover = null;
+  const showCover = (v) => {
+    try {
+      const cs = getComputedStyle(v);
+      if (v.readyState < 2 || !v.videoWidth || cs.opacity === '0' || !v.parentNode) return false;
+      const w = v.offsetWidth, h = v.offsetHeight;
+      if (w < 2 || h < 2) return false;
+      // Кадр вписан в элемент так же, как его рисует видео (object-fit: contain или cover).
+      const fit = cs.objectFit === 'cover' ? Math.max : Math.min;
+      const k = fit(w / v.videoWidth, h / v.videoHeight);
+      const fw = v.videoWidth * k, fh = v.videoHeight * k;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (!cover) cover = document.createElement('canvas');
+      // Снимок — соседний с видео элемент на том же месте: панель управления и меню YouTube остаются над ним.
+      const fixed = cs.position === 'fixed';
+      const r = fixed ? v.getBoundingClientRect() : null;
+      cover.style.cssText = 'pointer-events:none;margin:0;padding:0;background:#000;display:block;' +
+        'position:' + (fixed ? 'fixed' : 'absolute') + ';' +
+        'left:' + (fixed ? r.left : v.offsetLeft) + 'px;top:' + (fixed ? r.top : v.offsetTop) + 'px;' +
+        'width:' + w + 'px;height:' + h + 'px;z-index:' + (cs.zIndex === 'auto' ? '0' : cs.zIndex) + ';';
+      cover.width = Math.round(w * dpr);
+      cover.height = Math.round(h * dpr);
+      const ctx = cover.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, cover.width, cover.height);
+      ctx.drawImage(v, (w - fw) / 2 * dpr, (h - fh) / 2 * dpr, fw * dpr, fh * dpr);
+      v.parentNode.insertBefore(cover, v.nextSibling);
+      return true;
+    } catch (e) {
+      if (cover) cover.remove();
+      return false;
+    }
+  };
   fon.repaint = () => {
     const v = fon.video();
     quietUntil = Date.now() + 1200;
     fire(window, 'resize');
     if (!v || repainting) return;
     repainting = true;
+    const covered = showCover(v);
     const prev = v.style.display;
     v.style.display = 'none';
-    raf(() => raf(() => { v.style.display = prev; repainting = false; }));
+    raf(() => raf(() => {
+      v.style.display = prev;
+      repainting = false;
+      // Снимок убираем, когда видео уже снова нарисовалось.
+      if (covered) raf(() => raf(() => { if (cover) cover.remove(); }));
+    }));
   };
   let repaintTimer = null;
   const repaintSoon = (delay) => {

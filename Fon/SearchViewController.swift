@@ -85,11 +85,16 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
 
     private func showList(_ on: Bool) {
         if !on && !hasResults { return } // без результатов под полем — всегда «Недавние»
-        tableView.reloadData()
-        updateEmptyHint()
+        reloadRows()
         UIView.transition(with: tableView, duration: 0.2, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.tableView.isHidden = !on
         }
+    }
+
+    /// Перерисовать список; подсказка «Ищите…» — только когда строк нет (иначе она просвечивала под подсказками).
+    private func reloadRows() {
+        tableView.reloadData()
+        updateEmptyHint()
     }
 
     private func updateEmptyHint() {
@@ -144,7 +149,7 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     private func textChanged(_ searchText: String) {
         suggestTask?.cancel()
         let q = searchText.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { suggestions = []; tableView.reloadData(); return }
+        guard !q.isEmpty else { suggestions = []; reloadRows(); return }
         loadSuggestions(for: q)
     }
 
@@ -164,7 +169,7 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
             DispatchQueue.main.async {
                 guard let self, (self.searchBar.text ?? "").trimmingCharacters(in: .whitespaces) == query else { return }
                 self.suggestions = list
-                self.tableView.reloadData()
+                self.reloadRows()
             }
         }
         suggestTask?.resume()
@@ -243,7 +248,7 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
 
     @objc private func clearHistory() {
         history = []
-        tableView.reloadData()
+        reloadRows()
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
@@ -260,5 +265,6 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         h.remove(at: indexPath.row)
         history = h
         tableView.deleteRows(at: [indexPath], with: .automatic)
+        updateEmptyHint()
     }
 }
