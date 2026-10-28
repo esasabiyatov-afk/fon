@@ -545,10 +545,12 @@ enum Scripts {
     }));
   };
   let repaintTimer = null;
+  // Только в полном экране: там пропадала картинка после меню ⚙. В обычном плеере YouTube перестраивает
+  // страницу почти на каждое касание — перерисовка там была лишней и заметно мигала.
   const repaintSoon = (delay) => {
-    if (Date.now() < quietUntil) return;
+    if (!fon.isFull || Date.now() < quietUntil) return;
     clearTimeout(repaintTimer);
-    repaintTimer = setTimeout(() => { if (!fon.realHidden) fon.repaint(); }, delay || 400);
+    repaintTimer = setTimeout(() => { if (fon.isFull && !fon.realHidden) fon.repaint(); }, delay || 400);
   };
   // Меню ⚙ и другие окна YouTube меняют классы/стили body и добавляют в него элементы —
   // после этого картинка видео пропадала. Ловим такие перестройки и перерисовываем.
@@ -560,7 +562,7 @@ enum Scripts {
   };
   if (document.body) watchLayout(); else document.addEventListener('DOMContentLoaded', watchLayout);
   // Прокрутка в полном экране (например, списка в меню) — тоже повод перерисовать.
-  window.addEventListener('touchend', () => { if (fon.isFull) repaintSoon(500); }, true);
+  window.addEventListener('touchend', () => repaintSoon(500), true);
   fon.setFull = setFull;
   const getter = (obj, name, get) => { try { Object.defineProperty(obj, name, { get, configurable: true }); } catch (e) {} };
   const VP = HTMLVideoElement.prototype;
