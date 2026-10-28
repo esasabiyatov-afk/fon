@@ -97,7 +97,7 @@ enum PoToken {
 /// IOS/WEB/ANDROID_VR/MWEB без входа и с мобильным Safari — рабочей ссылки не было.
 enum YouTubeStreams {
     static let desktopUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
-    private static let origin = "https://www.youtube.com"
+    static let origin = "https://www.youtube.com"
 
     /// Настройки клиента со страницы YouTube (контекст запроса, версия плеера) — для внутреннего API.
     private struct Config {
@@ -179,57 +179,6 @@ enum YouTubeStreams {
     /// User-Agent Safari на iPhone (как его пишет сам WebKit — версия iOS «заморожена»); скрытое окно
     /// присылает настоящий, до этого — такой же по образцу.
     static var iPhoneSafariUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
-
-    /// Прямой путь, шаг 1 (просьба владельца — без окна, «прямой перехват»): та же страница, что открывает окно
-    /// (`app=desktop`, Safari на iPhone, вход), но запросом приложения. Только разведка для журнала: есть ли
-    /// файл itag 18, чем зашифрована ссылка (`signatureCipher`: s + sp, параметр n), где код плеера (base.js).
-    static func probeDirect(_ id: String) async -> String {
-        guard let url = URL(string: "\(origin)/watch?app=desktop&v=\(id)&hl=ru") else { return "нет ссылки" }
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        request.httpShouldHandleCookies = false
-        request.setValue(iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return "нет ответа" }
-        let http = reply as? HTTPURLResponse
-        var notes = ["HTTP \(http?.statusCode ?? 0)"]
-        if let final = http?.url, final.host != url.host || !final.path.hasPrefix("/watch") {
-            notes.append("перекинуло на \(final.host ?? "?")\(final.path)")
-        }
-        guard let response = jsonObject(in: data, after: "ytInitialPlayerResponse = ") else {
-            return (notes + ["нет ответа плеера"]).joined(separator: ", ")
-        }
-        let playability = response["playabilityStatus"] as? [String: Any]
-        notes.append(playability?["status"] as? String ?? "?")
-        let streaming = response["streamingData"] as? [String: Any] ?? [:]
-        let formats = streaming["formats"] as? [[String: Any]] ?? []
-        let adaptive = streaming["adaptiveFormats"] as? [[String: Any]] ?? []
-        notes.append("файлы \(formats.count), раздельные \(adaptive.count)")
-        if streaming["hlsManifestUrl"] != nil { notes.append("HLS") }
-        if streaming["serverAbrStreamingUrl"] != nil { notes.append("SABR") }
-        if let f18 = formats.first(where: { ($0["itag"] as? Int) == 18 }) {
-            if let direct = f18["url"] as? String {
-                let names = URLComponents(string: direct)?.queryItems?.map(\.name) ?? []
-                notes.append("18: ссылка готова (\(["n", "sig", "pot"].filter(names.contains).joined(separator: ",")))")
-            } else if let cipher = f18["signatureCipher"] as? String {
-                let items = URLComponents(string: "?" + cipher)?.queryItems ?? []
-                let sp = items.first { $0.name == "sp" }?.value ?? "?"
-                let inner = items.first { $0.name == "url" }?.value.flatMap { URLComponents(string: $0)?.queryItems?.map(\.name) } ?? []
-                notes.append("18: шифр (sp=\(sp), n в ссылке: \(inner.contains("n") ? "да" : "нет"))")
-            } else {
-                notes.append("18: без ссылки")
-            }
-        } else {
-            notes.append("18: нет")
-        }
-        if let js = string(in: data, after: "\"jsUrl\":\"") {
-            notes.append("код: " + (js.components(separatedBy: "/").dropFirst(3).first ?? js.suffix(30).description))
-        } else {
-            notes.append("код: не найден")
-        }
-        return notes.joined(separator: ", ")
-    }
 
     /// Страница видео, как её получает Safari на Mac: ytInitialPlayerResponse + настройки клиента.
     private static func watchPage(_ id: String) async -> (response: [String: Any]?, note: String) {
@@ -362,7 +311,7 @@ enum YouTubeStreams {
     }
 
     /// JSON-объект в HTML сразу после метки (с учётом строк и экранирования).
-    private static func jsonObject(in data: Data, after marker: String) -> [String: Any]? {
+    static func jsonObject(in data: Data, after marker: String) -> [String: Any]? {
         guard let found = data.range(of: Data(marker.utf8)) else { return nil }
         return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> [String: Any]? in
             let bytes = raw.bindMemory(to: UInt8.self)
@@ -423,7 +372,7 @@ enum YouTubeStreams {
         return note
     }
 
-    private static func string(in data: Data, after marker: String) -> String? {
+    static func string(in data: Data, after marker: String) -> String? {
         guard let found = data.range(of: Data(marker.utf8)) else { return nil }
         let value = data[found.upperBound...].prefix { $0 != 0x22 }
         return String(decoding: value, as: UTF8.self)
@@ -722,6 +671,7 @@ final class NativeAudio: NSObject {
     private var candidates: [AudioStream] = []
     private var triedSafari = false
     private var triedMain = false
+    private var triedDirect = false
     /// Журнал этой попытки уже ушёл на GitHub (`LogUploader`).
     private var reported = false
     private var token = UUID()
@@ -879,6 +829,7 @@ final class NativeAudio: NSObject {
         candidates = []
         triedSafari = false
         triedMain = false
+        triedDirect = false
         userPaused = false
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
@@ -896,13 +847,12 @@ final class NativeAudio: NSObject {
         deadline = limit
         publish(loading: true)
         beginBackgroundTask()
-        // Поток следующего трека найден заранее — сразу его; иначе сначала компьютерная версия (Safari),
-        // потом запасной путь через страницу и токен.
+        // Поток следующего трека найден заранее — сразу его; иначе прямой путь (без окна), потом окно.
         if let ready = prefetched.removeValue(forKey: track.id) {
             use(ready, for: track)
             tryNextCandidate()
         } else {
-            trySafari()
+            tryDirect()
         }
     }
 
@@ -947,7 +897,7 @@ final class NativeAudio: NSObject {
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
     private func tryNextCandidate() {
         guard active else { return }
-        guard !candidates.isEmpty else { return triedSafari ? tryMain() : trySafari() }
+        guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : (triedSafari ? tryMain() : trySafari()) }
         let stream = candidates.removeFirst()
         log("\(stream.client): пробую")
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
@@ -987,19 +937,27 @@ final class NativeAudio: NSObject {
     }
 
     /// Основной путь: ссылка HLS, которую компьютерная версия YouTube даёт системному плееру (один раз на трек).
+    /// Основной путь (вариант 3 владельца): ссылка со страницы запросом приложения + «решатель» yt-dlp — без окна.
+    private func tryDirect() {
+        guard !triedDirect, let track = currentTrack else { return trySafari() }
+        triedDirect = true
+        log("прямо: ищу ссылку…")
+        let current = token
+        Task { [weak self] in
+            let found = await DirectStream.find(track.id)
+            await MainActor.run {
+                guard let self, self.token == current, self.active else { return }
+                self.use(found, for: track)
+                self.tryNextCandidate()
+            }
+        }
+    }
+
     private func trySafari() {
         guard !triedSafari, let track = currentTrack else { return tryMain() }
         triedSafari = true
         log("Safari: ищу ссылку…")
         let current = token
-        // Прямой путь, шаг 1 — только разведка в журнал, звук пока идёт через окно.
-        Task { [weak self] in
-            let note = await YouTubeStreams.probeDirect(track.id)
-            await MainActor.run {
-                guard let self, self.token == current else { return }
-                NativeAudio.lastLog += "; прямо: " + note
-            }
-        }
         Task { [weak self] in
             let found = await SafariStream.find(track.id)
             await MainActor.run {
@@ -1157,9 +1115,9 @@ final class NativeAudio: NSObject {
             }
             endBackgroundTask()
             listened += 0.5
-            // Заранее следующий трек не ищем: скрытое окно, останавливая своё видео посреди песни, могло
-            // выключить звук приложения; с постоянным окном поиск и так ~1–2 с.
-            // prefetchNextIfNeeded(time: t)
+            // Следующий трек — заранее, но только прямым путём: окно, останавливая своё видео посреди песни,
+            // могло выключить звук приложения, а прямой путь звук не трогает.
+            prefetchNextIfNeeded(time: t)
             // «Недавно слушали» — после 20 с, как у веб-плеера.
             if listened >= 20, let track = currentTrack, recordedID != track.id, !track.title.isEmpty {
                 recordedID = track.id
@@ -1176,8 +1134,7 @@ final class NativeAudio: NSObject {
         guard prefetched[id] == nil, !prefetching.contains(id) else { return }
         prefetching.insert(id)
         Task { [weak self] in
-            var result = await SafariStream.find(id)
-            if result.streams.isEmpty, NativeAudio.useStreamFallback { result = await YouTubeStreams.resolve(id) }
+            let result = await DirectStream.find(id)
             await MainActor.run {
                 guard let self else { return }
                 self.prefetching.remove(id)
