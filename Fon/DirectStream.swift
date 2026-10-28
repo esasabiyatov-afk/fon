@@ -133,7 +133,9 @@ final class ChallengeSolver {
         } catch {
             // Возможно, YouTube поменял код, а в yt-dlp уже поправили решатель — берём свежий (не чаще раза в час).
             guard await updateScripts() else { throw error }
-            var solved = try await run(player: player, n: n, signature: signature)
+            // Разобранный старым решателем плеер выброшен — берём исходный код заново.
+            let fresh = try await playerCode(playerURL)
+            var solved = try await run(player: fresh, n: n, signature: signature)
             solved.note += ", решатель обновлён"
             return solved
         }
