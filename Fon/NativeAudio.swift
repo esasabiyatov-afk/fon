@@ -408,6 +408,11 @@ enum YouTubeStreams {
 final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Куда вставить скрытое окно (без родителя WebKit не работает) — задаёт MainViewController.
     static weak var host: UIView?
+    /// Временно (просьба владельца 29.10.2026): окно видно поверх приложения, чтобы видеть, что показывает
+    /// YouTube; можно нажимать. После результата остаётся на экране 5 с. Убрать, когда путь заработает.
+    static let visible = true
+
+    private var frameView: UIView?
 
     private var webView: WKWebView?
     private var completion: ((URL?, String, String?) -> Void)?
@@ -461,10 +466,29 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         let parts = UIDevice.current.systemVersion.split(separator: ".")
         config.applicationNameForUserAgent = "Version/\(parts.first ?? "18").\(parts.count > 1 ? parts[1] : "0") Mobile/15E148 Safari/604.1"
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
-        webView.alpha = 0.01
-        webView.isUserInteractionEnabled = false
         webView.navigationDelegate = self
-        host.insertSubview(webView, at: 0)
+        if Self.visible {
+            let card = UIView(frame: CGRect(x: 12, y: host.safeAreaInsets.top + 8, width: host.bounds.width - 24,
+                                            height: min(host.bounds.height * 0.5, 460)))
+            card.backgroundColor = .black
+            card.layer.cornerRadius = 14
+            card.layer.borderWidth = 2
+            card.layer.borderColor = PlayerView.accent.cgColor
+            card.clipsToBounds = true
+            let label = UILabel(frame: CGRect(x: 10, y: 0, width: card.bounds.width - 20, height: 26))
+            label.text = "Скрытое окно (проверка)"
+            label.font = .systemFont(ofSize: 13, weight: .semibold)
+            label.textColor = .white
+            card.addSubview(label)
+            webView.frame = CGRect(x: 0, y: 26, width: card.bounds.width, height: card.bounds.height - 26)
+            card.addSubview(webView)
+            host.addSubview(card)
+            frameView = card
+        } else {
+            webView.alpha = 0.01
+            webView.isUserInteractionEnabled = false
+            host.insertSubview(webView, at: 0)
+        }
         self.webView = webView
         // Компьютерная версия (`app=desktop`, не m.youtube): на iPhone её плеер играет системным плеером iOS
         // по обычной ссылке HLS — владелец проверил в Safari, в том числе со входом в аккаунт.
@@ -512,9 +536,19 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         guard let completion else { return }
         self.completion = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "fonSrc")
-        webView?.stopLoading()
-        webView?.removeFromSuperview()
+        let shownWeb = webView, card = frameView
         webView = nil
+        frameView = nil
+        if let card, let label = card.subviews.first(where: { $0 is UILabel }) as? UILabel {
+            label.text = (url != nil ? "Найдено: " : "Нет: ") + note // видно ещё 5 с
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                shownWeb?.stopLoading()
+                card.removeFromSuperview()
+            }
+        } else {
+            shownWeb?.stopLoading()
+            shownWeb?.removeFromSuperview()
+        }
         completion(url, note, title)
         keepAlive = nil
     }
