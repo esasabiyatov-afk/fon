@@ -1,5 +1,6 @@
 import UIKit
 import CoreImage
+import CryptoKit
 
 struct Track: Codable, Hashable {
     let id: String
@@ -70,7 +71,8 @@ final class Library {
     }
 }
 
-/// Квадратные обложки треков из превью YouTube, с кэшем в памяти.
+/// Обложки треков из превью YouTube и YouTube Music. Кэш в памяти и на диске (Caches/artwork):
+/// раз загруженная обложка при следующих запусках берётся с телефона, а не из сети.
 final class ArtworkLoader {
     static let shared = ArtworkLoader()
     /// player — для плеера: обложка как есть (квадрат альбома или кадр 16:9 без полей).
@@ -79,34 +81,83 @@ final class ArtworkLoader {
     private let images = NSCache<NSString, UIImage>()
     private let colors = NSCache<NSString, UIColor>()
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
+    private let directory: URL
+    private let io = DispatchQueue(label: "fon.artwork", qos: .userInitiated, attributes: .concurrent)
+    /// Одна загрузка на картинку: остальные ячейки с той же обложкой ждут её (только главный поток).
+    private var waiting: [String: [(UIImage?, UIColor?) -> Void]] = [:]
 
-    /// completion приходит на главном потоке: картинка и её средний цвет (только для .large).
+    private init() {
+        images.countLimit = 500
+        directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("artwork")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        trimDisk()
+    }
+
+    /// completion приходит на главном потоке: картинка и её средний цвет (кроме .small).
     func load(_ id: String, size: Size, completion: @escaping (UIImage?, UIColor?) -> Void) {
-        let key = "\(id)-\(size)" as NSString
-        if let image = images.object(forKey: key) {
-            completion(image, colors.object(forKey: key))
-            return
-        }
         // mqdefault — 16:9 без чёрных полос; maxres есть не у всех видео, тогда берём поменьше.
         let names = size == .small ? ["mqdefault", "hqdefault"] : ["maxresdefault", "sddefault", "hqdefault"]
-        fetch(id, names: names[...], maxSide: size == .small ? 160 : 900, wide: size == .player) { [weak self] image in
-            let color = (size != .small ? image.flatMap(ArtworkLoader.averageColor) : nil)
-            if let image { self?.images.setObject(image, forKey: key) }
-            if let color { self?.colors.setObject(color, forKey: key) }
-            DispatchQueue.main.async { completion(image, color) }
+        cached("\(id)-\(size)", color: size != .small, completion: completion) { [weak self] done in
+            self?.fetch(id, names: names[...], maxSide: size == .small ? 160 : 900, wide: size == .player, done: done)
         }
     }
 
     /// Готовая картинка по ссылке (обложки YouTube Music уже квадратные). completion — на главном потоке.
     func load(url: URL, completion: @escaping (UIImage?) -> Void) {
-        let key = url.absoluteString as NSString
-        if let image = images.object(forKey: key) {
-            completion(image)
+        cached(url.absoluteString, color: false, completion: { image, _ in completion(image) }) { [weak self] done in
+            self?.fetchURL(url, attempt: 0, done: done)
+        }
+    }
+
+    /// Память → диск → сеть. Из памяти отвечает сразу (в том же вызове), иначе — позже на главном потоке.
+    private func cached(_ key: String, color needsColor: Bool, completion: @escaping (UIImage?, UIColor?) -> Void,
+                        network: @escaping (@escaping (UIImage?) -> Void) -> Void) {
+        if let image = images.object(forKey: key as NSString) {
+            completion(image, colors.object(forKey: key as NSString))
             return
         }
-        fetchURL(url, attempt: 0) { [weak self] image in
-            if let image { self?.images.setObject(image, forKey: key) }
-            DispatchQueue.main.async { completion(image) }
+        if waiting[key] != nil {
+            waiting[key]?.append(completion)
+            return
+        }
+        waiting[key] = [completion]
+        let file = directory.appendingPathComponent(Self.fileName(key))
+        let finish: (UIImage?) -> Void = { [weak self] image in
+            let color = needsColor ? image.flatMap(ArtworkLoader.averageColor) : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let image { self.images.setObject(image, forKey: key as NSString) }
+                if let color { self.colors.setObject(color, forKey: key as NSString) }
+                let list = self.waiting.removeValue(forKey: key) ?? []
+                list.forEach { $0(image, color) }
+            }
+        }
+        io.async {
+            if let data = try? Data(contentsOf: file), let image = UIImage(data: data) {
+                finish(image)
+                return
+            }
+            network { image in
+                if let image, let data = image.jpegData(compressionQuality: 0.85) { try? data.write(to: file, options: .atomic) }
+                finish(image)
+            }
+        }
+    }
+
+    private static func fileName(_ key: String) -> String {
+        let digest = Insecure.SHA1.hash(data: Data(key.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined() + ".jpg"
+    }
+
+    /// Не больше ~1500 обложек на диске: при запуске убираем самые старые.
+    private func trimDisk() {
+        let directory = directory
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]),
+                  files.count > 1500 else { return }
+            let dated = files.map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
+            for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(files.count - 1200) { try? fm.removeItem(at: file) }
         }
     }
 

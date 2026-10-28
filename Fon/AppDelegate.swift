@@ -7,6 +7,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Кэш сети побольше: подсказки поиска, обложки YouTube Music и т. п. не качаются заново.
+        URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024, diskCapacity: 512 * 1024 * 1024, directory: nil)
         // Категория .playback + UIBackgroundModes=audio в Info.plist —
         // это разрешение iOS играть звук, когда приложение свёрнуто.
         let session = AVAudioSession.sharedInstance()

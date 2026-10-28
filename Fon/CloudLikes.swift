@@ -22,6 +22,23 @@ final class CloudLikes {
     private var refreshCompletions: [() -> Void]?
     private var migrating = false
 
+    /// Последний список с YouTube хранится на телефоне — «Понравившиеся» и ♡ видны сразу при запуске.
+    private let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("likes.json")
+
+    private init() {
+        if let data = try? Data(contentsOf: cacheURL), let saved = try? JSONDecoder().decode([Track].self, from: data) {
+            tracks = saved
+        }
+    }
+
+    private func saveCache() {
+        let snapshot = tracks
+        let url = cacheURL
+        DispatchQueue.global(qos: .utility).async {
+            if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: url, options: .atomic) }
+        }
+    }
+
     func isLiked(_ id: String) -> Bool { tracks.contains { $0.id == id } }
 
     /// Ссылка, чтобы играть «Понравившиеся» как настоящий плейлист YouTube, начиная с трека.
@@ -60,6 +77,7 @@ final class CloudLikes {
                 }
                 self.loaded = true
                 self.lastError = nil
+                self.saveCache()
                 self.migrateLegacyLikes()
             case .failure(let error):
                 self.lastError = Self.describe(error)
@@ -83,6 +101,7 @@ final class CloudLikes {
             switch result {
             case .success(let value):
                 if let pid = value as? String { self.playlistID = pid }
+                defer { self.saveCache() }
                 // Обновление списка из очереди могло прийти раньше и затереть ♡ — вернуть его.
                 if liked != self.isLiked(track.id) {
                     if liked { self.tracks.append(track) } else { self.tracks.removeAll { $0.id == track.id } }

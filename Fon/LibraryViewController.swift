@@ -49,7 +49,7 @@ final class LibraryViewController: UITableViewController {
         if indexPath.row == 0 {
             let cloud = CloudLikes.shared
             content.text = "Понравившиеся"
-            content.secondaryText = cloud.loaded ? LibraryViewController.tracksCount(cloud.tracks.count) : "Загрузка…"
+            content.secondaryText = cloud.loaded || !cloud.tracks.isEmpty ? LibraryViewController.tracksCount(cloud.tracks.count) : "Загрузка…"
             content.image = UIImage(systemName: "heart.fill")
         } else {
             content.text = "Недавно слушали"
