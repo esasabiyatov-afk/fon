@@ -391,8 +391,8 @@ enum YouTubeStreams {
     }
 }
 
-/// Запасной путь к потоку (наблюдение владельца 29.10.2026): Safari без входа и истории YouTube иногда
-/// играет системным плеером iOS — у видео обычная ссылка на поток, а не MediaSource. Открываем страницу
+/// Запасной путь к потоку (наблюдение владельца 29.10.2026): в приватной вкладке Safari (без входа и
+/// истории) www.youtube.com играет системным плеером iOS — у видео обычная ссылка на поток, а не MediaSource. Открываем страницу
 /// так же — в скрытом окне с чистыми данными — и забираем эту ссылку для AVPlayer.
 final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Куда вставить скрытое окно (без родителя WebKit не работает) — задаёт MainViewController.
@@ -434,7 +434,9 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         webView.navigationDelegate = self
         host.insertSubview(webView, at: 0)
         self.webView = webView
-        webView.load(URLRequest(url: URL(string: "https://m.youtube.com/watch?v=\(videoID)")!))
+        // Именно www, не m.: в приватной вкладке Safari владельца YouTube оставался на youtube.com и играл
+        // системным плеером, а на m.youtube.com включался свой плеер YouTube.
+        webView.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?v=\(videoID)")!))
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.finish(nil, "ссылки нет (YouTube дал свой плеер)") }
     }
 
