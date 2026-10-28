@@ -496,7 +496,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             progressView.frame = CGRect(x: 0, y: h - 2, width: w * progress, height: 2)
         case .expanded:
             if isFullscreen {
-                webView.frame = bounds
+                // Не под «чёлкой»/Dynamic Island и не у полоски «домой»: туда не дотянуться пальцем,
+                // и она закрывала кнопки YouTube (субтитры, ⚙). Поля остаются чёрными.
+                webView.frame = bounds.inset(by: safeAreaInsets)
                 return
             }
             let top = safeAreaInsets.top
@@ -506,7 +508,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             likeButton.frame = CGRect(x: w - safeAreaInsets.right - 148, y: top, width: 48, height: 44)
             musicButton.frame = CGRect(x: w - safeAreaInsets.right - 52, y: top, width: 48, height: 44)
             topTitleLabel.frame = CGRect(x: safeAreaInsets.left + 56, y: top, width: max(0, w - safeAreaInsets.left - safeAreaInsets.right - 56 - 152), height: 44)
-            webView.frame = CGRect(x: 0, y: topBar.frame.maxY, width: w, height: bounds.height - topBar.frame.maxY)
+            webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY,
+                                   width: w - safeAreaInsets.left - safeAreaInsets.right, height: bounds.height - topBar.frame.maxY)
         }
     }
 

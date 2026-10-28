@@ -72,8 +72,9 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
         NSLayoutConstraint.activate([
             browseContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            browseContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            browseContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            // Слева и справа — тоже в безопасной области: в альбомной ориентации там «чёлка».
+            browseContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            browseContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             browseContainer.bottomAnchor.constraint(equalTo: tabBar.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -195,7 +196,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             playerView.isHidden = false
             playerView.transform = .identity // мог остаться сдвиг от перетаскивания
             let h = PlayerView.miniHeight
-            playerView.frame = CGRect(x: 0, y: tabBar.frame.minY - h, width: bounds.width, height: h)
+            let safe = view.safeAreaInsets // в альбомной ориентации не под «чёлкой»
+            playerView.frame = CGRect(x: safe.left, y: tabBar.frame.minY - h, width: bounds.width - safe.left - safe.right, height: h)
             setBrowseBottomInset(h)
         case .expanded:
             playerView.isHidden = false
