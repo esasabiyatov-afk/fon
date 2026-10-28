@@ -206,7 +206,6 @@ enum Scripts {
 
   fon.backgroundTick = (first) => {
     const v = fon.video();
-    try { fon.wakeAudio && fon.wakeAudio(); } catch (e) {}
     // Видео ещё нет — значит, страница грузится; трек доиграл в фоне — ждём следующий.
     if (first) wantPlay = !v || !v.paused || shouldForce(v) || !!endedInBg;
     if (!wantPlay) return 'idle';
@@ -256,104 +255,6 @@ enum Scripts {
   document.addEventListener('playing', (e) => {
     if (e.target instanceof HTMLMediaElement) unmute(e.target);
   }, true);
-
-  // --- 1d. Своя громкость YouTube (ползунок в музыкальном плеере; владелец: музыку тише, чтобы слышать игру).
-  // На iPhone video.volume не работает, а звук обычного потока YouTube (MediaSource) нельзя пропустить
-  // через Web Audio — первая попытка ничего не меняла. Поэтому, пока громкость ниже 100% в режиме музыки,
-  // прячем от YouTube MediaSource: он отдаёт простой поток (файл googlevideo), а его звук уже идёт
-  // через Web Audio с регулятором. При 100% и в режиме видео — всё как обычно.
-  // Если YouTube простой поток не отдал — помечаем неудачу и возвращаемся к обычному (пробуем снова,
-  // когда ползунок сдвинут ещё раз).
-  const store = (k, v) => { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} };
-  const stored = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
-  fon.volume = Math.max(0, Math.min(1, Number(stored('fon-volume') ?? 1)));
-  if (!isFinite(fon.volume)) fon.volume = 1;
-  const wantSimple = (music) => music && fon.volume < 0.999 && stored('fon-simple-failed') !== '1';
-  fon.simpleStream = wantSimple(stored('fon-music') === '1');
-  if (fon.simpleStream) {
-    for (const n of ['MediaSource', 'ManagedMediaSource', 'WebKitMediaSource']) {
-      try { delete window[n]; } catch (e) {}
-      if (n in window) { try { Object.defineProperty(window, n, { value: undefined, configurable: true, writable: true }); } catch (e) {} }
-    }
-    // Звук чужого адреса Web Audio отдаёт тишиной — просим файл с CORS (googlevideo его поддерживает).
-    const srcDesc = Object.getOwnPropertyDescriptor(proto, 'src');
-    if (srcDesc && srcDesc.set) {
-      Object.defineProperty(proto, 'src', {
-        configurable: true,
-        get() { return srcDesc.get.call(this); },
-        set(value) {
-          try { if (value && !/^blob:/.test(String(value)) && !this.crossOrigin) this.crossOrigin = 'anonymous'; } catch (e) {}
-          srcDesc.set.call(this, value);
-        }
-      });
-    }
-  }
-  let audioCtx = null;
-  const gains = [];
-  const wireAudio = (v) => {
-    if (!fon.simpleStream || !v || v.__fonGain || !v.crossOrigin || /^blob:/.test(v.currentSrc || '')) return;
-    try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const gain = audioCtx.createGain();
-      gain.gain.value = fon.volume;
-      audioCtx.createMediaElementSource(v).connect(gain);
-      gain.connect(audioCtx.destination);
-      v.__fonGain = gain;
-      gains.push(gain);
-    } catch (e) {}
-    wakeAudio();
-  };
-  const wakeAudio = () => {
-    if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
-  };
-  fon.wakeAudio = wakeAudio;
-  for (const ev of ['loadedmetadata', 'play', 'playing']) {
-    document.addEventListener(ev, (e) => { if (e.target instanceof HTMLMediaElement) wireAudio(e.target); }, true);
-  }
-  // Перезагрузить страницу с этой же секунды, чтобы YouTube выбрал поток заново.
-  const reloadHere = () => {
-    const v = fon.video();
-    const u = new URL(location.href);
-    if (v && v.currentTime > 1) u.searchParams.set('t', Math.floor(v.currentTime) + 's');
-    location.replace(u.href);
-  };
-  const syncStream = () => {
-    if (wantSimple(fon.musicMode) !== fon.simpleStream) reloadHere();
-  };
-  fon.syncStream = syncStream;
-  // final — палец отпустил ползунок: только тогда (при необходимости) меняем поток.
-  fon.setVolume = (value, final) => {
-    const vol = Math.max(0, Math.min(1, Number(value)));
-    if (!isFinite(vol)) return;
-    fon.volume = vol;
-    store('fon-volume', String(vol));
-    for (const g of gains) { try { g.gain.value = vol; } catch (e) {} }
-    wakeAudio();
-    if (final) {
-      store('fon-simple-failed', null); // сдвинули ползунок — пробуем ещё раз
-      syncStream();
-    }
-  };
-  // Простой поток не заиграл: ошибка загрузки (нет CORS или YouTube не отдал файл) или 20 с без звука.
-  const simpleFailed = () => {
-    if (!fon.simpleStream || stored('fon-simple-failed') === '1') return;
-    store('fon-simple-failed', '1');
-    fon.post({ type: 'volumeFailed' });
-    reloadHere();
-  };
-  if (fon.simpleStream) {
-    let played = false;
-    document.addEventListener('playing', () => { played = true; }, true);
-    document.addEventListener('error', (e) => { if (e.target instanceof HTMLMediaElement && !played) simpleFailed(); }, true);
-    let waited = 0;
-    const check = setInterval(() => {
-      const v = fon.video();
-      if (played || (v && v.currentTime > 0)) { played = true; clearInterval(check); return; }
-      if (fon.realHidden || (v && v.__fonUserPaused)) return;
-      waited += 1;
-      if (waited >= 20) { clearInterval(check); simpleFailed(); }
-    }, 1000);
-  }
 
   // Наушники отключили — это пауза пользователя, в фоне не включаем звук сами.
   fon.markUserPaused = () => {
@@ -883,8 +784,6 @@ enum Scripts {
     try { localStorage.setItem('fon-music', fon.musicMode ? '1' : '0'); } catch (e) {}
     document.documentElement.classList.toggle('fon-music', fon.musicMode);
     applyQuality();
-    // Громкость ниже 100% работает через простой поток только в режиме музыки — режим сменили, меняем поток.
-    try { fon.syncStream(); } catch (e) {}
   };
 
   const ytPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');

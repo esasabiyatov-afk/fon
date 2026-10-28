@@ -8,8 +8,12 @@ final class MusicPlayerView: UIView {
     var onCollapse: (() -> Void)?
     var onShowQueue: (() -> Void)?
     var onVideoMode: (() -> Void)?
-    /// Своя громкость YouTube (0…1), отдельно от громкости телефона; второй параметр — палец отпустил ползунок.
-    var onVolume: ((Double, Bool) -> Void)?
+    /// Своя громкость YouTube (0…1), отдельно от громкости телефона.
+    var onVolume: ((Double) -> Void)?
+    /// Нет регулятора громкости в WebKit этой версии iOS — ползунок не показываем.
+    var volumeAvailable = true {
+        didSet { [volumeSlider, volumeLow, volumeHigh].forEach { $0.isHidden = !volumeAvailable } }
+    }
 
     private(set) var track: Track?
     var sourceName: String = "YouTube" { didSet { sourceLabel.text = sourceName } }
@@ -128,7 +132,6 @@ final class MusicPlayerView: UIView {
         volumeSlider.value = Float(Settings.youtubeVolume)
         volumeSlider.accessibilityLabel = "Громкость YouTube"
         volumeSlider.addTarget(self, action: #selector(volumeChanged), for: .valueChanged)
-        volumeSlider.addTarget(self, action: #selector(volumeReleased), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         for icon in [volumeLow, volumeHigh] {
             icon.tintColor = UIColor(white: 1, alpha: 0.6)
             icon.contentMode = .center
@@ -306,16 +309,7 @@ final class MusicPlayerView: UIView {
 
     @objc private func volumeChanged() {
         Settings.youtubeVolume = Double(volumeSlider.value)
-        onVolume?(Double(volumeSlider.value), false)
-    }
-
-    @objc private func volumeReleased() {
-        onVolume?(Double(volumeSlider.value), true)
-    }
-
-    /// Сделать тише не получилось — ползунок снова на 100%.
-    func resetVolume() {
-        volumeSlider.setValue(1, animated: true)
+        onVolume?(Double(volumeSlider.value))
     }
 
     @objc private func sliderChanged() {
