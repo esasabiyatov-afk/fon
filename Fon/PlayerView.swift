@@ -314,7 +314,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             self.webView.evaluateJavaScript(js) { result, _ in
                 let state = result as? String ?? "none"
                 playingTicks = state == "playing" ? playingTicks + 1 : 0
-                if playingTicks >= 3 || state == "idle" || tick >= 50 { finish() }
+                // iOS ставит паузу не сразу при сворачивании, а через долю секунды — секунду. Поэтому следим
+                // минимум 5 с и отпускаем, только когда музыка стабильно играет 4 с подряд (в 1.52 отпускали
+                // через ~1 с — пауза от iOS приходила уже после, и музыка останавливалась).
+                if (playingTicks >= 8 && tick >= 10) || state == "idle" || tick >= 50 { finish() }
             }
         }
         let timer = Timer(timeInterval: 0.5, repeats: true) { _ in step() }
