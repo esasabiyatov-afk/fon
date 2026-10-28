@@ -817,6 +817,38 @@ enum Scripts {
       });
       return pid;
     },
+    // Лента подписок без Shorts: [{ id, title, channel, channelId, published }], новые сверху.
+    async subscriptionVideos(pages) {
+      const out = [];
+      const seen = new Set();
+      const add = (v) => { if (v.id && !seen.has(v.id) && v.title) { seen.add(v.id); out.push(v); } };
+      let r = await api('browse', { browseId: 'FEsubscriptions' });
+      for (let page = 0; page < (pages || 3) && r; page++) {
+        for (const name of ['videoWithContextRenderer', 'videoRenderer', 'gridVideoRenderer', 'compactVideoRenderer']) {
+          for (const v of findAll(r, name)) {
+            if (!v || !v.videoId || findAll(v, 'reelWatchEndpoint').length) continue;
+            const by = v.shortBylineText || v.longBylineText || v.ownerText;
+            add({ id: v.videoId, title: text(v.headline || v.title), channel: text(by),
+                  channelId: findAll(by, 'browseId')[0] || '', published: text(v.publishedTimeText) });
+          }
+        }
+        // Новая вёрстка YouTube: lockupViewModel вместо videoRenderer.
+        for (const l of findAll(r, 'lockupViewModel')) {
+          if (!l || !l.contentId || (l.contentType && l.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO')) continue;
+          if (findAll(l, 'reelWatchEndpoint').length) continue;
+          const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
+          const rows = (findAll(meta, 'metadataRows')[0] || []).map((row) =>
+            (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean));
+          add({ id: l.contentId, title: (meta.title && meta.title.content) || '',
+                channel: (rows[0] && rows[0][0]) || '',
+                channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
+                published: (rows[1] && rows[1][rows[1].length - 1]) || '' });
+        }
+        const next = findAll(r, 'continuationCommand')[0];
+        r = next && next.token ? await api('browse', { continuation: next.token }) : null;
+      }
+      return out;
+    },
     async unlike(pid, id) {
       pid = pid || await findPlaylist();
       if (pid) {
@@ -832,6 +864,179 @@ enum Scripts {
 """#
 
     // MARK: - Основное окно (лента, поиск, подписки)
+
+    /// Подборки YouTube Music (тот же аккаунт Google) — из скрытого окна music.youtube.com.
+    static let music = #"""
+(() => {
+  if (window.__fonMusic) return;
+  const cookie = (name) => {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[-_.]/g, '\\$&') + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : null;
+  };
+  const sapisid = () => cookie('SAPISID') || cookie('__Secure-3PAPISID');
+  const sha1 = async (s) => {
+    const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+  // Версия клиента — по дате (как делают сторонние клиенты YouTube Music); пара дней назад — точно существует.
+  const day = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10).replace(/-/g, '');
+  const CONTEXT = { client: { clientName: 'WEB_REMIX', clientVersion: '1.' + day + '.01.00', hl: 'ru' }, user: {} };
+  const api = async (endpoint, body, query) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Origin': location.origin,
+      'X-Goog-AuthUser': '0',
+      'X-Youtube-Client-Name': '67',
+      'X-Youtube-Client-Version': CONTEXT.client.clientVersion
+    };
+    const sid = sapisid();
+    if (sid) {
+      const ts = Math.floor(Date.now() / 1000);
+      headers['Authorization'] = 'SAPISIDHASH ' + ts + '_' + await sha1(ts + ' ' + sid + ' ' + location.origin);
+    }
+    const res = await fetch('/youtubei/v1/' + endpoint + '?prettyPrint=false' + (query || ''), {
+      method: 'POST', credentials: 'include', headers,
+      body: JSON.stringify(Object.assign({ context: CONTEXT }, body))
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('signed-out');
+    if (!res.ok) throw new Error('http-' + res.status);
+    return res.json();
+  };
+  const findAll = (obj, key, out) => {
+    out = out || [];
+    if (obj && typeof obj === 'object') {
+      for (const k in obj) {
+        if (k === key) out.push(obj[k]);
+        findAll(obj[k], key, out);
+      }
+    }
+    return out;
+  };
+  const text = (t) => (t ? (t.simpleText || (t.runs || []).map((r) => r.text).join('')) : '');
+  const thumb = (obj, size) => {
+    const list = findAll(obj, 'thumbnails')[0] || [];
+    const t = list[list.length - 1];
+    if (!t || !t.url) return null;
+    const url = t.url.startsWith('//') ? 'https:' + t.url : t.url;
+    // Картинки googleusercontent отдаются нужного размера по параметру в адресе.
+    return url.replace(/=w\d+-h\d+/, '=w' + size + '-h' + size);
+  };
+  const pageType = (nav) => {
+    try { return nav.browseEndpoint.browseEndpointContextSupportedConfigs.browseEndpointContextMusicConfig.pageType || ''; } catch (e) { return ''; }
+  };
+  const isArtist = (nav) => /ARTIST|USER_CHANNEL/.test(pageType(nav));
+  const nextCont = (r) => { const c = findAll(r, 'nextContinuationData')[0]; return c && c.continuation; };
+  const contQuery = (c) => '&ctoken=' + encodeURIComponent(c) + '&continuation=' + encodeURIComponent(c) + '&type=next';
+
+  // Карточка или строка трека → { title, subtitle, thumb, videoId, playlistId, params, browseId, artist }.
+  const parseItem = (wrap) => {
+    const two = wrap && wrap.musicTwoRowItemRenderer;
+    const row = wrap && wrap.musicResponsiveListItemRenderer;
+    if (two) {
+      const nav = two.navigationEndpoint || {};
+      const p = nav.watchEndpoint || nav.watchPlaylistEndpoint ||
+        findAll(two.thumbnailOverlay, 'watchPlaylistEndpoint')[0] || findAll(two.thumbnailOverlay, 'watchEndpoint')[0] || {};
+      return {
+        title: text(two.title), subtitle: text(two.subtitle), thumb: thumb(two.thumbnailRenderer, 544),
+        videoId: p.videoId || null, playlistId: p.playlistId || null, params: p.params || null,
+        browseId: (nav.browseEndpoint && nav.browseEndpoint.browseId) || null, artist: isArtist(nav)
+      };
+    }
+    if (row) {
+      const cols = (row.flexColumns || []).map((c) =>
+        text(c.musicResponsiveListItemFlexColumnRenderer && c.musicResponsiveListItemFlexColumnRenderer.text)).filter(Boolean);
+      const nav = row.navigationEndpoint || {};
+      const p = findAll(row.overlay, 'watchEndpoint')[0] || findAll(row.flexColumns, 'watchEndpoint')[0] || {};
+      return {
+        title: cols[0] || '', subtitle: cols.slice(1).join(' • '), thumb: thumb(row.thumbnail, 226),
+        videoId: (row.playlistItemData && row.playlistItemData.videoId) || p.videoId || null,
+        playlistId: p.playlistId || null, params: p.params || null,
+        browseId: (nav.browseEndpoint && nav.browseEndpoint.browseId) || null, artist: isArtist(nav)
+      };
+    }
+    return null;
+  };
+  const playable = (i) => i && i.title && (i.videoId || i.playlistId || i.browseId);
+
+  // Полки главной YouTube Music по порядку: { title, kind: songs | cards | artists, items }.
+  const parseShelves = (r) => {
+    const list = findAll(r, 'sectionListRenderer')[0];
+    const cont = r && r.continuationContents && r.continuationContents.sectionListContinuation;
+    const sections = (list && list.contents) || (cont && cont.contents) || [];
+    const out = [];
+    for (const sec of sections) {
+      const s = sec.musicCarouselShelfRenderer || sec.musicImmersiveCarouselShelfRenderer;
+      if (!s) continue;
+      const items = (s.contents || []).map(parseItem).filter(playable);
+      if (!items.length) continue;
+      const songs = (s.contents || []).some((c) => c.musicResponsiveListItemRenderer);
+      out.push({
+        title: text(findAll(s.header, 'title')[0]) || 'Подборка',
+        kind: items.every((i) => i.artist) ? 'artists' : (songs ? 'songs' : 'cards'),
+        items
+      });
+    }
+    return out;
+  };
+
+  window.__fonMusic = {
+    signedIn: () => !!sapisid(),
+    async home() {
+      let r = await api('browse', { browseId: 'FEmusic_home' });
+      const shelves = parseShelves(r);
+      let c = nextCont(r);
+      for (let page = 0; page < 3 && c; page++) {
+        try { r = await api('browse', {}, contQuery(c)); } catch (e) { break; }
+        shelves.push(...parseShelves(r));
+        c = nextCont(r);
+      }
+      return { signedIn: !!sapisid(), shelves };
+    },
+    // Исполнители, на которых вы подписаны (Медиатека YouTube Music → Подписки).
+    async artists() {
+      if (!sapisid()) throw new Error('signed-out');
+      const out = [];
+      const seen = new Set();
+      let r = await api('browse', { browseId: 'FEmusic_library_corpus_artists' });
+      for (let page = 0; page < 6 && r; page++) {
+        for (const w of findAll(r, 'musicResponsiveListItemRenderer')) {
+          const it = parseItem({ musicResponsiveListItemRenderer: w });
+          if (!it || !it.title || !it.browseId || seen.has(it.browseId)) continue;
+          seen.add(it.browseId);
+          it.artist = true;
+          out.push(it);
+        }
+        const c = nextCont(r);
+        r = null;
+        if (c) { try { r = await api('browse', {}, contQuery(c)); } catch (e) {} }
+      }
+      return out;
+    },
+    // Что включить по карточке: { videoId, playlistId } (у альбома/плейлиста — первый трек, у исполнителя — его радио).
+    async resolve(it) {
+      if (it.videoId) return { videoId: it.videoId, playlistId: it.playlistId || null };
+      let pid = it.playlistId;
+      let params = it.params;
+      if (!pid && it.browseId) {
+        const r = await api('browse', { browseId: it.browseId });
+        const radio = findAll(r, 'startRadioButton')[0];
+        const w = (radio && findAll(radio, 'watchPlaylistEndpoint')[0]) ||
+          findAll(r, 'watchPlaylistEndpoint')[0] || findAll(r, 'watchEndpoint')[0];
+        if (!w) return null;
+        if (w.videoId) return { videoId: w.videoId, playlistId: w.playlistId || null };
+        pid = w.playlistId;
+        params = w.params;
+      }
+      if (!pid) return null;
+      const body = { playlistId: pid, enablePersistentPlaylistPanel: true, isAudioOnly: true };
+      if (params) body.params = params;
+      const n = await api('next', body);
+      const first = findAll(n, 'playlistPanelVideoRenderer')[0];
+      return first && first.videoId ? { videoId: first.videoId, playlistId: pid } : null;
+    }
+  };
+})();
+"""#
 
     static let browse = #"""
 (() => {

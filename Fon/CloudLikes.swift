@@ -1,11 +1,10 @@
 import UIKit
-import WebKit
 
 /// «Понравившиеся» в облаке: приватный плейлист «Fon — музыка» в аккаунте YouTube.
-/// Запросы идут из скрытого окна m.youtube.com (тот же вход в Google, что в приложении)
+/// Запросы идут из скрытого окна m.youtube.com (`HiddenPage.youtube`, тот же вход в Google)
 /// через внутренний API YouTube — скрипт `Scripts.cloud`. Список держим в памяти:
 /// ♡ отвечает сразу, а запрос уходит следом (при ошибке — откат и сообщение).
-final class CloudLikes: NSObject, WKNavigationDelegate {
+final class CloudLikes {
     static let shared = CloudLikes()
     static let didChange = Notification.Name("FonCloudLikesDidChange")
     /// object — текст ошибки для пользователя.
@@ -20,11 +19,6 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "cloudPlaylistID") }
     }
 
-    private var webView: WKWebView?
-    private var ready = false
-    /// Запросы идут строго по одному: иначе два одновременных «плейлиста ещё нет» создавали два плейлиста.
-    private var pending: [() -> Void] = []
-    private var running = false
     private var refreshCompletions: [() -> Void]?
     private var migrating = false
 
@@ -38,30 +32,9 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
         return components.url
     }
 
-    /// Создаёт скрытое окно (крошечная страница m.youtube.com — без тяжёлой ленты) и грузит список.
     func start(in view: UIView) {
-        guard webView == nil else { return }
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 2, height: 2), configuration: config)
-        webView.customUserAgent = WebViewFactory.safariUserAgent()
-        webView.alpha = 0.01
-        webView.isUserInteractionEnabled = false
-        webView.navigationDelegate = self
-        view.insertSubview(webView, at: 0)
-        self.webView = webView
-        webView.load(URLRequest(url: URL(string: "https://m.youtube.com/robots.txt")!))
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        ready = true
-        runNext()
-        if !loaded { refresh() }
-    }
-
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        ready = false
-        webView.reload()
+        HiddenPage.youtube.start(in: view)
+        refresh()
     }
 
     // MARK: - Операции
@@ -143,32 +116,18 @@ final class CloudLikes: NSObject, WKNavigationDelegate {
         }
     }
 
-    // MARK: - Вызов скрипта в скрытом окне
-
-    /// arguments считаются в момент запуска — так запрос из очереди видит id плейлиста, созданного предыдущим.
     private func call(_ expression: String, _ arguments: @escaping () -> [String: Any],
                       completion: @escaping (Result<Any, Error>) -> Void) {
-        pending.append { [weak self] in
-            guard let self, let webView = self.webView else { return }
-            webView.callAsyncJavaScript(Scripts.cloud + "\nreturn await " + expression,
-                                        arguments: arguments(), in: nil, in: .page) { [weak self] result in
-                completion(result)
-                self?.running = false
-                self?.runNext()
-            }
-        }
-        runNext()
+        HiddenPage.youtube.call(expression, arguments, completion: completion)
     }
 
-    private func runNext() {
-        guard ready, !running, !pending.isEmpty else { return }
-        running = true
-        pending.removeFirst()()
-    }
-
-    private static func describe(_ error: Error) -> String {
+    static func isSignedOut(_ error: Error) -> Bool {
         let message = ((error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String) ?? error.localizedDescription
-        if message.contains("signed-out") {
+        return message.contains("signed-out")
+    }
+
+    static func describe(_ error: Error) -> String {
+        if isSignedOut(error) {
             return "Войдите в аккаунт Google: режим «Видео» → вкладка «Вы». Понравившиеся хранятся в вашем плейлисте YouTube."
         }
         return "Не удалось связаться с YouTube. Проверьте интернет и попробуйте ещё раз."

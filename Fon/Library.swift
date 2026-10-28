@@ -96,6 +96,20 @@ final class ArtworkLoader {
         }
     }
 
+    /// Готовая картинка по ссылке (обложки YouTube Music уже квадратные). completion — на главном потоке.
+    func load(url: URL, completion: @escaping (UIImage?) -> Void) {
+        let key = url.absoluteString as NSString
+        if let image = images.object(forKey: key) {
+            completion(image)
+            return
+        }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            let image = data.flatMap(UIImage.init(data:))
+            if let image { self?.images.setObject(image, forKey: key) }
+            DispatchQueue.main.async { completion(image) }
+        }.resume()
+    }
+
     private func fetch(_ id: String, names: ArraySlice<String>, maxSide: CGFloat, done: @escaping (UIImage?) -> Void) {
         guard let name = names.first, let url = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg") else {
             done(nil)

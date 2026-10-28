@@ -13,7 +13,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case mode // переключатель «Видео / Музыка» — в центре панели
     }
 
-    private enum TabContent { case web(String), library, musicHome, history, search, none }
+    private enum TabContent { case web(String), library, musicHome, musicSubscriptions, history, search, none }
 
     private let browseContainer = UIView()
     private var browseViews: [Int: WKWebView] = [:]
@@ -22,6 +22,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var libraryNav: UINavigationController?
     private var homeNav: UINavigationController?
     private var historyNav: UINavigationController?
+    private var subscriptionsNav: UINavigationController?
     private var searchVC: SearchViewController?
     /// Поиск — не вкладка на панели, а отдельное место в той же области (открывается лупой YouTube
     /// или лупой на подборках); панель и мини-плеер остаются, вернуться — любой вкладкой.
@@ -106,6 +107,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         nc.addObserver(self, selector: #selector(cloudFailed(_:)), name: CloudLikes.didFail, object: nil)
 
         CloudLikes.shared.start(in: view)
+        MusicFeed.shared.start(in: view)
         showTab(0)
     }
 
@@ -216,6 +218,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         libraryNav?.additionalSafeAreaInsets.bottom = inset
         homeNav?.additionalSafeAreaInsets.bottom = inset
         historyNav?.additionalSafeAreaInsets.bottom = inset
+        subscriptionsNav?.additionalSafeAreaInsets.bottom = inset
     }
 
     private func applyBottomInset(to webView: WKWebView) {
@@ -296,6 +299,17 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return nav
     }
 
+    /// «Подписки» в режиме музыки — исполнители и их новые треки.
+    private func subscriptionsController() -> UINavigationController {
+        if let subscriptionsNav { return subscriptionsNav }
+        let subscriptions = MusicHomeViewController(kind: .subscriptions)
+        subscriptions.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
+        subscriptions.onSearch = { [weak self] in self?.presentSearch(prefill: nil) }
+        let nav = embed(subscriptions)
+        subscriptionsNav = nav
+        return nav
+    }
+
     /// Нативный раздел (медиатека, подборки) внутри области вкладок.
     private func embed(_ root: UIViewController) -> UINavigationController {
         let nav = UINavigationController(rootViewController: root)
@@ -319,7 +333,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         // Главная в режиме музыки — подборки; лента YouTube с фильтром «Музыка» — по карточке.
         case .home: return music ? (musicFeedShown ? .web("/#fon-music") : .musicHome) : .web("/")
         case .history: return music ? .history : .web("/feed/history")
-        case .subscriptions: return .web("/feed/subscriptions")
+        // Подписки в режиме музыки — только исполнители и их музыка.
+        case .subscriptions: return music ? .musicSubscriptions : .web("/feed/subscriptions")
         case .you: return music ? .library : .web("/feed/library")
         case .mode: return .none
         }
@@ -332,6 +347,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         libraryNav?.view.isHidden = true
         homeNav?.view.isHidden = true
         historyNav?.view.isHidden = true
+        subscriptionsNav?.view.isHidden = true
         searchVC?.view.isHidden = true
         if case .web = tabContent {} else { browseViews.values.forEach { $0.isHidden = true } }
         switch tabContent {
@@ -347,6 +363,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             historyController().view.isHidden = false
         case .musicHome:
             homeController().view.isHidden = false
+        case .musicSubscriptions:
+            subscriptionsController().view.isHidden = false
         case .web(let root):
             let webView = browseView(for: index)
             browseViews.forEach { $0.value.isHidden = $0.key != index }
@@ -391,6 +409,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             } else {
                 (homeNav?.viewControllers.first as? MusicHomeViewController)?.scrollToTop()
             }
+        case .musicSubscriptions:
+            (subscriptionsNav?.viewControllers.first as? MusicHomeViewController)?.scrollToTop()
         case .web(let root):
             let webView = browseView(for: index)
             let scroll = webView.scrollView
