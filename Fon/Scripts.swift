@@ -1448,6 +1448,16 @@ enum Scripts {
     try { delete window[n]; } catch (e) {}
     if (n in window) { try { Object.defineProperty(window, n, { value: undefined, configurable: true, writable: true }); } catch (e) {} }
   }
+  // Окно не должно управлять экраном блокировки (иначе кнопки там уходили его плееру, а не нашему — «каша»
+  // у владельца в 1.63): Media Session этой страницы — пустышка.
+  try {
+    const ms = navigator.mediaSession;
+    if (ms) {
+      ms.setActionHandler = () => {};
+      Object.defineProperty(ms, 'metadata', { configurable: true, get: () => null, set: () => {} });
+      Object.defineProperty(ms, 'playbackState', { configurable: true, get: () => 'none', set: () => {} });
+    }
+  } catch (e) {}
   const player = () => document.getElementById('movie_player');
   const videoInfo = () => {
     try { const d = player() && player().getVideoData && player().getVideoData(); if (d && d.video_id) return d; } catch (e) {}
@@ -1458,8 +1468,9 @@ enum Scripts {
   let done = false;
   let started = Date.now();
   const stopAll = () => {
+    try { const p = player(); if (p && p.stopVideo) p.stopVideo(); } catch (e) {}
     for (const v of document.querySelectorAll('video, audio')) {
-      try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+      try { v.muted = true; v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
     }
   };
   window.__fonStop = () => { done = true; stopAll(); };
@@ -1495,13 +1506,27 @@ enum Scripts {
       set(value) { send(value); try { this.muted = true; } catch (e) {} desc.set.call(this, value); }
     });
   }
+  // Пока ссылка отдана, плеер YouTube в окне не может ничего запустить; звук здесь всегда выключен.
+  const origPlay = proto.play;
+  proto.play = function () {
+    try { this.muted = true; } catch (e) {}
+    if (done) return Promise.resolve();
+    return origPlay.call(this);
+  };
   const setAttr = Element.prototype.setAttribute;
   Element.prototype.setAttribute = function (name, value) {
     if ((this instanceof HTMLMediaElement || this instanceof HTMLSourceElement) && String(name).toLowerCase() === 'src') send(value);
     return setAttr.call(this, name, value);
   };
   setInterval(() => {
-    if (done) return;
+    // Ссылка уже отдана — окно «немое»: плеер YouTube сам мог снова запустить видео или включить следующее
+    // со звуком (1.63: «приложение показывает одно, играет другое»).
+    if (done) {
+      for (const v of document.querySelectorAll('video, audio')) {
+        try { v.muted = true; if (!v.paused) v.pause(); } catch (e) {}
+      }
+      return;
+    }
     for (const v of document.querySelectorAll('video, audio')) {
       try { v.muted = true; } catch (e) {}
       // Без playsinline iPhone открыл бы видео скрытого окна на весь экран поверх приложения.
