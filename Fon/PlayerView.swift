@@ -57,6 +57,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let dragGesture = UIPanGestureRecognizer()
     private var backgroundWatch: Timer?
     private var dragStartedInFullscreen = false
+    /// Открыто меню YouTube (⚙ и др.): свайп вниз закрывает его, а не плеер и не полный экран.
+    private var youTubeMenuOpen = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -147,6 +149,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         queueIDs = queue.map { Set($0) }
         currentVideoID = Self.videoID(from: url)
         currentTrack = nil
+        youTubeMenuOpen = false
         updateLikeButton()
         let list = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "list" }?.value
         musicView.sourceName = source ?? (list?.hasPrefix("RD") == true ? "Микс" : "YouTube")
@@ -345,6 +348,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === dragGesture else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
         guard mode == .expanded else { return false }
+        if youTubeMenuOpen && !nativeMusic { return false }
         let v = dragGesture.velocity(in: self)
         guard v.y > 0, v.y > abs(v.x) * 1.5 else { return false }
         if isFullscreen { return true }
@@ -524,6 +528,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             Library.shared.recordPlay(Track(id: id, title: clean.title, artist: clean.artist))
         case "trackEnding":
             onTrackEnding?()
+        case "menu":
+            youTubeMenuOpen = body["open"] as? Bool == true
         case "fullscreen":
             setFullscreen(body["on"] as? Bool == true, vertical: body["vertical"] as? Bool == true)
         case "browse":

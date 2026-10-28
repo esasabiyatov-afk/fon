@@ -455,6 +455,18 @@ enum Scripts {
       position: absolute !important; top: 0 !important; left: 0 !important;
       width: 100% !important; height: 100% !important; object-fit: contain !important; opacity: 1 !important;
     }
+    /* Субтитры в полном экране — по центру ширины (YouTube считал их место по старому размеру плеера). */
+    html.fon-full .ytp-caption-window-container {
+      position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important;
+    }
+    html.fon-full .caption-window {
+      left: 50% !important; right: auto !important; margin-left: 0 !important;
+      transform: translateX(-50%) !important; width: auto !important; max-width: 90% !important; text-align: center !important;
+    }
+    /* Вертикальный полный экран: субтитры сразу под картинкой, а не внизу экрана. */
+    html.fon-full.fon-cap-below .caption-window {
+      top: var(--fon-cap-top, auto) !important; bottom: auto !important;
+    }
   `);
   // После мини-полоски YouTube может не заметить, что окно снова большое, и оставить видео
   // маленьким в углу — несколько раз сообщаем ему о новом размере.
@@ -484,7 +496,7 @@ enum Scripts {
     if (v) fire(v, on ? 'webkitbeginfullscreen' : 'webkitendfullscreen');
     fire(document, 'fullscreenchange');
     fire(document, 'webkitfullscreenchange');
-    setTimeout(() => { fire(window, 'resize'); try { applyQuality(); } catch (e) {} }, 300);
+    setTimeout(() => { fire(window, 'resize'); try { applyQuality(); } catch (e) {} try { fon.placeCaptions(); } catch (e) {} }, 300);
     for (const t of [400, 1200]) setTimeout(() => fon.repaint(), t);
   };
 
@@ -563,6 +575,52 @@ enum Scripts {
   if (document.body) watchLayout(); else document.addEventListener('DOMContentLoaded', watchLayout);
   // Прокрутка в полном экране (например, списка в меню) — тоже повод перерисовать.
   window.addEventListener('touchend', () => repaintSoon(500), true);
+  // Под видео (вертикальный полный экран) достаточно места — субтитры ставим сразу под картинкой.
+  const placeCaptions = () => {
+    const root = document.documentElement;
+    const v = fon.video();
+    if (!fon.isFull || !v || !v.videoWidth || !v.videoHeight) { root.classList.remove('fon-cap-below'); return; }
+    const W = window.innerWidth, H = window.innerHeight;
+    const k = Math.min(W / v.videoWidth, H / v.videoHeight);
+    const bottom = (H + v.videoHeight * k) / 2;
+    const below = H - bottom > 70;
+    root.style.setProperty('--fon-cap-top', Math.round(bottom + 10) + 'px');
+    root.classList.toggle('fon-cap-below', below);
+  };
+  window.addEventListener('resize', () => setTimeout(placeCaptions, 50));
+  document.addEventListener('loadedmetadata', placeCaptions, true);
+  document.addEventListener('resize', placeCaptions, true); // у video: сменились размеры кадра
+  fon.placeCaptions = placeCaptions;
+
+  // Открыто меню YouTube (⚙, субтитры, «ещё»): тянуть его вниз — значит закрыть меню,
+  // а не выйти из полного экрана или свернуть плеер. Сообщаем приложению, когда меню открыто.
+  const MENUS = 'bottom-sheet-container, .bottom-sheet-container, ytm-bottom-sheet-renderer, bottom-sheet-layout, ' +
+    'ytm-menu-popup-renderer, ytm-dialog, .dialog-container, [role="dialog"], tp-yt-paper-dialog, ytm-select';
+  let menuOpen = false;
+  const checkMenu = () => {
+    let open = false;
+    try {
+      for (const el of document.querySelectorAll(MENUS)) {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        if (r.height > 40 && r.width > 40 && cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0') { open = true; break; }
+      }
+    } catch (e) {}
+    if (open !== menuOpen) {
+      menuOpen = open;
+      fon.post({ type: 'menu', open });
+    }
+  };
+  window.addEventListener('touchstart', checkMenu, true);
+  window.addEventListener('touchend', () => { for (const t of [150, 450, 900]) setTimeout(checkMenu, t); }, true);
+  // Меню добавляются в страницу новыми элементами; проверяем не чаще 4 раз в секунду (субтитры тоже добавляют строки).
+  let menuTimer = null;
+  const checkMenuSoon = () => {
+    if (menuTimer || fon.realHidden) return;
+    menuTimer = setTimeout(() => { menuTimer = null; checkMenu(); }, 250);
+  };
+  const watchMenus = () => { try { new MutationObserver(checkMenuSoon).observe(document.body, { childList: true, subtree: true }); } catch (e) {} };
+  if (document.body) watchMenus(); else document.addEventListener('DOMContentLoaded', watchMenus);
   fon.setFull = setFull;
   const getter = (obj, name, get) => { try { Object.defineProperty(obj, name, { get, configurable: true }); } catch (e) {} };
   const VP = HTMLVideoElement.prototype;
