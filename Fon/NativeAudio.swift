@@ -538,7 +538,11 @@ final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate
               let url = URL(string: text) else { return }
         // Ссылка от прошлого трека (плеер ещё не переключился) — не та.
         if let id = body["id"] as? String, !id.isEmpty, let currentID, id != currentID { return }
-        finish(url, text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл",
+        // Для оценки «можно ли без окна, одними запросами»: какие защиты в рабочей ссылке (только имена, без значений).
+        let names = Set(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.map(\.name) ?? [])
+        let marks = ["pot", "n", "sig", "lsig", "itag"].filter(names.contains).joined(separator: ",")
+        let itag = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "itag" }?.value ?? "?"
+        finish(url, (text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл") + " (itag \(itag); \(marks))",
                title: body["title"] as? String, userAgent: body["ua"] as? String)
     }
 
