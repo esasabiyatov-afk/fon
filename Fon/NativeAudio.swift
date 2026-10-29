@@ -105,67 +105,22 @@ enum YouTubeStreams {
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
-    /// Трек очереди и аудиотрек ли он (обложка + звук от дистрибьютора, канал «Исполнитель - Topic»),
-    /// а не клип или выступление.
-    struct QueueItem {
-        let track: Track
-        let audioTrack: Bool
-    }
-
-    static func queue(videoID: String, playlistID: String) async -> [QueueItem] {
+    static func queue(videoID: String, playlistID: String) async -> [Track] {
         let cfg = config ?? fallbackConfig
         let body: [String: Any] = ["context": YouTubeAccount.context(cfg.context), "videoId": videoID, "playlistId": playlistID]
         guard let json = await post("next", body: body, config: cfg) else { return [] }
         return parseQueue(json)
     }
 
-    /// Аудиотрек той же песни для клипа или выступления — обычным поиском YouTube (YouTube Music в Кыргызстане
-    /// не работает — владелец, 29.10.2026; в обычном миксе аудиотреков почти нет — журнал 1.68 «аудиотреков 0»):
-    /// «исполнитель песня» → первый ролик-аудиотрек (канал «… - Topic» или описание «Provided to YouTube by»),
-    /// у которого название совпадает с песней, а канал — с исполнителем.
-    static func audioVersion(of track: Track) async -> Track? {
-        let want = normalized(track.title)
-        guard want.count >= 2 else { return nil }
-        let cfg = config ?? fallbackConfig
-        let body: [String: Any] = ["context": YouTubeAccount.context(cfg.context), "query": "\(track.artist) \(track.title)"]
-        guard let json = await post("search", body: body, config: cfg) else { return nil }
-        let artist = normalized(track.artist)
-        for case let video as [String: Any] in findAll(json, key: "videoRenderer").prefix(8) {
-            guard let id = video["videoId"] as? String else { continue }
-            let channel = text(video["ownerText"] ?? video["longBylineText"])
-            let snippet = findAll(video, key: "snippetText").map { text($0) }.joined(separator: " ")
-            guard isTopicChannel(channel) || snippet.contains("Provided to YouTube by") else { continue }
-            let title = normalized(text(video["title"]))
-            guard title.count >= 2, title == want || want.contains(title) || title.contains(want) else { continue }
-            let owner = normalized(channel.components(separatedBy: CharacterSet(charactersIn: "-–")).dropLast().joined())
-            guard artist.isEmpty || owner.isEmpty || artist.contains(owner) || owner.contains(artist) else { continue }
-            return Track(id: id, title: track.title, artist: track.artist)
-        }
-        return nil
-    }
-
-    /// Только буквы и цифры в нижнем регистре: «Too Good At Goodbyes» → «toogoodatgoodbyes».
-    private static func normalized(_ text: String) -> String {
-        String(text.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
-    }
-
-    private static func parseQueue(_ json: [String: Any]) -> [QueueItem] {
+    private static func parseQueue(_ json: [String: Any]) -> [Track] {
         var seen = Set<String>()
         return findAll(json, key: "playlistPanelVideoRenderer").compactMap { item in
             guard let video = item as? [String: Any], let id = video["videoId"] as? String, seen.insert(id).inserted else { return nil }
             let title = text(video["title"])
             let artist = text(video["shortBylineText"] ?? video["longBylineText"])
             let clean = TrackTitle.clean(title: title, artist: artist)
-            // Тип от YouTube (MUSIC_VIDEO_TYPE_ATV — аудиотрек, OMV — клип, UGC — прочее); нет типа — по каналу «… - Topic».
-            let type = findAll(video, key: "musicVideoType").first as? String
-            return QueueItem(track: Track(id: id, title: clean.title, artist: clean.artist),
-                             audioTrack: type.map { $0 == "MUSIC_VIDEO_TYPE_ATV" } ?? isTopicChannel(artist))
+            return Track(id: id, title: clean.title, artist: clean.artist)
         }
-    }
-
-    private static func isTopicChannel(_ name: String) -> Bool {
-        let lower = name.lowercased()
-        return ["- topic", "– topic", "- тема", "– тема"].contains { lower.hasSuffix($0) }
     }
 
     private static func post(_ endpoint: String, body: [String: Any], config: Config) async -> [String: Any]? {
@@ -314,12 +269,6 @@ final class NativeAudio: NSObject {
     private var playedOnce = false
     private var failuresInRow = 0
     private var extending = false
-    /// Микс, который приложение собрало само от трека (`RD<id>`, или очередь кончилась), — не выбранный плейлист.
-    private var autoMix = false
-    /// Нажатый трек (играет как есть), известные аудиотреки и треки, для которых аудиотрек уже искали.
-    private var chosenID: String?
-    private var audioIDs = Set<String>()
-    private var swapChecked = Set<String>()
     private var statusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var controlObservation: NSKeyValueObservation?
@@ -430,9 +379,6 @@ final class NativeAudio: NSObject {
         playedOnce = false
         failuresInRow = 0
         loop = false
-        autoMix = false
-        chosenID = value("v")
-        swapChecked = []
         pendingStart = value("t").flatMap { Double($0.replacingOccurrences(of: "s", with: "")) }.flatMap { $0 > 0 ? $0 : nil }
         if url.path == "/watch_videos", let list = value("video_ids") {
             queue = list.split(separator: ",").map { Track(id: String($0), title: "", artist: "") }
@@ -448,7 +394,6 @@ final class NativeAudio: NSObject {
                 queue = [Track(id: id, title: "", artist: "")]
                 index = 0
                 playlistID = value("list") ?? "RD" + id
-                autoMix = playlistID == "RD" + id
                 loadQueue(seed: id, playlistID: playlistID!)
             }
         }
@@ -459,40 +404,23 @@ final class NativeAudio: NSObject {
     private func loadQueue(seed: String, playlistID: String) {
         guard !extending else { return }
         extending = true
-        let mix = autoMix
         Task { [weak self] in
-            var items = await YouTubeStreams.queue(videoID: seed, playlistID: playlistID)
-            if items.isEmpty, !playlistID.hasPrefix("RD" + seed) {
-                items = await YouTubeStreams.queue(videoID: seed, playlistID: "RD" + seed) // «Мой микс» без входа не отдаётся
+            var tracks = await YouTubeStreams.queue(videoID: seed, playlistID: playlistID)
+            if tracks.isEmpty, !playlistID.hasPrefix("RD" + seed) {
+                tracks = await YouTubeStreams.queue(videoID: seed, playlistID: "RD" + seed) // «Мой микс» без входа не отдаётся
             }
             await MainActor.run {
                 guard let self, self.active else { return }
                 self.extending = false
                 var known = Set(self.queue.map(\.id))
-                for item in items where known.insert(item.track.id).inserted { self.queue.append(item.track) }
-                for item in items where item.audioTrack { self.audioIDs.insert(item.track.id) }
-                if mix { NativeAudio.lastLog += "; очередь: \(items.count), аудиотреков \(items.filter(\.audioTrack).count)" }
+                for track in tracks where known.insert(track.id).inserted { self.queue.append(track) }
                 // Названия для уже стоящих в очереди треков.
                 for (i, track) in self.queue.enumerated() where track.title.isEmpty {
-                    if let named = items.first(where: { $0.track.id == track.id }) { self.queue[i] = named.track }
+                    if let named = tracks.first(where: { $0.id == track.id }) { self.queue[i] = named }
                 }
                 self.publish()
             }
         }
-    }
-
-    /// В миксе от трека клип или выступление заменяем аудиотреком той же песни (просьба владельца: «обычно
-    /// аудиотреки»). Нажатый трек играет как есть; выбранные плейлисты и миксы — тоже.
-    private func shouldSwap(_ track: Track) -> Bool {
-        autoMix && track.id != chosenID && !audioIDs.contains(track.id) && !swapChecked.contains(track.id) && !track.title.isEmpty
-    }
-
-    /// Нашёлся аудиотрек — он встаёт в очередь на место клипа.
-    private func swap(_ original: Track, to audio: Track) {
-        audioIDs.insert(audio.id)
-        guard let i = queue.firstIndex(where: { $0.id == original.id }) else { return }
-        queue[i] = audio
-        NativeAudio.lastLog += "; аудиотрек вместо клипа: \(original.title)"
     }
 
     private func playCurrent() {
@@ -603,19 +531,7 @@ final class NativeAudio: NSObject {
         triedDirect = true
         log("прямо: ищу ссылку…")
         let current = token
-        let lookup = shouldSwap(track)
-        if lookup { swapChecked.insert(track.id) }
         Task { [weak self] in
-            var track = track
-            if lookup, let audio = await YouTubeStreams.audioVersion(of: track) {
-                let still = await MainActor.run { () -> Bool in
-                    guard let self, self.token == current, self.active else { return false }
-                    self.swap(track, to: audio)
-                    return true
-                }
-                guard still else { return }
-                track = audio
-            }
             let found = await DirectStream.find(track.id)
             await MainActor.run {
                 guard let self, self.token == current, self.active else { return }
@@ -761,10 +677,7 @@ final class NativeAudio: NSObject {
             playCurrent()
         } else if let last = currentTrack {
             // Очередь кончилась — дальше похожие (микс по последнему треку), как делает YouTube.
-            if playlistID == nil {
-                playlistID = "RD" + last.id
-                autoMix = true
-            }
+            playlistID = playlistID ?? "RD" + last.id
             extending = false
             let before = queue.count
             loadQueue(seed: last.id, playlistID: playlistID!)
@@ -839,21 +752,14 @@ final class NativeAudio: NSObject {
     private func prefetchNextIfNeeded(time: Double) {
         let duration = player.currentItem?.duration.seconds ?? 0
         guard duration.isFinite, duration - time < 25, index + 1 < queue.count else { return }
-        let next = queue[index + 1]
-        guard prefetched[next.id] == nil, !prefetching.contains(next.id) else { return }
-        prefetching.insert(next.id)
-        let lookup = shouldSwap(next)
-        if lookup { swapChecked.insert(next.id) }
+        let id = queue[index + 1].id
+        guard prefetched[id] == nil, !prefetching.contains(id) else { return }
+        prefetching.insert(id)
         Task { [weak self] in
-            var id = next.id
-            if lookup, let audio = await YouTubeStreams.audioVersion(of: next) {
-                await MainActor.run { self?.swap(next, to: audio) }
-                id = audio.id
-            }
             let result = await DirectStream.find(id)
             await MainActor.run {
                 guard let self else { return }
-                self.prefetching.remove(next.id)
+                self.prefetching.remove(id)
                 if !result.streams.isEmpty { self.prefetched[id] = result }
             }
         }
