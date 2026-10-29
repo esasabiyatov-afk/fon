@@ -8,6 +8,8 @@ final class MusicPlayerView: UIView {
     var onSeek: ((Double) -> Void)?
     var onCollapse: (() -> Void)?
     var onShowQueue: (() -> Void)?
+    /// «Далее» системного плеера: другие версии трека и очередь (свайп вверх или кнопка списка).
+    var onShowUpNext: (() -> Void)?
     var onVideoMode: (() -> Void)?
     /// Нажали на исполнителя — его музыка с канала.
     var onArtist: (() -> Void)?
@@ -16,11 +18,10 @@ final class MusicPlayerView: UIView {
 
     private(set) var track: Track?
     var sourceName: String = "YouTube" { didSet { sourceLabel.text = sourceName } }
-    /// Играет системный плеер: кнопки «очередь» (страница YouTube заиграла бы второй раз) нет, а ползунок
-    /// громкости есть — громкость работает только у системного плеера.
+    /// Играет системный плеер: кнопка списка открывает «Далее» (страница YouTube заиграла бы второй раз),
+    /// и есть ползунок громкости — громкость работает только у системного плеера.
     var systemPlayer = false {
         didSet {
-            queueButton.isHidden = systemPlayer
             [volumeSlider, volumeLow, volumeHigh].forEach { $0.isHidden = !systemPlayer }
             attachVideo()
         }
@@ -37,6 +38,7 @@ final class MusicPlayerView: UIView {
     private let videoButton = UIButton(type: .system)
     private let artworkContainer = UIView()
     private let artworkSwipe = UIPanGestureRecognizer()
+    private let upSwipe = UIPanGestureRecognizer()
     private let artworkView = UIImageView()
     private let videoView = UIView()
     private let videoLayer = AVPlayerLayer()
@@ -113,6 +115,10 @@ final class MusicPlayerView: UIView {
         artworkSwipe.addTarget(self, action: #selector(handleArtworkSwipe(_:)))
         artworkSwipe.delegate = self
         artworkContainer.addGestureRecognizer(artworkSwipe)
+        // Свайп вверх — «Далее» (просьба владельца после 1.69).
+        upSwipe.addTarget(self, action: #selector(handleUpSwipe(_:)))
+        upSwipe.delegate = self
+        addGestureRecognizer(upSwipe)
         readyObservation = videoLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.updateVideoVisibility() }
         }
@@ -352,10 +358,19 @@ final class MusicPlayerView: UIView {
     // MARK: - Кнопки
 
     @objc private func collapseTapped() { onCollapse?() }
-    @objc private func queueTapped() { onShowQueue?() }
+    @objc private func queueTapped() { systemPlayer ? onShowUpNext?() : onShowQueue?() }
+
+    @objc private func handleUpSwipe(_ pan: UIPanGestureRecognizer) {
+        guard pan.state == .ended else { return }
+        if pan.translation(in: self).y < -50 || pan.velocity(in: self).y < -600 { onShowUpNext?() }
+    }
     @objc private func videoTapped() { onVideoMode?() }
-    /// Свайп обложки — только горизонтальный; вертикальный остаётся сворачиванию плеера.
+    /// Свайп обложки — только горизонтальный; вертикальный вниз сворачивает плеер, вверх — «Далее».
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === upSwipe {
+            let v = upSwipe.velocity(in: self)
+            return systemPlayer && v.y < 0 && -v.y > abs(v.x) * 1.5 && !blocksDrag(at: upSwipe.location(in: self))
+        }
         guard gestureRecognizer === artworkSwipe else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
         let v = artworkSwipe.velocity(in: self)
         return abs(v.x) > abs(v.y) * 1.2

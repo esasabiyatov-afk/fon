@@ -112,6 +112,22 @@ enum YouTubeStreams {
         return parseQueue(json)
     }
 
+    /// Поиск видео (`search`, фильтр «Видео») — другие версии трека и «Добавить в очередь».
+    /// `title` — название как на YouTube (для проверки «slowed»/«lyrics»), у трека — очищенное.
+    static func search(_ query: String) async -> [(track: Track, title: String)] {
+        let cfg = config ?? fallbackConfig
+        let body: [String: Any] = ["context": YouTubeAccount.context(cfg.context), "query": query, "params": "EgIQAQ=="]
+        guard let json = await post("search", body: body, config: cfg) else { return [] }
+        var seen = Set<String>()
+        return findAll(json, key: "videoRenderer").compactMap { item in
+            guard let video = item as? [String: Any], let id = video["videoId"] as? String, seen.insert(id).inserted else { return nil }
+            let title = text(video["title"])
+            let artist = text(video["ownerText"] ?? video["longBylineText"] ?? video["shortBylineText"])
+            let clean = TrackTitle.clean(title: title, artist: artist)
+            return (Track(id: id, title: clean.title, artist: clean.artist), title)
+        }
+    }
+
     private static func parseQueue(_ json: [String: Any]) -> [Track] {
         var seen = Set<String>()
         return findAll(json, key: "playlistPanelVideoRenderer").compactMap { item in
@@ -330,6 +346,45 @@ final class NativeAudio: NSObject {
 
     var currentTrack: Track? { queue.indices.contains(index) ? queue[index] : nil }
 
+    // MARK: - Очередь «Далее» (свайп вверх по плееру, просьба владельца после 1.69)
+
+    static let queueDidChange = Notification.Name("FonNativeQueueDidChange")
+
+    /// Треки после текущего.
+    var upcoming: [Track] { index + 1 < queue.count ? Array(queue[(index + 1)...]) : [] }
+
+    func playUpcoming(at offset: Int) {
+        guard active, queue.indices.contains(index + 1 + offset) else { return }
+        index += 1 + offset
+        playCurrent()
+    }
+
+    func removeUpcoming(at offset: Int) {
+        guard queue.indices.contains(index + 1 + offset) else { return }
+        queue.remove(at: index + 1 + offset)
+        queueChanged()
+    }
+
+    /// Поставить трек в очередь: `offset` 0 — следующим. Если он уже ждёт дальше — переносится сюда.
+    func insertUpcoming(_ track: Track, at offset: Int) {
+        guard active else { return }
+        if let old = queue.indices.first(where: { $0 > index && queue[$0].id == track.id }) { queue.remove(at: old) }
+        queue.insert(track, at: min(queue.count, index + 1 + max(0, offset)))
+        queueChanged()
+    }
+
+    /// Включить сразу (другая версия трека); предыдущий остаётся позади — ⏮ вернёт к нему.
+    func playNow(_ track: Track) {
+        guard active else { return }
+        insertUpcoming(track, at: 0)
+        index += 1
+        playCurrent()
+    }
+
+    private func queueChanged() {
+        NotificationCenter.default.post(name: Self.queueDidChange, object: nil)
+    }
+
     // MARK: - Запуск
 
     /// `paused` — трек передан из веб-плеера на паузе: открыть на том же месте, не включая.
@@ -359,7 +414,10 @@ final class NativeAudio: NSObject {
         } else if let id = value("v") {
             if let ids, let at = ids.firstIndex(of: id) {
                 // Свой список (понравившиеся, история): играем его с нажатого трека.
-                queue = ids.map { Track(id: $0, title: "", artist: "") }
+                // Названия — из понравившихся и истории, чтобы в «Далее» были видны.
+                let known = Dictionary((CloudLikes.shared.tracks + Library.shared.history).map { ($0.id, $0) },
+                                       uniquingKeysWith: { first, _ in first })
+                queue = ids.map { known[$0] ?? Track(id: $0, title: "", artist: "") }
                 index = at
                 playlistID = nil
             } else {
@@ -390,6 +448,7 @@ final class NativeAudio: NSObject {
                 for (i, track) in self.queue.enumerated() where track.title.isEmpty {
                     if let named = tracks.first(where: { $0.id == track.id }) { self.queue[i] = named }
                 }
+                self.queueChanged()
                 self.publish()
             }
         }
@@ -418,6 +477,7 @@ final class NativeAudio: NSObject {
         RunLoop.main.add(limit, forMode: .common)
         deadline = limit
         publish(loading: true)
+        queueChanged()
         beginBackgroundTask()
         // Поток следующего трека найден заранее — сразу его; иначе прямой путь (без окна), потом окно.
         if let ready = prefetched.removeValue(forKey: track.id) {
@@ -435,6 +495,7 @@ final class NativeAudio: NSObject {
             let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
             queue[index] = Track(id: track.id, title: clean.title, artist: clean.artist)
             publish(loading: true)
+            queueChanged()
         }
         candidates += result.streams
     }
@@ -663,6 +724,10 @@ final class NativeAudio: NSObject {
             // Следующий трек — заранее, но только прямым путём: окно, останавливая своё видео посреди песни,
             // могло выключить звук приложения, а прямой путь звук не трогает.
             prefetchNextIfNeeded(time: t)
+            // Другие версии (Slowed/Lyrics/Sped up) — заранее, пока приложение открыто: при свайпе вверх уже готовы.
+            if listened >= 3, let track = currentTrack, UIApplication.shared.applicationState == .active {
+                TrackVersions.prepare(track)
+            }
             // «Недавно слушали» — после 20 с, как у веб-плеера.
             if listened >= 20, let track = currentTrack, recordedID != track.id, !track.title.isEmpty {
                 recordedID = track.id

@@ -120,6 +120,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         }
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
+        musicView.onShowUpNext = { [weak self] in self?.showUpNext() }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
         musicView.onArtist = { [weak self] in self?.openArtist() }
         musicView.onVolume = { value in NativeAudio.shared.setVolume(value) }
@@ -319,6 +320,20 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             guard let pair = value as? [String], pair.count == 2, !pair[0].isEmpty else { return }
             self?.onOpenArtist?(pair[0], pair[1])
         }
+    }
+
+    /// «Далее» — снизу листом поверх плеера.
+    private func showUpNext() {
+        guard NativeAudio.shared.active, var top = window?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        guard !((top as? UINavigationController)?.viewControllers.first is UpNextViewController) else { return }
+        let nav = UINavigationController(rootViewController: UpNextViewController())
+        nav.overrideUserInterfaceStyle = .dark
+        if let sheet = nav.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        top.present(nav, animated: true)
     }
 
     private func setShowingPage(_ on: Bool) {
