@@ -116,11 +116,58 @@ enum YouTubeStreams {
         let cfg = config ?? fallbackConfig
         let body: [String: Any] = ["context": YouTubeAccount.context(cfg.context), "videoId": videoID, "playlistId": playlistID]
         guard let json = await post("next", body: body, config: cfg) else { return [] }
+        return parseQueue(json)
+    }
+
+    /// Радио YouTube Music от трека (`RDAMVM<id>`, «только звук» как в приложении YouTube Music) — там в основном
+    /// аудиотреки, а у клипа есть пара-аудиотрек (`playlistPanelVideoWrapperRenderer` → `counterpart`). В обычном
+    /// миксе YouTube (`RD<id>`) аудиотреков почти нет — журнал 1.68: «очередь: 25, аудиотреков 0».
+    static func musicQueue(videoID: String) async -> [QueueItem] {
+        let origin = "https://music.youtube.com"
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        let version = "1." + formatter.string(from: Date().addingTimeInterval(-2 * 86400)) + ".01.00"
+        let context: [String: Any] = ["client": ["clientName": "WEB_REMIX", "clientVersion": version, "hl": "ru"]]
+        let body: [String: Any] = ["context": YouTubeAccount.context(context), "videoId": videoID,
+                                   "playlistId": "RDAMVM" + videoID, "isAudioOnly": true]
+        guard let url = URL(string: "\(origin)/youtubei/v1/next?prettyPrint=false"),
+              let data = try? JSONSerialization.data(withJSONObject: body) else { return [] }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "POST"
+        request.httpBody = data
+        request.httpShouldHandleCookies = false
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("67", forHTTPHeaderField: "X-Youtube-Client-Name")
+        request.setValue(version, forHTTPHeaderField: "X-Youtube-Client-Version")
+        request.setValue(origin, forHTTPHeaderField: "Origin")
+        request.setValue(origin, forHTTPHeaderField: "X-Origin")
+        request.setValue(origin + "/", forHTTPHeaderField: "Referer")
+        if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        if let auth = YouTubeSession.authorization(origin: origin) {
+            request.setValue(auth, forHTTPHeaderField: "Authorization")
+            YouTubeAccount.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        }
+        guard let (reply, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: reply) as? [String: Any] else { return [] }
+        // Пара-аудиотрек самого нажатого клипа — та же песня второй раз подряд: не берём.
+        var twins = Set<String>()
+        for case let wrapper as [String: Any] in findAll(json, key: "playlistPanelVideoWrapperRenderer") {
+            let primary = findAll(wrapper["primaryRenderer"] ?? [:], key: "videoId").first as? String
+            guard primary == videoID else { continue }
+            for case let id as String in findAll(wrapper["counterpart"] ?? [:], key: "videoId") { twins.insert(id) }
+        }
+        return parseQueue(json).filter { !twins.contains($0.track.id) }
+    }
+
+    private static func parseQueue(_ json: [String: Any]) -> [QueueItem] {
         var seen = Set<String>()
         return findAll(json, key: "playlistPanelVideoRenderer").compactMap { item in
             guard let video = item as? [String: Any], let id = video["videoId"] as? String, seen.insert(id).inserted else { return nil }
             let title = text(video["title"])
-            let artist = text(video["shortBylineText"] ?? video["longBylineText"])
+            // У YouTube Music в longBylineText «Исполнитель • Альбом • Год» — берём исполнителя.
+            let artist = text(video["shortBylineText"] ?? video["longBylineText"]).components(separatedBy: " • ")[0]
             let clean = TrackTitle.clean(title: title, artist: artist)
             // Тип от YouTube (MUSIC_VIDEO_TYPE_ATV — аудиотрек, OMV — клип, UGC — прочее); нет типа — по каналу «… - Topic».
             let type = findAll(video, key: "musicVideoType").first as? String
@@ -423,7 +470,14 @@ final class NativeAudio: NSObject {
         extending = true
         let filter = autoMix
         Task { [weak self] in
-            var items = await YouTubeStreams.queue(videoID: seed, playlistID: playlistID)
+            var items: [YouTubeStreams.QueueItem] = []
+            var source = ""
+            if filter {
+                items = await YouTubeStreams.musicQueue(videoID: seed)
+                source = " (YouTube Music)"
+                if !items.contains(where: \.audioTrack) { items = []; source = "" }
+            }
+            if items.isEmpty { items = await YouTubeStreams.queue(videoID: seed, playlistID: playlistID) }
             if items.isEmpty, !playlistID.hasPrefix("RD" + seed) {
                 items = await YouTubeStreams.queue(videoID: seed, playlistID: "RD" + seed) // «Мой микс» без входа не отдаётся
             }
@@ -439,7 +493,7 @@ final class NativeAudio: NSObject {
                     self.queue.append(item.track)
                     added += 1
                 }
-                if filter { NativeAudio.lastLog += "; очередь: \(items.count), аудиотреков \(audio.count)" }
+                if filter { NativeAudio.lastLog += "; очередь\(source): \(items.count), аудиотреков \(audio.count)" }
                 // Названия для уже стоящих в очереди треков.
                 for (i, track) in self.queue.enumerated() where track.title.isEmpty {
                     if let named = items.first(where: { $0.track.id == track.id }) { self.queue[i] = named.track }
