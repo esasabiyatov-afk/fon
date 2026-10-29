@@ -154,9 +154,9 @@ enum YouTubeStreams {
         // Пара-аудиотрек самого нажатого клипа — та же песня второй раз подряд: не берём.
         var twins = Set<String>()
         for case let wrapper as [String: Any] in findAll(json, key: "playlistPanelVideoWrapperRenderer") {
-            let primary = findAll(wrapper["primaryRenderer"] ?? [:], key: "videoId").first as? String
+            let primary = findAll(wrapper["primaryRenderer"] ?? [String: Any](), key: "videoId").first as? String
             guard primary == videoID else { continue }
-            for case let id as String in findAll(wrapper["counterpart"] ?? [:], key: "videoId") { twins.insert(id) }
+            for case let id as String in findAll(wrapper["counterpart"] ?? [String: Any](), key: "videoId") { twins.insert(id) }
         }
         return parseQueue(json).filter { !twins.contains($0.track.id) }
     }
