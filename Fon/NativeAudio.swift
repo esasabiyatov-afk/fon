@@ -97,7 +97,14 @@ enum YouTubeStreams {
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
-    static func queue(videoID: String, playlistID: String) async -> [Track] {
+    /// Трек очереди и аудиотрек ли он (обложка + звук от дистрибьютора, канал «Исполнитель - Topic»),
+    /// а не клип или выступление.
+    struct QueueItem {
+        let track: Track
+        let audioTrack: Bool
+    }
+
+    static func queue(videoID: String, playlistID: String) async -> [QueueItem] {
         let cfg = config ?? fallbackConfig
         let body: [String: Any] = ["context": cfg.context, "videoId": videoID, "playlistId": playlistID]
         guard let json = await post("next", body: body, config: cfg) else { return [] }
@@ -107,8 +114,16 @@ enum YouTubeStreams {
             let title = text(video["title"])
             let artist = text(video["shortBylineText"] ?? video["longBylineText"])
             let clean = TrackTitle.clean(title: title, artist: artist)
-            return Track(id: id, title: clean.title, artist: clean.artist)
+            // Тип от YouTube (MUSIC_VIDEO_TYPE_ATV — аудиотрек, OMV — клип, UGC — прочее); нет типа — по каналу «… - Topic».
+            let type = findAll(video, key: "musicVideoType").first as? String
+            return QueueItem(track: Track(id: id, title: clean.title, artist: clean.artist),
+                             audioTrack: type.map { $0 == "MUSIC_VIDEO_TYPE_ATV" } ?? isTopicChannel(artist))
         }
+    }
+
+    private static func isTopicChannel(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return ["- topic", "– topic", "- тема", "– тема"].contains { lower.hasSuffix($0) }
     }
 
     private static func post(_ endpoint: String, body: [String: Any], config: Config) async -> [String: Any]? {
@@ -257,6 +272,8 @@ final class NativeAudio: NSObject {
     private var playedOnce = false
     private var failuresInRow = 0
     private var extending = false
+    /// Микс, который приложение собрало само от трека (`RD<id>`, или очередь кончилась), — не выбранный плейлист.
+    private var autoMix = false
     private var statusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var controlObservation: NSKeyValueObservation?
@@ -364,6 +381,7 @@ final class NativeAudio: NSObject {
         playedOnce = false
         failuresInRow = 0
         loop = false
+        autoMix = false
         pendingStart = value("t").flatMap { Double($0.replacingOccurrences(of: "s", with: "")) }.flatMap { $0 > 0 ? $0 : nil }
         if url.path == "/watch_videos", let list = value("video_ids") {
             queue = list.split(separator: ",").map { Track(id: String($0), title: "", artist: "") }
@@ -379,6 +397,7 @@ final class NativeAudio: NSObject {
                 queue = [Track(id: id, title: "", artist: "")]
                 index = 0
                 playlistID = value("list") ?? "RD" + id
+                autoMix = playlistID == "RD" + id
                 loadQueue(seed: id, playlistID: playlistID!)
             }
         }
@@ -386,24 +405,39 @@ final class NativeAudio: NSObject {
     }
 
     /// Очередь микса/плейлиста подгружается следом — текущий трек уже играет.
-    private func loadQueue(seed: String, playlistID: String) {
+    /// В миксе от трека (`autoMix`) — только аудиотреки (просьба владельца: клипы и выступления — когда включил сам
+    /// или в выбранных миксах); новых мало — микс от последнего аудиотрека (там их больше).
+    private func loadQueue(seed: String, playlistID: String, reseeded: Bool = false) {
         guard !extending else { return }
         extending = true
+        let filter = autoMix
         Task { [weak self] in
-            var tracks = await YouTubeStreams.queue(videoID: seed, playlistID: playlistID)
-            if tracks.isEmpty, !playlistID.hasPrefix("RD" + seed) {
-                tracks = await YouTubeStreams.queue(videoID: seed, playlistID: "RD" + seed) // «Мой микс» без входа не отдаётся
+            var items = await YouTubeStreams.queue(videoID: seed, playlistID: playlistID)
+            if items.isEmpty, !playlistID.hasPrefix("RD" + seed) {
+                items = await YouTubeStreams.queue(videoID: seed, playlistID: "RD" + seed) // «Мой микс» без входа не отдаётся
             }
             await MainActor.run {
                 guard let self, self.active else { return }
                 self.extending = false
-                let known = Set(self.queue.map(\.id))
-                for track in tracks where !known.contains(track.id) { self.queue.append(track) }
+                let audio = items.filter(\.audioTrack)
+                // Аудиотреков нет совсем — лучше играть что есть, чем остановиться.
+                let chosen = filter && !audio.isEmpty ? audio : items
+                var known = Set(self.queue.map(\.id))
+                var added = 0
+                for item in chosen where known.insert(item.track.id).inserted {
+                    self.queue.append(item.track)
+                    added += 1
+                }
+                if filter { NativeAudio.lastLog += "; очередь: \(items.count), аудиотреков \(audio.count)" }
                 // Названия для уже стоящих в очереди треков.
                 for (i, track) in self.queue.enumerated() where track.title.isEmpty {
-                    if let named = tracks.first(where: { $0.id == track.id }) { self.queue[i] = named }
+                    if let named = items.first(where: { $0.track.id == track.id }) { self.queue[i] = named.track }
                 }
                 self.publish()
+                if filter, !reseeded, added < 5, let last = audio.last(where: { $0.track.id != seed })?.track.id {
+                    self.playlistID = "RD" + last
+                    self.loadQueue(seed: last, playlistID: "RD" + last, reseeded: true)
+                }
             }
         }
     }
@@ -613,7 +647,10 @@ final class NativeAudio: NSObject {
             playCurrent()
         } else if let last = currentTrack {
             // Очередь кончилась — дальше похожие (микс по последнему треку), как делает YouTube.
-            playlistID = playlistID ?? "RD" + last.id
+            if playlistID == nil {
+                playlistID = "RD" + last.id
+                autoMix = true
+            }
             extending = false
             let before = queue.count
             loadQueue(seed: last.id, playlistID: playlistID!)
