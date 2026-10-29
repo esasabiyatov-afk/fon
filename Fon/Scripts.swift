@@ -1355,6 +1355,43 @@ enum Scripts {
     }, 500);
   }
 
+  // Режим музыки: результаты поиска и лента — компактным списком (обложка 64×64 слева, название справа),
+  // как в музыкальных приложениях — больше результатов на экране (просьба владельца после 1.69).
+  // Вёрстка m.youtube проверена в Chromium с iPhone-UA: ytm-media-item > a.media-item-thumbnail-container
+  // (ytm-thumbnail-cover) + .media-item-details (.media-channel — аватар, .media-item-info).
+  fon.addStyle(`
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) { margin: 0 !important; padding: 0 !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) ytm-media-item {
+      display: flex !important; flex-direction: row !important; align-items: center !important;
+      gap: 12px; padding: 6px 4px 6px 12px !important; margin: 0 !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) .media-item-thumbnail-container {
+      flex: 0 0 64px !important; width: 64px !important; height: 64px !important; min-width: 0 !important;
+      padding: 0 !important; margin: 0 !important; border-radius: 6px !important; overflow: hidden !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) :is(ytm-thumbnail-cover, yt-collections-stack) {
+      position: relative !important; display: block !important; width: 64px !important; height: 64px !important;
+      padding: 0 !important; margin: 0 !important; border-radius: 6px !important; overflow: hidden !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) ytm-thumbnail-cover :is(img, .video-thumbnail-bg) {
+      position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+      object-fit: cover !important; }
+    /* у превью hqdefault видео чёрные поля сверху и снизу */
+    html.fon-list ytm-video-with-context-renderer ytm-thumbnail-cover img[src*="/hq"]:not([src*="hq720"]) { transform: scale(1.34); }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) :is(.videoThumbnailGroupOverlayBottomLeftRightGroup,
+      .media-channel, #video-preview-portal, ytm-badge-supported-renderer, .ytCollectionsStackCollectionStack1,
+      .ytCollectionsStackCollectionStack2, .radioBottomOverlayHost) { display: none !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) :is(.media-item-details, .media-item-info) {
+      flex: 1 1 auto !important; min-width: 0 !important; padding: 0 !important; margin: 0 !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) .media-item-headline {
+      font-size: 15px !important; line-height: 19px !important; margin: 0 0 2px !important;
+      display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; }
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) ytm-badge-and-byline-renderer {
+      font-size: 12px !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+  `);
+  fon.setList = (on) => {
+    const apply = () => document.documentElement.classList.toggle('fon-list', !!on);
+    if (document.documentElement) apply(); else document.addEventListener('DOMContentLoaded', apply);
+  };
+  fon.setList(window.__fonList === true);
+
   // Своя нижняя панель YouTube не нужна — у приложения есть своя.
   fon.addStyle(`
     ytm-pivot-bar-renderer { display: none !important; }

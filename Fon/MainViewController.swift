@@ -241,7 +241,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     /// Окно вкладки создаётся при первом открытии и дальше живёт вместе со своей историей.
     private func browseView(for index: Int) -> WKWebView {
         if let existing = browseViews[index] { return existing }
-        let webView = WebViewFactory.make(scripts: [Scripts.common, Scripts.browse], handler: self)
+        let webView = WebViewFactory.make(scripts: browseScripts(), handler: self)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -489,7 +489,22 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     /// Сменился режим (из вкладки или кнопкой в плеере): обновляем вкладки и открытый раздел.
+    /// Скрипты окон вкладок; первый — режим: в режиме музыки поиск и лента компактным списком (`fon-list`).
+    private func browseScripts() -> [String] {
+        ["window.__fonList = \(Settings.musicMode);", Scripts.common, Scripts.browse]
+    }
+
     private func musicModeChanged() {
+        // Уже открытые окна: новый режим — и для следующих страниц, и для текущей.
+        let music = Settings.musicMode
+        for webView in browseViews.values {
+            let scripts = webView.configuration.userContentController
+            scripts.removeAllUserScripts()
+            for source in browseScripts() {
+                scripts.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            }
+            webView.evaluateJavaScript("window.__fonList = \(music); window.__fon && __fon.setList && __fon.setList(\(music)); void 0")
+        }
         musicFeedShown = false
         searchVC?.updatePlaceholder()
         updateModeTabs()
