@@ -248,6 +248,9 @@ final class NativeAudio: NSObject {
     /// Канал каждого сыгранного трека (id и название) — для перехода к исполнителю из плеера.
     private var channels: [String: (id: String, name: String)] = [:]
     func channel(for trackID: String) -> (id: String, name: String)? { channels[trackID] }
+    /// Название трека как на YouTube (у очищенного «(Lyrics)» отрезано) — чтобы узнать, что играет не оригинал.
+    private var rawTitles: [String: String] = [:]
+    func rawTitle(for trackID: String) -> String? { rawTitles[trackID] }
     /// Тот же плеер — для картинки в музыкальном плеере (файл 360p вместо обложки, просьба владельца).
     var output: AVPlayer { player }
     private var queue: [Track] = []
@@ -490,6 +493,7 @@ final class NativeAudio: NSObject {
 
     /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
+        if let title = result.title { rawTitles[track.id] = title }
         if let id = result.channelID { channels[track.id] = (id, result.author ?? track.artist) }
         if queue.indices.contains(index), queue[index].id == track.id, queue[index].title.isEmpty, let title = result.title {
             let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
@@ -726,7 +730,7 @@ final class NativeAudio: NSObject {
             prefetchNextIfNeeded(time: t)
             // Другие версии (Slowed/Lyrics/Sped up) — заранее, пока приложение открыто: при свайпе вверх уже готовы.
             if listened >= 3, let track = currentTrack, UIApplication.shared.applicationState == .active {
-                TrackVersions.prepare(track)
+                TrackVersions.prepare(track, rawTitle: rawTitles[track.id])
             }
             // «Недавно слушали» — после 20 с, как у веб-плеера.
             if listened >= 20, let track = currentTrack, recordedID != track.id, !track.title.isEmpty {

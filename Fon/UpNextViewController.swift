@@ -5,23 +5,29 @@ import UIKit
 /// чтобы при свайпе вверх три обложки были уже готовы.
 enum TrackVersions {
     enum Kind: CaseIterable {
-        case slowed, lyrics, spedUp
+        case slowed, lyrics, spedUp, original
 
         var title: String {
             switch self {
             case .slowed: return "Slowed"
             case .lyrics: return "Lyrics"
             case .spedUp: return "Sped up"
+            case .original: return "Оригинал"
             }
         }
     }
 
     static let didChange = Notification.Name("FonTrackVersionsDidChange")
 
+    /// Три карточки трека по порядку. Если сам трек — slowed/sped up/lyrics, его место занимает «Оригинал»
+    /// (просьба владельца после 1.70).
+    private static var slots: [String: [Kind]] = [:]
     private static var found: [String: [Kind: Track]] = [:]
     private static var loading = Set<String>()
     /// Неудачный поиск (нет сети) — повтор не раньше чем через минуту.
     private static var failedAt: [String: Date] = [:]
+
+    static func kinds(for id: String) -> [Kind] { slots[id] ?? [.slowed, .lyrics, .spedUp] }
 
     /// nil — ещё ищутся.
     static func versions(for id: String) -> [Kind: Track]? {
@@ -29,30 +35,51 @@ enum TrackVersions {
         return loading.contains(id) || failedAt[id] == nil ? nil : [:] // не вышло — карточки «не найдено»
     }
 
-    static func prepare(_ track: Track) {
+    /// `rawTitle` — название как на YouTube: у очищенного «(Lyrics)» уже отрезано.
+    static func prepare(_ track: Track, rawTitle: String?) {
         guard !track.title.isEmpty, found[track.id] == nil,
               Date().timeIntervalSince(failedAt[track.id] ?? .distantPast) > 60,
               loading.insert(track.id).inserted else { return }
+        let full = (rawTitle ?? "") + " " + track.title
+        var kinds: [Kind] = [.slowed, .lyrics, .spedUp]
+        if has(full, slowMarks) {
+            kinds[0] = .original
+        } else if has(full, fastMarks) {
+            kinds[2] = .original
+        } else if has(full, lyricMarks) {
+            kinds[1] = .original
+        }
+        slots[track.id] = kinds
+
+        let name = stripMarks(track.title)
         var artist = track.artist
         for junk in [" - Topic", "VEVO", "Official"] { artist = artist.replacingOccurrences(of: junk, with: "") }
-        let base = artist.isEmpty || track.title.localizedCaseInsensitiveContains(artist) ? track.title : "\(artist) \(track.title)"
+        let base = artist.isEmpty || name.localizedCaseInsensitiveContains(artist) ? name : "\(artist) \(name)"
         let russian = base.range(of: "\\p{Cyrillic}", options: .regularExpression) != nil
+        func query(_ kind: Kind) -> String {
+            switch kind {
+            case .slowed: return base + " slowed"
+            case .lyrics: return base + (russian ? " текст" : " lyrics")
+            case .spedUp: return base + " sped up"
+            case .original: return base
+            }
+        }
         Task {
-            async let slowed = YouTubeStreams.search(base + " slowed")
-            async let lyrics = YouTubeStreams.search(base + (russian ? " текст" : " lyrics"))
-            async let spedUp = YouTubeStreams.search(base + " sped up")
-            let results: [Kind: [(track: Track, title: String)]] = [.slowed: await slowed, .lyrics: await lyrics, .spedUp: await spedUp]
+            async let first = YouTubeStreams.search(query(kinds[0]))
+            async let second = YouTubeStreams.search(query(kinds[1]))
+            async let third = YouTubeStreams.search(query(kinds[2]))
+            let results = [await first, await second, await third]
             await MainActor.run {
                 TrackVersions.loading.remove(track.id)
-                var picked: [Kind: Track] = [:]
-                for (kind, items) in results {
-                    if let item = TrackVersions.pick(kind, items, exclude: track.id, russian: russian) { picked[kind] = item }
-                }
                 // Ничего не ответило (нет сети) — попробуем позже, а не запомним пустоту.
-                if results.values.allSatisfy({ $0.isEmpty }) {
+                if results.allSatisfy({ $0.isEmpty }) {
                     TrackVersions.failedAt[track.id] = Date()
                     NotificationCenter.default.post(name: TrackVersions.didChange, object: nil)
                     return
+                }
+                var picked: [Kind: Track] = [:]
+                for (kind, items) in zip(kinds, results) {
+                    if let item = TrackVersions.pick(kind, items, exclude: track.id, russian: russian) { picked[kind] = item }
                 }
                 if TrackVersions.found.count > 200 { TrackVersions.found = [:] }
                 TrackVersions.found[track.id] = picked
@@ -65,12 +92,25 @@ enum TrackVersions {
     private static let fastMarks = ["sped", "speed up", "nightcore", "ускор"]
     private static let lyricMarks = ["lyric", "текст", "караоке", "karaoke", "слова"]
 
+    private static func has(_ title: String, _ marks: [String]) -> Bool {
+        let lower = title.lowercased()
+        return marks.contains { lower.contains($0) }
+    }
+
+    /// Название без меток версии: «Captain (slowed + reverb)» → «Captain».
+    private static func stripMarks(_ title: String) -> String {
+        let words = "slow|sped|speed|reverb|nightcore|lyric|текст|замедл|ускор|караоке|karaoke"
+        var name = title.replacingOccurrences(of: "[\\(\\[][^\\)\\]]*(\(words))[^\\)\\]]*[\\)\\]]", with: "",
+                                              options: [.regularExpression, .caseInsensitive])
+        name = name.replacingOccurrences(of: "\\b(slowed|reverb|sped up|speed up|nightcore|lyrics?)\\b", with: "",
+                                         options: [.regularExpression, .caseInsensitive])
+        name = name.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        name = name.trimmingCharacters(in: CharacterSet(charactersIn: " -–—+&|,"))
+        return name.isEmpty ? title : name
+    }
+
     private static func pick(_ kind: Kind, _ items: [(track: Track, title: String)], exclude: String, russian: Bool) -> Track? {
         let candidates = items.filter { $0.track.id != exclude }
-        func has(_ title: String, _ marks: [String]) -> Bool {
-            let lower = title.lowercased()
-            return marks.contains { lower.contains($0) }
-        }
         switch kind {
         case .slowed: return candidates.first { has($0.title, slowMarks) }?.track
         case .spedUp: return candidates.first { has($0.title, fastMarks) }?.track
@@ -78,6 +118,9 @@ enum TrackVersions {
             let plain = candidates.filter { !has($0.title, slowMarks + fastMarks) }
             // Русские тексты часто подписаны как попало — тогда просто первый результат (просьба владельца).
             return (plain.first { has($0.title, lyricMarks) } ?? (russian ? plain.first : nil))?.track
+        case .original:
+            let normal = candidates.filter { !has($0.title, slowMarks + fastMarks) }
+            return (normal.first { !has($0.title, lyricMarks) } ?? normal.first)?.track
         }
     }
 }
@@ -112,7 +155,7 @@ final class UpNextViewController: UITableViewController {
         let audio = NativeAudio.shared
         tracks = audio.upcoming
         currentID = audio.currentTrack?.id
-        if let track = audio.currentTrack { TrackVersions.prepare(track) }
+        if let track = audio.currentTrack { TrackVersions.prepare(track, rawTitle: audio.rawTitle(for: track.id)) }
         tableView.reloadData()
     }
 
@@ -133,7 +176,8 @@ final class UpNextViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         if indexPath.section == 0 {
             let cell = tableView.dequeueReusableCell(withIdentifier: "versions", for: indexPath) as! VersionsCell
-            cell.configure(currentID.flatMap { TrackVersions.versions(for: $0) }) { [weak self] track in
+            let id = currentID ?? ""
+            cell.configure(TrackVersions.kinds(for: id), TrackVersions.versions(for: id)) { [weak self] track in
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 NativeAudio.shared.playNow(track)
                 self?.dismiss(animated: true)
@@ -297,8 +341,8 @@ private final class VersionsCell: UITableViewCell {
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
         ])
-        for kind in TrackVersions.Kind.allCases {
-            let card = VersionCard(title: kind.title)
+        for _ in 0..<3 {
+            let card = VersionCard()
             card.addTarget(self, action: #selector(cardTapped(_:)), for: .touchUpInside)
             cards.append(card)
             stack.addArrangedSubview(card)
@@ -308,10 +352,10 @@ private final class VersionsCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     /// `versions` nil — ещё ищутся.
-    func configure(_ versions: [TrackVersions.Kind: Track]?, onPick: @escaping (Track) -> Void) {
+    func configure(_ kinds: [TrackVersions.Kind], _ versions: [TrackVersions.Kind: Track]?, onPick: @escaping (Track) -> Void) {
         self.onPick = onPick
-        for (card, kind) in zip(cards, TrackVersions.Kind.allCases) {
-            card.show(versions.map { $0[kind] }, loading: versions == nil)
+        for (card, kind) in zip(cards, kinds) {
+            card.show(kind.title, versions.map { $0[kind] }, loading: versions == nil)
         }
     }
 
@@ -326,7 +370,7 @@ private final class VersionCard: UIControl {
     private let spinner = UIActivityIndicatorView(style: .medium)
     private(set) var track: Track?
 
-    init(title: String) {
+    init() {
         super.init(frame: .zero)
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
@@ -334,7 +378,6 @@ private final class VersionCard: UIControl {
         imageView.backgroundColor = UIColor(white: 0.2, alpha: 1)
         imageView.tintColor = UIColor(white: 0.5, alpha: 1)
         imageView.isUserInteractionEnabled = false
-        label.text = title
         label.font = .systemFont(ofSize: 14, weight: .semibold)
         label.textAlignment = .center
         label.isUserInteractionEnabled = false
@@ -363,7 +406,8 @@ private final class VersionCard: UIControl {
         didSet { alpha = isHighlighted ? 0.6 : (track == nil ? 0.45 : 1) }
     }
 
-    func show(_ found: Track??, loading: Bool) {
+    func show(_ title: String, _ found: Track??, loading: Bool) {
+        label.text = title
         let track = found ?? nil
         self.track = track
         alpha = track == nil && !loading ? 0.45 : 1
