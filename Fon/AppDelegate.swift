@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import Security
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -9,6 +10,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) -> Bool {
         // Кэш сети побольше: подсказки поиска, обложки YouTube Music и т. п. не качаются заново.
         URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024, diskCapacity: 512 * 1024 * 1024, directory: nil)
+        // Журнал отладки убран в 1.69 — стираем его следы (тексты попыток и токен GitHub в Keychain).
+        UserDefaults.standard.removeObject(forKey: "nativeAudioLog")
+        UserDefaults.standard.removeObject(forKey: "nativeAudioLogHistory")
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.personal.fon",
+                       kSecAttrAccount as String: "github-log-token"] as CFDictionary)
         // Категория .playback + UIBackgroundModes=audio в Info.plist —
         // это разрешение iOS играть звук, когда приложение свёрнуто.
         let session = AVAudioSession.sharedInstance()

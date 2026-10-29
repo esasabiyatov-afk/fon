@@ -101,7 +101,6 @@ enum YouTubeStreams {
         var streams: [AudioStream] = []
         var title: String?
         var author: String?
-        var log: [String] = []
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
@@ -228,32 +227,6 @@ final class NativeAudio: NSObject {
     var onFallback: ((URL) -> Void)?
 
     private(set) var active = false
-    /// Что ответили клиенты YouTube в последний раз — показываем в настройках.
-    static var lastLog: String {
-        get { UserDefaults.standard.string(forKey: "nativeAudioLog") ?? "ещё не было" }
-        set { UserDefaults.standard.set(newValue, forKey: "nativeAudioLog") }
-    }
-
-    /// Прошлые попытки (до 10, новые сверху) — для кнопки «Скопировать журнал» в настройках.
-    static var logHistory: [String] {
-        get { UserDefaults.standard.stringArray(forKey: "nativeAudioLogHistory") ?? [] }
-        set { UserDefaults.standard.set(Array(newValue.prefix(10)), forKey: "nativeAudioLogHistory") }
-    }
-
-    /// Весь журнал одним текстом: текущая попытка и прошлые.
-    static var fullLog: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        return (["Fon \(version), iOS \(UIDevice.current.systemVersion)", lastLog] + logHistory).joined(separator: "\n\n")
-    }
-
-    /// Новая попытка: прошлая уходит в историю (с временем и id трека).
-    private static func startLog(for id: String) {
-        let previous = lastLog
-        if !previous.isEmpty, previous != "ещё не было" { logHistory = [previous] + logHistory }
-        let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        lastLog = "[\(time)] \(id)"
-    }
-
     private let player = AVPlayer()
     /// Тот же плеер — для картинки в музыкальном плеере (файл 360p вместо обложки, просьба владельца).
     var output: AVPlayer { player }
@@ -263,8 +236,6 @@ final class NativeAudio: NSObject {
     private var loop = false
     private var candidates: [AudioStream] = []
     private var triedDirect = false
-    /// Журнал этой попытки уже ушёл на GitHub (`LogUploader`).
-    private var reported = false
     private var token = UUID()
     private var playedOnce = false
     private var failuresInRow = 0
@@ -288,8 +259,6 @@ final class NativeAudio: NSObject {
     private var startPaused = false
     /// 30 с без звука — трек уходит в обычный плеер (в 1.59–1.60 владелец оставался без музыки).
     private var deadline: Timer?
-    /// Текущий шаг поиска потока — виден в плеере вместо исполнителя, пока звука нет.
-    private var step: String?
     private var lastProgress = Date()
     private var listened: Double = 0
     private var recordedID: String?
@@ -334,7 +303,6 @@ final class NativeAudio: NSObject {
         recoveries.append(now)
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
-        NativeAudio.lastLog += "; пауза не от вас — продолжил"
     }
 
     /// Звонок/другое приложение — не продолжаем сами до конца прерывания (продолжит MainViewController по
@@ -438,13 +406,9 @@ final class NativeAudio: NSObject {
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
         listened = 0
-        NativeAudio.startLog(for: track.id)
-        reported = false
-        step = nil
         deadline?.invalidate()
         let limit = Timer(timeInterval: 30, repeats: false) { [weak self] _ in
             guard let self, self.token == current, self.active, !self.playedOnceCurrent else { return }
-            self.log("30 с без звука")
             self.trackFailed()
         }
         RunLoop.main.add(limit, forMode: .common)
@@ -461,15 +425,7 @@ final class NativeAudio: NSObject {
     }
 
     /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
-    /// Журнал попытки (виден в ⚙) — по шагам, сразу, чтобы было видно, на чём остановилось.
-    private func log(_ text: String) {
-        NativeAudio.lastLog += (NativeAudio.lastLog.isEmpty ? "" : "; ") + text
-        step = text
-        publish(loading: true)
-    }
-
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
-        if !result.log.isEmpty { log(result.log.joined(separator: "; ")) }
         if queue.indices.contains(index), queue[index].id == track.id, queue[index].title.isEmpty, let title = result.title {
             let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
             queue[index] = Track(id: track.id, title: clean.title, artist: clean.artist)
@@ -483,7 +439,6 @@ final class NativeAudio: NSObject {
         guard active else { return }
         guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : trackFailed() }
         let stream = candidates.removeFirst()
-        log("\(stream.client): пробую")
         // Поток оборвался посреди трека (например, отдельная звуковая дорожка) — следующий с того же места.
         let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : startAt
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
@@ -504,7 +459,6 @@ final class NativeAudio: NSObject {
                         self.player.play()
                     }
                 case .failed:
-                    NativeAudio.lastLog += "; \(stream.client): \(Self.describe(item))"
                     self.tryNextCandidate()
                 default:
                     break
@@ -518,7 +472,6 @@ final class NativeAudio: NSObject {
         stallTimer?.invalidate()
         let timer = Timer(timeInterval: 10, repeats: false) { [weak self] _ in
             guard let self, self.token == current, !self.playedOnceCurrent else { return }
-            NativeAudio.lastLog += "; \(stream.client): не заиграл"
             self.tryNextCandidate()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -529,7 +482,6 @@ final class NativeAudio: NSObject {
     private func tryDirect() {
         guard !triedDirect, let track = currentTrack else { return trackFailed() }
         triedDirect = true
-        log("прямо: ищу ссылку…")
         let current = token
         Task { [weak self] in
             let found = await DirectStream.find(track.id)
@@ -543,18 +495,6 @@ final class NativeAudio: NSObject {
 
     private var playedOnceCurrent: Bool { player.currentTime().seconds > 0.5 }
 
-    /// Почему поток не открылся: код HTTP из журнала AVPlayer (403 — YouTube не пустил) или код ошибки.
-    private static func describe(_ item: AVPlayerItem) -> String {
-        if let event = item.errorLog()?.events.last, event.errorStatusCode != 0 {
-            return "HTTP \(event.errorStatusCode)"
-        }
-        guard let error = item.error as NSError? else { return "ошибка" }
-        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
-            return "\(error.code)/\(underlying.code)"
-        }
-        return "\(error.code)"
-    }
-
     /// Трек не заиграл. На экране: первый трек (или два подряд) — в веб-плеер с этим же треком.
     /// В фоне веб-плеер не запустится (владелец: «переходит в обычный плеер и вообще останавливается») —
     /// там пропускаем трек, а после трёх неудач подряд (скорее всего, нет сети) встаём на паузу: ▶ попробует снова.
@@ -565,8 +505,6 @@ final class NativeAudio: NSObject {
         } else if failuresInRow < 3 {
             next() // один трек недоступен (возраст, регион, медленная сеть) — пропускаем
         } else {
-            log("3 трека подряд не заиграли — пауза")
-            report()
             token = UUID()
             stallTimer?.invalidate()
             deadline?.invalidate()
@@ -590,7 +528,6 @@ final class NativeAudio: NSObject {
         guard Date().timeIntervalSince(since) > 10, let track = currentTrack else { return }
         waitingSince = nil
         refreshingStream = true
-        NativeAudio.lastLog += "; грузится >10 с на \(Int(player.currentTime().seconds)) с — новая ссылка"
         beginBackgroundTask()
         let current = token
         Task { [weak self] in
@@ -599,10 +536,7 @@ final class NativeAudio: NSObject {
                 guard let self else { return }
                 self.refreshingStream = false
                 guard self.token == current, self.active else { return }
-                guard !found.streams.isEmpty else {
-                    NativeAudio.lastLog += "; новой ссылки нет: " + found.log.joined(separator: "; ")
-                    return
-                }
+                guard !found.streams.isEmpty else { return }
                 self.candidates = found.streams
                 self.tryNextCandidate() // с того же места (`resumeAt`)
             }
@@ -613,18 +547,8 @@ final class NativeAudio: NSObject {
     private func fallBackToWeb() {
         guard let track = currentTrack else { return }
         let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
-        log("→ обычный плеер")
-        report()
         deactivate()
         if let url { onFallback?(url) }
-    }
-
-    /// Итог попытки (заиграло или ушло в обычный плеер) — в обсуждение GitHub, если владелец включил.
-    private func report() {
-        guard !reported else { return }
-        reported = true
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        LogUploader.send("Fon \(version), iOS \(UIDevice.current.systemVersion)\n" + NativeAudio.lastLog)
     }
 
     // MARK: - Команды
@@ -729,12 +653,6 @@ final class NativeAudio: NSObject {
             failuresInRow = 0
             stallTimer?.invalidate()
             deadline?.invalidate()
-            if !reported {
-                // Размер картинки потока — чтобы решить, годится ли этот путь для режима видео (владелец спросил).
-                let size = player.currentItem?.presentationSize ?? .zero
-                log(size.width > 0 ? "играет ✓, картинка \(Int(size.width))×\(Int(size.height))" : "играет ✓")
-                report()
-            }
             endBackgroundTask()
             listened += 0.5
             // Следующий трек — заранее, но только прямым путём: окно, останавливая своё видео посреди песни,
@@ -781,7 +699,7 @@ final class NativeAudio: NSObject {
         let duration = player.currentItem?.duration.seconds ?? 0
         let waiting = !playedOnceCurrent
         let state = State(id: track.id, title: track.title.isEmpty && (loading || waiting) ? "Загрузка…" : track.title,
-                          artist: waiting ? (step ?? track.artist) : track.artist, paused: player.timeControlStatus == .paused,
+                          artist: track.artist, paused: player.timeControlStatus == .paused,
                           time: max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0),
                           duration: duration.isFinite ? duration : 0, loop: loop)
         onState?(state)

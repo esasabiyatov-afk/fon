@@ -17,19 +17,10 @@ enum DirectStream {
         request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-        guard let (data, reply) = try? await URLSession.shared.data(for: request) else {
-            result.log.append("прямо: нет ответа")
-            return result
-        }
+        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return result }
         let http = reply as? HTTPURLResponse
-        if let final = http?.url, final.path.hasPrefix("/sorry") || final.host != url.host {
-            result.log.append("прямо: перекинуло на \(final.host ?? "?")\(final.path)")
-            return result
-        }
-        guard let response = YouTubeStreams.jsonObject(in: data, after: "ytInitialPlayerResponse = ") else {
-            result.log.append("прямо: HTTP \(http?.statusCode ?? 0), нет ответа плеера")
-            return result
-        }
+        if let final = http?.url, final.path.hasPrefix("/sorry") || final.host != url.host { return result }
+        guard let response = YouTubeStreams.jsonObject(in: data, after: "ytInitialPlayerResponse = ") else { return result }
         if let details = response["videoDetails"] as? [String: Any] {
             result.title = details["title"] as? String
             result.author = details["author"] as? String
@@ -39,41 +30,29 @@ enum DirectStream {
         let formats = streaming["formats"] as? [[String: Any]] ?? []
         let adaptive = streaming["adaptiveFormats"] as? [[String: Any]] ?? []
         // Сначала только звук (itag 140 — AAC ~128 кбит/с), если у него есть ссылка, иначе файл 360p (itag 18).
-        // Журнал 1.66: у отдельных дорожек ссылок нет — YouTube отдаёт их только по своему протоколу (SABR,
+        // В 1.66 проверено: у отдельных дорожек ссылок нет — YouTube отдаёт их только по своему протоколу (SABR,
         // serverAbrStreamingUrl), так что играет itag 18; звук тот же, трафик ~4× больше. Свой SABR не делаем.
         var picked: [[String: Any]] = []
         if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) { picked.append(audio) }
         if let file = formats.first(where: { ($0["itag"] as? Int) == 18 }) ?? formats.first { picked.append(file) }
-        guard status == "OK", !picked.isEmpty else {
-            result.log.append("прямо: \(status), файлов нет")
-            return result
-        }
+        guard status == "OK", !picked.isEmpty else { return result }
         YouTubeStreams.rememberConfig(from: data) // для очереди микса
         guard let jsPath = YouTubeStreams.string(in: data, after: "\"jsUrl\":\""),
               let playerURL = URL(string: YouTubeStreams.origin + jsPath.replacingOccurrences(of: "\\/", with: "/")) else {
-            result.log.append("прямо: нет кода плеера")
             return result
         }
         // Ссылки + что расшифровать: подпись (из signatureCipher) и n (в самой ссылке).
         let links = picked.compactMap(Link.init)
-        guard !links.isEmpty else {
-            result.log.append("прямо: нет ссылок в ответе")
+        guard !links.isEmpty else { return result }
+        guard let solved = try? await ChallengeSolver.shared.solve(playerURL: playerURL,
+                                                                   n: Array(Set(links.compactMap(\.n))),
+                                                                   signatures: links.compactMap(\.signature)) else {
             return result
         }
-        let started = Date()
-        do {
-            let solved = try await ChallengeSolver.shared.solve(playerURL: playerURL,
-                                                                n: Array(Set(links.compactMap(\.n))),
-                                                                signatures: links.compactMap(\.signature))
-            let ms = Int(Date().timeIntervalSince(started) * 1000)
-            result.log.append("прямо: itag \(links.map { String($0.itag) }.joined(separator: "+")), расшифровано за \(ms) мс\(solved.note)")
-            result.streams = links.compactMap { link in
-                guard let url = link.url(solved) else { return nil }
-                return AudioStream(url: url, headers: ["User-Agent": YouTubeStreams.iPhoneSafariUserAgent],
-                                   client: link.audioOnly ? "Прямо звук" : "Прямо файл")
-            }
-        } catch {
-            result.log.append("прямо: решатель — \(error)")
+        result.streams = links.compactMap { link in
+            guard let url = link.url(solved) else { return nil }
+            return AudioStream(url: url, headers: ["User-Agent": YouTubeStreams.iPhoneSafariUserAgent],
+                               client: link.audioOnly ? "Прямо звук" : "Прямо файл")
         }
         return result
     }
