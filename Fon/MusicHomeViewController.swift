@@ -23,6 +23,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         var symbol: String? = nil
         var round = false
         var action: (() -> Void)? = nil
+        /// Исполнитель из подписок — по долгому нажатию «Отписаться».
+        var unsubscribe: (() -> Void)? = nil
     }
 
     fileprivate struct Section {
@@ -211,7 +213,11 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             return [Section(title: "Подписки", style: .message, items: [Item(title: text)])]
         }
 
-        var result = [Section(title: "Подписки", style: .round, items: artists.map { musicItem($0, source: "Радио: \($0.title)") })]
+        var result = [Section(title: "Подписки", style: .round, items: artists.map { artist in
+            var item = musicItem(artist, source: "Радио: \(artist.title)")
+            if artist.browseId != nil { item.unsubscribe = { [weak self] in self?.confirmUnsubscribe(artist) } }
+            return item
+        })]
         let releases = feed.releases
         if releases.isEmpty {
             if feed.isLoadingSubscriptions {
@@ -248,6 +254,19 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 }
             }
         }
+    }
+
+    private func confirmUnsubscribe(_ artist: MusicItem) {
+        let alert = UIAlertController(title: "Отписаться от «\(artist.title)»?", message: nil, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Отписаться", style: .destructive) { [weak self] _ in
+            MusicFeed.shared.unsubscribe(artist) { ok in
+                guard let self else { return }
+                self.view.showToast(ok ? "Вы отписались" : "Не удалось отписаться",
+                                    at: CGPoint(x: self.view.bounds.midX, y: self.view.bounds.height - 60))
+            }
+        })
+        present(alert, animated: true)
     }
 
     /// Трек и похожие на него (Mix YouTube).
@@ -368,6 +387,15 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         guard let action = sections[indexPath.section].items[indexPath.item].action else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         action()
+    }
+
+    func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let indexPath = indexPaths.first, let unsubscribe = sections[indexPath.section].items[indexPath.item].unsubscribe else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+            UIMenu(children: [UIAction(title: "Отписаться", image: UIImage(systemName: "person.badge.minus"),
+                                       attributes: .destructive) { _ in unsubscribe() }])
+        }
     }
 
     // Лёгкое «нажатие» карточки, как в музыкальных приложениях.

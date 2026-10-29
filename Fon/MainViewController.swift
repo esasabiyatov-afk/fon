@@ -498,6 +498,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             if let s = body["url"] as? String, let url = URL(string: s) { openInPlayer(url) }
         case "browsePlaying":
             playerView.command("pause")
+        case "account":
+            YouTubeAccount.update(body)
         case "search":
             presentSearch(prefill: body["query"] as? String)
         default:

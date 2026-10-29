@@ -106,7 +106,7 @@ enum YouTubeStreams {
 
     static func queue(videoID: String, playlistID: String) async -> [QueueItem] {
         let cfg = config ?? fallbackConfig
-        let body: [String: Any] = ["context": cfg.context, "videoId": videoID, "playlistId": playlistID]
+        let body: [String: Any] = ["context": YouTubeAccount.context(cfg.context), "videoId": videoID, "playlistId": playlistID]
         guard let json = await post("next", body: body, config: cfg) else { return [] }
         var seen = Set<String>()
         return findAll(json, key: "playlistPanelVideoRenderer").compactMap { item in
@@ -146,7 +146,7 @@ enum YouTubeStreams {
         if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         if let auth = YouTubeSession.authorization(origin: origin) {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
-            request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
+            YouTubeAccount.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         }
         guard let (reply, _) = try? await URLSession.shared.data(for: request) else { return nil }
         return try? JSONSerialization.jsonObject(with: reply) as? [String: Any]

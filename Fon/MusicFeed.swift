@@ -85,6 +85,15 @@ final class MusicFeed {
         if let data = try? Data(contentsOf: fileURL), let saved = try? JSONDecoder().decode(Cache.self, from: data) {
             cache = saved
         }
+        // Выбран другой аккаунт YouTube — подборки и подписки прошлого не показываем.
+        NotificationCenter.default.addObserver(forName: YouTubeAccount.didChange, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.cache = Cache()
+            self.save()
+            self.notify()
+            self.loadHome(force: true)
+            self.loadSubscriptions(force: true)
+        }
     }
 
     func start(in view: UIView) {
@@ -236,7 +245,8 @@ final class MusicFeed {
                     if !key.isEmpty, !seen.contains(key) {
                         seen.insert(key)
                         let name = channel.replacingOccurrences(of: " - Topic", with: "")
-                        artists.append(MusicItem(title: name, subtitle: "", thumb: nil, videoId: id, artist: true))
+                        artists.append(MusicItem(title: name, subtitle: "", thumb: nil, videoId: id,
+                                                 browseId: video["channelId"] as? String, artist: true))
                     }
                     let clean = TrackTitle.clean(title: title, artist: channel)
                     let published = video["published"] as? String ?? ""
@@ -311,6 +321,20 @@ final class MusicFeed {
         var s = name.lowercased().replacingOccurrences(of: " - topic", with: "")
         for junk in ["vevo", "official", " ", ".", "_", "-"] { s = s.replacingOccurrences(of: junk, with: "") }
         return s
+    }
+
+    /// Отписаться от исполнителя (долгое нажатие в «Подписках», просьба владельца).
+    func unsubscribe(_ artist: MusicItem, completion: @escaping (Bool) -> Void) {
+        guard let channel = artist.browseId else { return completion(false) }
+        HiddenPage.youtube.call("__fonCloud.unsubscribe(id)", { ["id": channel] }) { [weak self] result in
+            guard let self, case .success = result else { return completion(false) }
+            self.cache.artists.removeAll { $0.browseId == channel }
+            let name = Self.normalized(artist.title)
+            self.cache.releases.removeAll { Self.normalized(String($0.subtitle.components(separatedBy: " · ")[0])) == name }
+            self.save()
+            self.notify()
+            completion(true)
+        }
     }
 
     // MARK: - Включить карточку

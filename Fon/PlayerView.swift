@@ -655,6 +655,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             applyState(id: body["id"] as? String, title: body["title"] as? String ?? "", artist: body["artist"] as? String ?? "",
                        paused: body["paused"] as? Bool ?? true, time: (body["time"] as? NSNumber)?.doubleValue ?? 0,
                        duration: (body["duration"] as? NSNumber)?.doubleValue ?? 0, loop: body["loop"] as? Bool ?? false)
+        case "account":
+            YouTubeAccount.update(body)
         case "search":
             onSearch?(body["query"] as? String)
         case "played":

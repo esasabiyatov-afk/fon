@@ -53,8 +53,11 @@ final class HiddenPage: NSObject, WKNavigationDelegate {
               completion: @escaping (Result<Any, Error>) -> Void) {
         let job = Job(run: { [weak self] in
             guard let self, let webView = self.webView else { return }
-            webView.callAsyncJavaScript(self.script + "\nreturn await " + expression,
-                                        arguments: arguments(), in: nil, in: .page) { [weak self] result in
+            // Запрос — от аккаунта, выбранного на страницах YouTube (`YouTubeAccount`).
+            var args = arguments()
+            args["fonAccount"] = YouTubeAccount.script
+            webView.callAsyncJavaScript("window.__fonAccount = fonAccount;\n" + self.script + "\nreturn await " + expression,
+                                        arguments: args, in: nil, in: .page) { [weak self] result in
                 completion(result)
                 self?.running = false
                 self?.runNext()

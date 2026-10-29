@@ -58,6 +58,10 @@ enum Scripts {
     try {
       const ctx = window.ytcfg && ytcfg.get && ytcfg.get('INNERTUBE_CONTEXT');
       if (ctx && ctx.client) localStorage.setItem('fon-ctx', JSON.stringify({ client: ctx.client }));
+      // Выбранный аккаунт (номер входа Google и канал бренда) — скрытые запросы приложения идут от него же.
+      if (ctx && ytcfg.get('LOGGED_IN')) {
+        fon.post({ type: 'account', index: String(ytcfg.get('SESSION_INDEX') || 0), pageId: ytcfg.get('DELEGATED_SESSION_ID') || '' });
+      }
     } catch (e) {}
   };
   setTimeout(saveContext, 4000);
@@ -937,7 +941,9 @@ enum Scripts {
   const api = async (endpoint, body) => {
     const sapisid = cookie('SAPISID') || cookie('__Secure-3PAPISID');
     if (!sapisid) throw new Error('signed-out');
-    const ctx = context();
+    const acct = window.__fonAccount || { index: '0' };
+    const ctx = Object.assign({}, context());
+    ctx.user = Object.assign({}, ctx.user, acct.pageId ? { onBehalfOfUser: acct.pageId } : {});
     const origin = location.origin;
     const ts = Math.floor(Date.now() / 1000);
     const hash = await sha1(ts + ' ' + sapisid + ' ' + origin);
@@ -948,7 +954,8 @@ enum Scripts {
         'Content-Type': 'application/json',
         'Authorization': 'SAPISIDHASH ' + ts + '_' + hash,
         'X-Origin': origin,
-        'X-Goog-AuthUser': '0',
+        'X-Goog-AuthUser': acct.index || '0',
+        ...(acct.pageId ? { 'X-Goog-PageId': acct.pageId } : {}),
         'X-Youtube-Client-Name': '2',
         'X-Youtube-Client-Version': (ctx.client && ctx.client.clientVersion) || ''
       },
@@ -1096,6 +1103,11 @@ enum Scripts {
       }
       return { chip: true, videos, mixes };
     },
+    // Отписаться от канала (кнопка в «Подписках» режима музыки).
+    async unsubscribe(channelId) {
+      await api('subscription/unsubscribe', { channelIds: [String(channelId).replace(/^MPLA/, '')] });
+      return true;
+    },
     async unlike(pid, id) {
       pid = pid || await findPlaylist();
       if (pid) {
@@ -1129,13 +1141,16 @@ enum Scripts {
   const day = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10).replace(/-/g, '');
   const CONTEXT = { client: { clientName: 'WEB_REMIX', clientVersion: '1.' + day + '.01.00', hl: 'ru' }, user: {} };
   const api = async (endpoint, body, query) => {
+    const acct = window.__fonAccount || { index: '0' };
     const headers = {
       'Content-Type': 'application/json',
       'X-Origin': location.origin,
-      'X-Goog-AuthUser': '0',
+      'X-Goog-AuthUser': acct.index || '0',
       'X-Youtube-Client-Name': '67',
       'X-Youtube-Client-Version': CONTEXT.client.clientVersion
     };
+    if (acct.pageId) headers['X-Goog-PageId'] = acct.pageId;
+    const ctx = Object.assign({}, CONTEXT, { user: acct.pageId ? { onBehalfOfUser: acct.pageId } : {} });
     const sid = sapisid();
     if (sid) {
       const ts = Math.floor(Date.now() / 1000);
@@ -1143,7 +1158,7 @@ enum Scripts {
     }
     const res = await fetch('/youtubei/v1/' + endpoint + '?prettyPrint=false' + (query || ''), {
       method: 'POST', credentials: 'include', headers,
-      body: JSON.stringify(Object.assign({ context: CONTEXT }, body))
+      body: JSON.stringify(Object.assign({ context: ctx }, body))
     });
     if (res.status === 401 || res.status === 403) throw new Error('signed-out');
     if (!res.ok) throw new Error('http-' + res.status);

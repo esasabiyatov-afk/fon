@@ -29,6 +29,16 @@ final class CloudLikes {
         if let data = try? Data(contentsOf: cacheURL), let saved = try? JSONDecoder().decode([Track].self, from: data) {
             tracks = saved
         }
+        // Выбран другой аккаунт YouTube — свой плейлист «Fon — музыка» у каждого.
+        NotificationCenter.default.addObserver(forName: YouTubeAccount.didChange, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.playlistID = nil
+            self.tracks = []
+            self.loaded = false
+            self.saveCache()
+            NotificationCenter.default.post(name: Self.didChange, object: nil)
+            self.refresh()
+        }
     }
 
     private func saveCache() {
