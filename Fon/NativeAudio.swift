@@ -264,6 +264,11 @@ final class NativeAudio: NSObject {
     private var interrupted = false
     private var recoveries: [Date] = []
     private var stallTimer: Timer?
+    /// Передача из веб-плеера (возврат в режим музыки): с какого места и на паузе ли.
+    private var pendingStart: Double?
+    private var pendingPaused = false
+    private var startAt: CMTime?
+    private var startPaused = false
     /// 30 с без звука — трек уходит в обычный плеер (в 1.59–1.60 владелец оставался без музыки).
     private var deadline: Timer?
     /// Текущий шаг поиска потока — виден в плеере вместо исполнителя, пока звука нет.
@@ -338,8 +343,10 @@ final class NativeAudio: NSObject {
 
     // MARK: - Запуск
 
-    func start(url: URL, queue ids: [String]?) {
+    /// `paused` — трек передан из веб-плеера на паузе: открыть на том же месте, не включая.
+    func start(url: URL, queue ids: [String]?, paused: Bool = false) {
         activate()
+        pendingPaused = paused
         // Свежий вход в аккаунт (cookies WebKit) — дальше запросы идут без WebKit, в том числе в фоне.
         YouTubeSession.refresh { [weak self] in
             DispatchQueue.main.async {
@@ -355,6 +362,7 @@ final class NativeAudio: NSObject {
         playedOnce = false
         failuresInRow = 0
         loop = false
+        pendingStart = value("t").flatMap { Double($0.replacingOccurrences(of: "s", with: "")) }.flatMap { $0 > 0 ? $0 : nil }
         if url.path == "/watch_videos", let list = value("video_ids") {
             queue = list.split(separator: ",").map { Track(id: String($0), title: "", artist: "") }
             index = 0
@@ -402,6 +410,11 @@ final class NativeAudio: NSObject {
         guard let track = currentTrack else { return }
         let current = UUID()
         token = current
+        // Место и пауза из веб-плеера — только для первого трека после передачи.
+        startAt = pendingStart.map { CMTime(seconds: $0, preferredTimescale: 600) }
+        startPaused = pendingPaused
+        pendingStart = nil
+        pendingPaused = false
         candidates = []
         triedDirect = false
         userPaused = false
@@ -455,7 +468,7 @@ final class NativeAudio: NSObject {
         let stream = candidates.removeFirst()
         log("\(stream.client): пробую")
         // Поток оборвался посреди трека (например, отдельная звуковая дорожка) — следующий с того же места.
-        let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : nil
+        let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : startAt
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
         let item = AVPlayerItem(asset: asset)
         let current = token
@@ -465,7 +478,14 @@ final class NativeAudio: NSObject {
                 switch item.status {
                 case .readyToPlay:
                     if let resumeAt { self.player.seek(to: resumeAt) }
-                    self.player.play()
+                    if self.startPaused {
+                        self.startPaused = false
+                        self.deadline?.invalidate()
+                        self.stallTimer?.invalidate()
+                        self.pause()
+                    } else {
+                        self.player.play()
+                    }
                 case .failed:
                     NativeAudio.lastLog += "; \(stream.client): \(Self.describe(item))"
                     self.tryNextCandidate()
@@ -475,7 +495,7 @@ final class NativeAudio: NSObject {
             }
         }
         player.replaceCurrentItem(with: item)
-        player.play()
+        if !startPaused { player.play() }
         // Не заиграл за 10 с — пробуем следующий поток.
         lastProgress = Date()
         stallTimer?.invalidate()

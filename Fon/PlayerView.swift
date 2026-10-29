@@ -32,6 +32,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private var urlObservation: NSKeyValueObservation?
     private let musicView = MusicPlayerView()
     private var queueIDs: Set<String>?
+    private var queueOrder: [String]?
+    /// Где веб-плеер и на паузе ли — чтобы при возврате в режим музыки передать трек системному плееру.
+    private var webTime: Double = 0
+    private var webPaused = false
 
     // Мини-полоска
     private let titleLabel = UILabel()
@@ -169,6 +173,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// подпись «Играет из» сменится на «Похожие треки».
     func load(_ url: URL, source: String? = nil, queue: [String]? = nil) {
         queueIDs = queue.map { Set($0) }
+        queueOrder = queue
         currentVideoID = Self.videoID(from: url)
         currentTrack = nil
         youTubeMenuOpen = false
@@ -271,6 +276,19 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             NativeAudio.shared.deactivate()
             musicView.systemPlayer = false
             webView.load(URLRequest(url: url))
+        } else if musicMode, Settings.nativeAudio, !NativeAudio.shared.active, let id = currentVideoID,
+                  var components = URLComponents(string: "https://m.youtube.com/watch") {
+            // Обратно в режим музыки — тот же трек снова в системный плеер, с того же места
+            // (владелец: «после переключения на ютуб и обратно системный плеер пропадает»).
+            let list = webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }?
+                .first { $0.name == "list" }?.value
+            components.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(Int(webTime))s")]
+                + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
+            if let url = components.url {
+                webView.load(URLRequest(url: URL(string: "about:blank")!))
+                musicView.systemPlayer = true
+                NativeAudio.shared.start(url: url, queue: queueOrder?.contains(id) == true ? queueOrder : nil, paused: webPaused)
+            }
         }
         UIView.transition(with: self, duration: 0.25, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.updateVisibility()
@@ -608,6 +626,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         let symbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
         playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
         progress = duration > 0 ? CGFloat(min(1, max(0, time / duration))) : 0
+        if !NativeAudio.shared.active {
+            webTime = time
+            webPaused = paused
+        }
         if mode == .mini { progressView.frame.size.width = bounds.width * progress }
         guard let id else { return }
         currentVideoID = id
