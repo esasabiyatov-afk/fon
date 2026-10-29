@@ -44,6 +44,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let subtitleLabel = UILabel()
     private let playPauseButton = UIButton(type: .system)
     private let closeButton = UIButton(type: .system)
+    /// ♡ в мини-полоске (просьба владельца после 1.69) — то же, что ♡ в плеере.
+    private let miniLikeButton = UIButton(type: .system)
     private let progressView = UIView()
     private let miniArtwork = UIImageView()
     private var miniArtworkID: String?
@@ -103,12 +105,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: symbols), for: .normal)
         closeButton.tintColor = .white
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        miniLikeButton.addTarget(self, action: #selector(likeTapped(_:)), for: .touchUpInside)
         progressView.backgroundColor = Self.accent
         miniArtwork.contentMode = .scaleAspectFill
         miniArtwork.clipsToBounds = true
         miniArtwork.layer.cornerRadius = 6
         miniArtwork.backgroundColor = UIColor(white: 0.18, alpha: 1)
-        [miniArtwork, titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { addSubview($0) }
+        [miniArtwork, titleLabel, subtitleLabel, miniLikeButton, playPauseButton, closeButton, progressView].forEach { addSubview($0) }
 
         // Нативный музыкальный плеер
         musicView.onCommand = { [weak self] name in self?.command(name) }
@@ -147,7 +150,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         pipButton.accessibilityLabel = "Картинка в картинке"
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
         likeButton.tintColor = .white
-        likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
+        likeButton.addTarget(self, action: #selector(likeTapped(_:)), for: .touchUpInside)
         updateLikeButton()
         NotificationCenter.default.addObserver(self, selector: #selector(updateLikeButton), name: CloudLikes.didChange, object: nil)
         [collapseButton, likeButton, pipButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
@@ -235,7 +238,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     private func updateVisibility() {
         let isMini = mode == .mini
-        [titleLabel, subtitleLabel, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
+        [titleLabel, subtitleLabel, miniLikeButton, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
         miniArtwork.isHidden = !(isMini && musicMode)
         musicView.isHidden = !nativeMusic
         topBar.isHidden = isMini || nativeMusic || isFullscreen
@@ -328,22 +331,26 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     @objc private func updateLikeButton() {
         let liked = currentTrack.map { CloudLikes.shared.isLiked($0.id) } ?? false
         likeButton.isEnabled = currentTrack != nil
+        miniLikeButton.isEnabled = currentTrack != nil
         guard liked != likeShown else { return }
         likeShown = liked
-        likeButton.setImage(UIImage(systemName: liked ? "heart.fill" : "heart",
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
-        likeButton.tintColor = liked ? Self.accent : .white
-        likeButton.accessibilityLabel = liked ? "Убрать из «Понравившихся»" : "Добавить в «Понравившиеся»"
+        for (button, size) in [(likeButton, CGFloat(18)), (miniLikeButton, CGFloat(20))] {
+            button.setImage(UIImage(systemName: liked ? "heart.fill" : "heart",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .semibold)), for: .normal)
+            button.tintColor = liked ? Self.accent : .white
+            button.accessibilityLabel = liked ? "Убрать из «Понравившихся»" : "Добавить в «Понравившиеся»"
+        }
     }
 
-    @objc private func likeTapped() {
+    @objc private func likeTapped(_ sender: UIButton) {
         guard let track = currentTrack else { return }
         let liked = !CloudLikes.shared.isLiked(track.id)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         CloudLikes.shared.setLiked(track, liked)
-        UIView.animate(withDuration: 0.12, animations: { self.likeButton.transform = CGAffineTransform(scaleX: 1.3, y: 1.3) }) { _ in
-            UIView.animate(withDuration: 0.2) { self.likeButton.transform = .identity }
+        UIView.animate(withDuration: 0.12, animations: { sender.transform = CGAffineTransform(scaleX: 1.3, y: 1.3) }) { _ in
+            UIView.animate(withDuration: 0.2) { sender.transform = .identity }
         }
+        guard sender === likeButton else { return } // в мини-полоске хватает закрашенного ♡
         showToast(liked ? "Добавлено в «Понравившиеся»" : "Убрано из «Понравившихся»",
                   at: CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40))
     }
@@ -566,8 +573,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let buttonW: CGFloat = 48
             closeButton.frame = CGRect(x: w - buttonW, y: 0, width: buttonW, height: h)
             playPauseButton.frame = CGRect(x: w - buttonW * 2, y: 0, width: buttonW, height: h)
+            miniLikeButton.frame = CGRect(x: w - buttonW * 3, y: 0, width: buttonW, height: h)
             let textX = leftWidth + 12
-            let textW = max(0, playPauseButton.frame.minX - textX - 4)
+            let textW = max(0, miniLikeButton.frame.minX - textX - 4)
             titleLabel.frame = CGRect(x: textX, y: h / 2 - 19, width: textW, height: 20)
             subtitleLabel.frame = CGRect(x: textX, y: h / 2 + 1, width: textW, height: 18)
             progressView.frame = CGRect(x: 0, y: h - 2, width: w * progress, height: 2)
