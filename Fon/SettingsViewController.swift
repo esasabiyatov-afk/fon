@@ -56,7 +56,7 @@ final class SettingsViewController: UITableViewController {
             if !LogUploader.lastStatus.isEmpty { text += "\n\nGitHub: " + LogUploader.lastStatus }
             return text
         }
-        var text = "Экспериментально. В режиме музыки звук играет системный плеер iOS напрямую, без веб-страницы YouTube: "
+        var text = "В режиме музыки звук играет системный плеер iOS напрямую, без веб-страницы YouTube: "
             + "стабильнее в фоне и на экране блокировки, меньше расход батареи и трафика. "
             + "Только с ним работает ползунок громкости в плеере (музыку можно сделать тише игры). "
             + "Если YouTube не отдаст поток, трек сам включится в обычном плеере. "

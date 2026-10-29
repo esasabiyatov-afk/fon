@@ -9,8 +9,6 @@ struct AudioStream {
     let url: URL
     let headers: [String: String]
     let client: String
-    /// Главный список HLS (со всеми качествами) — AVPlayer сам выбирает вариант, ограничиваем его.
-    var isMaster = false
 }
 
 /// Вход в Google для запросов самого приложения. Cookies копируются из WKWebView, пока приложение открыто:
@@ -28,8 +26,6 @@ enum YouTubeSession {
             completion?()
         }
     }
-
-    static var signedIn: Bool { sapisid != nil }
 
     static var cookieHeader: String? {
         lock.lock()
@@ -52,60 +48,19 @@ enum YouTubeSession {
     }
 }
 
-/// Защитный токен YouTube (PO token) для потока: его выдаёт BotGuard в скрытом окне www.youtube.com
-/// (`Scripts.potoken`). Токен живёт часами — храним в памяти, чтобы следующие треки (и в фоне, когда
-/// WebKit может спать) обходились без окна.
-enum PoToken {
-    private static var cache: [String: (token: String, until: Date)] = [:] // только главный поток
-
-    static func token(for identifier: String) async -> (token: String?, note: String) {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                if let cached = cache[identifier], cached.until > Date() {
-                    return continuation.resume(returning: (cached.token, "из памяти"))
-                }
-                var done = false
-                let finish: (String?, String) -> Void = { token, note in
-                    guard !done else { return }
-                    done = true
-                    continuation.resume(returning: (token, note))
-                }
-                HiddenPage.desktop.call("__fonPot.mint(id)", { ["id": identifier] }) { result in
-                    switch result {
-                    case .success(let value):
-                        guard let dict = value as? [String: Any], let token = dict["token"] as? String, !token.isEmpty else {
-                            return finish(nil, "пустой ответ")
-                        }
-                        let ttl = (dict["ttl"] as? NSNumber)?.doubleValue ?? 3600
-                        cache[identifier] = (token, Date().addingTimeInterval(max(300, ttl)))
-                        finish(token, "получен")
-                    case .failure(let error):
-                        let message = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
-                        finish(nil, "ошибка (\(message.prefix(80)))")
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 45) { finish(nil, "нет ответа") }
-            }
-        }
-    }
-}
-
-/// Поток трека для системного плеера. YouTube отдаёт готовый поток HLS (его AVPlayer играет сам,
-/// без расшифровки подписи) браузеру Safari на Mac — как в yt-dlp клиент `web_safari`. Поэтому
-/// запрашиваем страницу видео www.youtube.com с User-Agent Safari для Mac и cookies входа в аккаунт;
-/// нет HLS в странице — тот же запрос через внутренний API (`player`). В 1.43–1.47 пробовали клиенты
-/// IOS/WEB/ANDROID_VR/MWEB без входа и с мобильным Safari — рабочей ссылки не было.
+/// Запросы к YouTube из самого приложения (URLSession — работают и в фоне). Поток трека ищет `DirectStream`;
+/// здесь — общее: User-Agent, настройки клиента со страницы, очередь микса (`next`) и разбор ответа страницы.
+/// Старые пути (HLS «Safari для Mac», PO-токен BotGuard, скрытое окно `app=desktop`) убраны после 1.64:
+/// прямой путь заработал, а они не работали или были не нужны (история — в git и CLAUDE.md).
 enum YouTubeStreams {
-    static let desktopUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
     static let origin = "https://www.youtube.com"
+    /// User-Agent Safari на iPhone (версию iOS WebKit «замораживает» — так пишет и настоящий Safari).
+    static let iPhoneSafariUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
 
-    /// Настройки клиента со страницы YouTube (контекст запроса, версия плеера) — для внутреннего API.
+    /// Настройки клиента со страницы YouTube (контекст запроса, версия) — для внутреннего API.
     private struct Config {
         let context: [String: Any]
         let clientVersion: String
-        let signatureTimestamp: Int?
-        /// Для защитного токена: dataSyncId аккаунта (со входом) или visitorData (без входа).
-        let identifier: String?
     }
 
     private static let lock = NSLock()
@@ -124,7 +79,14 @@ enum YouTubeStreams {
 
     private static var fallbackConfig: Config {
         Config(context: ["client": ["clientName": "WEB", "clientVersion": webVersion, "hl": "ru", "gl": "RU"]],
-               clientVersion: webVersion, signatureTimestamp: nil, identifier: nil)
+               clientVersion: webVersion)
+    }
+
+    /// Настройки клиента со страницы видео (её загружает `DirectStream`) — для очереди микса.
+    static func rememberConfig(from page: Data) {
+        guard let context = jsonObject(in: page, after: "\"INNERTUBE_CONTEXT\":") else { return }
+        let client = context["client"] as? [String: Any]
+        config = Config(context: context, clientVersion: client?["clientVersion"] as? String ?? webVersion)
     }
 
     struct Result {
@@ -132,141 +94,6 @@ enum YouTubeStreams {
         var title: String?
         var author: String?
         var log: [String] = []
-    }
-
-    /// Все найденные потоки трека — по порядку предпочтения.
-    static func resolve(_ videoID: String) async -> Result {
-        var result = Result()
-        result.log.append(YouTubeSession.signedIn ? "вход: да" : "вход: нет")
-        let page = await watchPage(videoID)
-        result.log.append("страница: " + page.note)
-        var response = page.response
-        if hlsURL(response) == nil {
-            let cfg = config ?? fallbackConfig
-            var playback: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
-            if let sts = cfg.signatureTimestamp { playback["signatureTimestamp"] = sts }
-            let body: [String: Any] = ["context": cfg.context, "videoId": videoID, "contentCheckOk": true, "racyCheckOk": true,
-                                       "playbackContext": ["contentPlaybackContext": playback]]
-            if let api = await post("player", body: body, config: cfg) {
-                result.log.append("API: " + describe(api))
-                if response == nil || hlsURL(api) != nil { response = api }
-            } else {
-                result.log.append("API: нет ответа")
-            }
-        }
-        if let details = response?["videoDetails"] as? [String: Any] {
-            result.title = details["title"] as? String
-            result.author = details["author"] as? String
-        }
-        guard var master = hlsURL(response) else { return result }
-        // Защитный токен (без него куски потока — 403): как yt-dlp, дописываем /pot/<токен> к ссылке HLS.
-        if let identifier = config?.identifier {
-            let pot = await PoToken.token(for: identifier)
-            result.log.append("токен: " + pot.note)
-            if let token = pot.token, let url = URL(string: master.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/pot/" + token) {
-                master = url
-            }
-        } else {
-            result.log.append("токен: нет идентификатора")
-        }
-        let streams = await playlists(master: master)
-        result.log.append("HLS: " + streams.map(\.client).joined(separator: ", "))
-        if let first = streams.first { result.log.append("проверка: " + (await probe(first))) }
-        result.streams = streams
-        return result
-    }
-
-    /// User-Agent Safari на iPhone (как его пишет сам WebKit — версия iOS «заморожена»); скрытое окно
-    /// присылает настоящий, до этого — такой же по образцу.
-    static var iPhoneSafariUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
-
-    /// Страница видео, как её получает Safari на Mac: ytInitialPlayerResponse + настройки клиента.
-    private static func watchPage(_ id: String) async -> (response: [String: Any]?, note: String) {
-        guard let url = URL(string: "\(origin)/watch?v=\(id)&has_verified=1&bpctr=9999999999&hl=ru") else { return (nil, "нет ссылки") }
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        request.httpShouldHandleCookies = false
-        request.setValue(desktopUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return (nil, "нет ответа") }
-        let code = (reply as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { return (nil, "HTTP \(code)") }
-        if let context = jsonObject(in: data, after: "\"INNERTUBE_CONTEXT\":") {
-            let client = context["client"] as? [String: Any]
-            let dataSync = string(in: data, after: "\"DATASYNC_ID\":\"")?.components(separatedBy: "||").first
-            let visitor = client?["visitorData"] as? String
-            config = Config(context: context, clientVersion: client?["clientVersion"] as? String ?? webVersion,
-                            signatureTimestamp: number(in: data, after: "\"STS\":"),
-                            identifier: (dataSync?.isEmpty == false ? dataSync : nil) ?? visitor)
-        }
-        let response = jsonObject(in: data, after: "ytInitialPlayerResponse = ")
-        return (response, response.map(describe) ?? "без ответа плеера")
-    }
-
-    private static func hlsURL(_ response: [String: Any]?) -> URL? {
-        guard let data = response?["streamingData"] as? [String: Any] else { return nil }
-        return (data["hlsManifestUrl"] as? String).flatMap(URL.init(string:))
-    }
-
-    /// Коротко для журнала: статус, есть ли HLS, причина отказа.
-    private static func describe(_ response: [String: Any]) -> String {
-        let playability = response["playabilityStatus"] as? [String: Any]
-        var text = playability?["status"] as? String ?? "?"
-        if let reason = playability?["reason"] as? String { text += " (\(reason.prefix(60)))" }
-        if let data = response["streamingData"] as? [String: Any] {
-            text += data["hlsManifestUrl"] != nil ? ", HLS" : ", без HLS"
-            if data["serverAbrStreamingUrl"] != nil { text += ", SABR" }
-        }
-        return text
-    }
-
-    /// Из главного списка HLS — сначала только звук (если YouTube дал отдельную дорожку), потом вариант
-    /// 360p (в нём AAC 128 кбит/с; у 144p/240p звук 48 кбит/с), в конце сам главный список.
-    private static func playlists(master: URL) async -> [AudioStream] {
-        let headers = ["User-Agent": desktopUserAgent]
-        let masterStream = AudioStream(url: master, headers: headers, client: "HLS", isMaster: true)
-        var request = URLRequest(url: master, timeoutInterval: 15)
-        request.setValue(desktopUserAgent, forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let text = String(data: data, encoding: .utf8), text.hasPrefix("#EXTM3U") else {
-            return [masterStream]
-        }
-        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
-        var out: [AudioStream] = []
-        // Отдельные звуковые дорожки (itag 234 — 128 кбит/с, 233 — 48 кбит/с).
-        let audio = lines.filter { $0.hasPrefix("#EXT-X-MEDIA:") && $0.contains("TYPE=AUDIO") }.compactMap { line -> (Int, URL)? in
-            guard let uri = attribute("URI", in: line), let url = URL(string: uri, relativeTo: master)?.absoluteURL else { return nil }
-            let group = attribute("GROUP-ID", in: line) ?? ""
-            let rank = group.contains("234") ? 3 : group.contains("140") ? 2 : group.contains("233") ? 0 : 1
-            return (rank, url)
-        }
-        if let best = audio.max(by: { $0.0 < $1.0 }) {
-            out.append(AudioStream(url: best.1, headers: headers, client: "HLS звук"))
-        }
-        var variants: [(height: Int, bandwidth: Int, url: URL)] = []
-        for (i, line) in lines.enumerated() where line.hasPrefix("#EXT-X-STREAM-INF:") {
-            guard let uri = lines[(i + 1)...].first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
-                  let url = URL(string: uri, relativeTo: master)?.absoluteURL else { continue }
-            let height = attribute("RESOLUTION", in: line).flatMap { Int($0.split(separator: "x").last ?? "") } ?? 0
-            let bandwidth = attribute("BANDWIDTH", in: line).flatMap { Int($0) } ?? 0
-            variants.append((height: height, bandwidth: bandwidth, url: url))
-        }
-        if audio.isEmpty, let v360 = variants.filter({ $0.height >= 360 }).min(by: { $0.bandwidth < $1.bandwidth }) {
-            out.append(AudioStream(url: v360.url, headers: headers, client: "HLS \(v360.height)p"))
-        }
-        out.append(masterStream)
-        return out
-    }
-
-    private static func attribute(_ name: String, in line: String) -> String? {
-        guard let range = line.range(of: name + "=") else { return nil }
-        let rest = line[range.upperBound...]
-        if rest.hasPrefix("\"") {
-            let body = rest.dropFirst()
-            return body.firstIndex(of: "\"").map { String(body[..<$0]) }
-        }
-        return String(rest.prefix { $0 != "," })
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
@@ -292,7 +119,7 @@ enum YouTubeStreams {
         request.httpBody = data
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(desktopUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("1", forHTTPHeaderField: "X-Youtube-Client-Name")
         request.setValue(config.clientVersion, forHTTPHeaderField: "X-Youtube-Client-Version")
         request.setValue(origin, forHTTPHeaderField: "Origin")
@@ -341,47 +168,10 @@ enum YouTubeStreams {
         }
     }
 
-    /// Сами открываем список и первый кусок потока — в журнал: на каком шаге YouTube отказывает.
-    private static func probe(_ stream: AudioStream) async -> String {
-        func get(_ url: URL, range: Bool) async -> (Int, Data?) {
-            var request = URLRequest(url: url, timeoutInterval: 10)
-            stream.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-            if range { request.setValue("bytes=0-1023", forHTTPHeaderField: "Range") }
-            guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return (0, nil) }
-            return ((reply as? HTTPURLResponse)?.statusCode ?? 0, data)
-        }
-        let (code, data) = await get(stream.url, range: false)
-        var note = "список \(code)"
-        guard code == 200, let text = data.flatMap({ String(data: $0, encoding: .utf8) }) else { return note }
-        note += text.contains("/pot/") || text.contains("pot=") ? " (с токеном)" : " (без токена)"
-        var playlist = text, base = stream.url
-        for _ in 0..<2 {
-            guard let line = playlist.components(separatedBy: .newlines).first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
-                  let next = URL(string: line.trimmingCharacters(in: .whitespaces), relativeTo: base)?.absoluteURL else { return note }
-            guard line.contains(".m3u8") || line.contains("/playlist") else {
-                let (segmentCode, _) = await get(next, range: true)
-                return note + ", кусок \(segmentCode)"
-            }
-            // Главный список — открываем вложенный (вариант качества) и берём его первый кусок.
-            let (innerCode, innerData) = await get(next, range: false)
-            note += ", вложенный \(innerCode)"
-            guard innerCode == 200, let inner = innerData.flatMap({ String(data: $0, encoding: .utf8) }) else { return note }
-            playlist = inner
-            base = next
-        }
-        return note
-    }
-
     static func string(in data: Data, after marker: String) -> String? {
         guard let found = data.range(of: Data(marker.utf8)) else { return nil }
         let value = data[found.upperBound...].prefix { $0 != 0x22 }
         return String(decoding: value, as: UTF8.self)
-    }
-
-    private static func number(in data: Data, after marker: String) -> Int? {
-        guard let found = data.range(of: Data(marker.utf8)) else { return nil }
-        let digits = data[found.upperBound...].prefix { $0 >= 0x30 && $0 <= 0x39 }
-        return Int(String(decoding: digits, as: UTF8.self))
     }
 
     private static func findAll(_ object: Any, key: String) -> [Any] {
@@ -403,217 +193,6 @@ enum YouTubeStreams {
         guard let dict = value as? [String: Any] else { return "" }
         if let simple = dict["simpleText"] as? String { return simple }
         return (dict["runs"] as? [[String: Any]] ?? []).compactMap { $0["text"] as? String }.joined()
-    }
-}
-
-/// Поток по находке владельца (29.10.2026): www.youtube.com/watch?app=desktop в Safari на iPhone играет
-/// системным плеером iOS — у видео обычная ссылка на поток, а не MediaSource. Скрытое окно открывает такую
-/// страницу (со входом в аккаунт, UA как у Safari) и отдаёт ссылку AVPlayer. Окно **одно и постоянное**:
-/// страница грузится один раз, следующие треки — командой плеера YouTube `__fonLoad(id)` (быстрее, меньше
-/// запросов к Google — без капчи). Не вышло (нет плеера, капча, 15 с без ссылки) — страница грузится заново.
-final class SafariStream: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-    /// Куда вставить скрытое окно (без родителя WebKit не работает) — задаёт MainViewController.
-    static weak var host: UIView?
-    /// Для проверки (просьба владельца): окно видно поверх приложения карточкой, можно нажимать.
-    static let visible = false
-
-    private static let shared = SafariStream()
-    /// Когда окно последний раз останавливало своё видео — прерывание звука сразу после этого вызвано окном.
-    static var lastStop = Date.distantPast
-
-    private typealias Completion = (URL?, String, String?, String?) -> Void
-    private var webView: WKWebView?
-    private var card: UIView?
-    private var cardLabel: UILabel?
-    /// Страница загружена, плеер YouTube на ней — следующий трек можно включать без перезагрузки.
-    private var pageReady = false
-    private var queue: [(id: String, completion: Completion)] = []
-    private var currentID: String?
-    private var completion: Completion?
-    private var attempt = 0
-
-    /// Поток трека и его название.
-    static func find(_ videoID: String) async -> YouTubeStreams.Result {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                shared.request(videoID) { url, note, title, userAgent in
-                    var result = YouTubeStreams.Result()
-                    result.log.append("Safari: " + note)
-                    if let url {
-                        let hls = url.absoluteString.contains("m3u8") || url.host?.hasPrefix("manifest") == true
-                        result.streams = [AudioStream(url: url, headers: ["User-Agent": userAgent ?? WebViewFactory.safariUserAgent()],
-                                                      client: hls ? "Safari HLS" : "Safari файл", isMaster: hls)]
-                    }
-                    let name = (title ?? "").replacingOccurrences(of: " - YouTube", with: "").trimmingCharacters(in: .whitespaces)
-                    if !name.isEmpty, name != "YouTube" { result.title = name } // пока страница грузится, там просто «YouTube»
-                    continuation.resume(returning: result)
-                }
-            }
-        }
-    }
-
-    /// Запросы — строго по одному (окно одно).
-    private func request(_ videoID: String, completion: @escaping Completion) {
-        queue.append((id: videoID, completion: completion))
-        runNext()
-    }
-
-    private func runNext() {
-        guard completion == nil, !queue.isEmpty else { return }
-        let next = queue.removeFirst()
-        guard let webView = ensureWebView() else { return next.completion(nil, "нет окна", nil, nil) }
-        completion = next.completion
-        currentID = next.id
-        attempt += 1
-        let current = attempt
-        setCard("Ищу: \(next.id)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self, self.attempt == current else { return }
-            self.timedOut()
-        }
-        guard pageReady else { return load(next.id) }
-        let id = next.id.replacingOccurrences(of: "'", with: "")
-        webView.evaluateJavaScript("window.__fonLoad ? __fonLoad('\(id)') : false") { [weak self] value, _ in
-            guard let self, self.attempt == current, self.completion != nil else { return }
-            if value as? Bool != true { self.load(next.id) } // плеера на странице нет — грузим заново
-        }
-    }
-
-    private func load(_ videoID: String) {
-        pageReady = false
-        // Компьютерная версия (`app=desktop`, не m.youtube): на iPhone её плеер играет системным плеером iOS
-        // по обычной ссылке — владелец проверил в Safari, в том числе со входом в аккаунт.
-        webView?.load(URLRequest(url: URL(string: "https://www.youtube.com/watch?app=desktop&v=\(videoID)")!))
-    }
-
-    private func ensureWebView() -> WKWebView? {
-        if let webView { return webView }
-        guard let host = Self.host else { return nil }
-        let config = WKWebViewConfiguration()
-        // С входом в аккаунт (общие cookies приложения): в 1.61 окно «без cookies» на каждый трек Google принял за бота
-        // (google.com/sorry — капча). Владелец проверил: со входом в Safari системный плеер тоже работает.
-        config.websiteDataStore = .default()
-        config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = [] // звук и так выключен скриптом; «play» нужен для ссылки
-        // Именно как iPhone: с «Запросом версии для компьютера» (UA Mac) YouTube включает свой плеер (проверил
-        // владелец). На iPad WebKit по умолчанию просит версию для компьютера — запрещаем.
-        config.defaultWebpagePreferences.preferredContentMode = .mobile
-        // User-Agent ровно как у Safari: WebKit сам подставляет версию iOS так, как это делает Safari (в iOS 26 —
-        // «iPhone OS 18_6»), а мы дописываем хвост Safari. Со своим UA («iPhone OS 26_…») YouTube давал свой плеер.
-        let parts = UIDevice.current.systemVersion.split(separator: ".")
-        config.applicationNameForUserAgent = "Version/\(parts.first ?? "18").\(parts.count > 1 ? parts[1] : "0") Mobile/15E148 Safari/604.1"
-        config.userContentController.add(WeakScriptHandler(self), name: "fonSrc")
-        config.userContentController.addUserScript(WKUserScript(source: Scripts.safariSource, injectionTime: .atDocumentStart,
-                                                                forMainFrameOnly: false))
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
-        webView.navigationDelegate = self
-        if Self.visible {
-            let card = UIView(frame: CGRect(x: 12, y: host.safeAreaInsets.top + 8, width: host.bounds.width - 24,
-                                            height: min(host.bounds.height * 0.5, 460)))
-            card.backgroundColor = .black
-            card.layer.cornerRadius = 14
-            card.layer.borderWidth = 2
-            card.layer.borderColor = PlayerView.accent.cgColor
-            card.clipsToBounds = true
-            let label = UILabel(frame: CGRect(x: 10, y: 0, width: card.bounds.width - 20, height: 26))
-            label.font = .systemFont(ofSize: 13, weight: .semibold)
-            label.textColor = .white
-            card.addSubview(label)
-            webView.frame = CGRect(x: 0, y: 26, width: card.bounds.width, height: card.bounds.height - 26)
-            card.addSubview(webView)
-            host.addSubview(card)
-            self.card = card
-            cardLabel = label
-        } else {
-            webView.alpha = 0.01
-            webView.isUserInteractionEnabled = false
-            host.insertSubview(webView, at: 0)
-        }
-        self.webView = webView
-        return webView
-    }
-
-    private func setCard(_ text: String) {
-        guard let card, let cardLabel, let host = Self.host else { return }
-        cardLabel.text = text
-        host.bringSubviewToFront(card)
-    }
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard completion != nil, let body = message.body as? [String: Any], let text = body["src"] as? String,
-              let url = URL(string: text) else { return }
-        // Ссылка от прошлого трека (плеер ещё не переключился) — не та.
-        if let id = body["id"] as? String, !id.isEmpty, let currentID, id != currentID { return }
-        // Для оценки «можно ли без окна, одними запросами»: какие защиты в рабочей ссылке (только имена, без значений).
-        let names = Set(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.map(\.name) ?? [])
-        let marks = ["pot", "n", "sig", "lsig", "itag"].filter(names.contains).joined(separator: ",")
-        let itag = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "itag" }?.value ?? "?"
-        if let ua = body["ua"] as? String, !ua.isEmpty { YouTubeStreams.iPhoneSafariUserAgent = ua }
-        finish(url, (text.contains("m3u8") ? "ссылка HLS" : "ссылка на файл") + " (itag \(itag); \(marks))",
-               title: body["title"] as? String, userAgent: body["ua"] as? String)
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        pageReady = true
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        pageReady = false
-        finish(nil, "страница не открылась")
-    }
-
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        pageReady = false
-        finish(nil, "окно перезапущено")
-    }
-
-    /// На мобильной версии (m.youtube.com) системного плеера нет (проверил владелец) — туда не идём.
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        let main = navigationAction.targetFrame?.isMainFrame != false
-        if main, navigationAction.request.url?.host == "m.youtube.com" {
-            decisionHandler(.cancel)
-            pageReady = false
-            finish(nil, "YouTube перекинул на мобильную версию")
-            return
-        }
-        if main, let url = navigationAction.request.url, url.host?.hasSuffix("google.com") == true, url.path.hasPrefix("/sorry") {
-            decisionHandler(.cancel)
-            pageReady = false
-            finish(nil, "Google просит капчу (принял за бота)")
-            return
-        }
-        decisionHandler(.allow)
-    }
-
-    /// За 15 с ссылки нет — в журнал то, что видно на странице; в следующий раз страница грузится заново.
-    private func timedOut() {
-        guard completion != nil, let webView else { return }
-        let current = attempt
-        pageReady = false
-        webView.evaluateJavaScript("window.__fonDiag ? __fonDiag() : 'скрипт не работал'") { [weak self] value, _ in
-            guard let self, self.attempt == current else { return }
-            self.finish(nil, "ссылки нет (\(value as? String ?? "страница не ответила"))")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            guard let self, self.attempt == current else { return }
-            self.finish(nil, "ссылки нет (страница не ответила)")
-        }
-    }
-
-    private func finish(_ url: URL?, _ note: String, title: String? = nil, userAgent: String? = nil) {
-        guard let completion else { return }
-        self.completion = nil
-        attempt += 1 // таймеры этой попытки больше не действуют
-        setCard((url != nil ? "Найдено: " : "Нет: ") + note)
-        // Сначала останавливаем видео окна и даём WebKit «отпустить» звук, потом отдаём ссылку плееру.
-        // Иначе WebKit отпускал звук приложения уже после старта AVPlayer: время шло, звука не было (владелец).
-        webView?.evaluateJavaScript("window.__fonStop && __fonStop()", completionHandler: nil)
-        Self.lastStop = Date()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            completion(url, note, title, userAgent)
-            self?.runNext()
-        }
     }
 }
 
@@ -669,8 +248,6 @@ final class NativeAudio: NSObject {
     private var playlistID: String?
     private var loop = false
     private var candidates: [AudioStream] = []
-    private var triedSafari = false
-    private var triedMain = false
     private var triedDirect = false
     /// Журнал этой попытки уже ушёл на GitHub (`LogUploader`).
     private var reported = false
@@ -739,14 +316,13 @@ final class NativeAudio: NSObject {
     }
 
     /// Звонок/другое приложение — не продолжаем сами до конца прерывания (продолжит MainViewController по
-    /// `.shouldResume`). Прерывание сразу после остановки видео скрытого окна — это само окно, не звонок.
+    /// `.shouldResume`).
     @objc private func interruption(_ note: Notification) {
         guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         DispatchQueue.main.async {
             if type == .began {
-                self.interrupted = Date().timeIntervalSince(SafariStream.lastStop) > 3
-                if !self.interrupted { self.statusChanged() }
+                self.interrupted = true
             } else {
                 self.interrupted = false
             }
@@ -827,8 +403,6 @@ final class NativeAudio: NSObject {
         let current = UUID()
         token = current
         candidates = []
-        triedSafari = false
-        triedMain = false
         triedDirect = false
         userPaused = false
         stallTimer?.invalidate()
@@ -874,45 +448,23 @@ final class NativeAudio: NSObject {
         candidates += result.streams
     }
 
-    /// Запасной путь: поток со страницы www.youtube.com + защитный токен (см. YouTubeStreams).
-    /// Путь «страница + токен» (YouTubeStreams.resolve + PoToken): в 1.57–1.62 ни разу не заиграл (куски — 403),
-    /// только оттягивал переход в обычный плеер — выключен. Код оставлен на случай, если пригодится.
-    static let useStreamFallback = false
-
-    private func tryMain() {
-        guard Self.useStreamFallback, !triedMain, let track = currentTrack else { return trackFailed() }
-        triedMain = true
-        log("страница и токен: ищу…")
-        let current = token
-        Task { [weak self] in
-            let result = await YouTubeStreams.resolve(track.id)
-            await MainActor.run {
-                guard let self, self.token == current, self.active else { return }
-                self.use(result, for: track)
-                self.tryNextCandidate()
-            }
-        }
-    }
-
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
     private func tryNextCandidate() {
         guard active else { return }
-        guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : (triedSafari ? tryMain() : trySafari()) }
+        guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : trackFailed() }
         let stream = candidates.removeFirst()
         log("\(stream.client): пробую")
+        // Поток оборвался посреди трека (например, отдельная звуковая дорожка) — следующий с того же места.
+        let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : nil
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
         let item = AVPlayerItem(asset: asset)
-        if stream.isMaster {
-            // В главном списке звук идёт вместе с видео: 360p — самый лёгкий вариант с нормальным звуком.
-            item.preferredPeakBitRate = 1_500_000
-            item.preferredMaximumResolution = CGSize(width: 640, height: 360)
-        }
         let current = token
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self, self.token == current, item === self.player.currentItem else { return }
                 switch item.status {
                 case .readyToPlay:
+                    if let resumeAt { self.player.seek(to: resumeAt) }
                     self.player.play()
                 case .failed:
                     NativeAudio.lastLog += "; \(stream.client): \(Self.describe(item))"
@@ -936,30 +488,14 @@ final class NativeAudio: NSObject {
         stallTimer = timer
     }
 
-    /// Основной путь: ссылка HLS, которую компьютерная версия YouTube даёт системному плееру (один раз на трек).
-    /// Основной путь (вариант 3 владельца): ссылка со страницы запросом приложения + «решатель» yt-dlp — без окна.
+    /// Поток трека (вариант 3 владельца): ссылка со страницы запросом приложения + «решатель» yt-dlp — без окна.
     private func tryDirect() {
-        guard !triedDirect, let track = currentTrack else { return trySafari() }
+        guard !triedDirect, let track = currentTrack else { return trackFailed() }
         triedDirect = true
         log("прямо: ищу ссылку…")
         let current = token
         Task { [weak self] in
             let found = await DirectStream.find(track.id)
-            await MainActor.run {
-                guard let self, self.token == current, self.active else { return }
-                self.use(found, for: track)
-                self.tryNextCandidate()
-            }
-        }
-    }
-
-    private func trySafari() {
-        guard !triedSafari, let track = currentTrack else { return tryMain() }
-        triedSafari = true
-        log("Safari: ищу ссылку…")
-        let current = token
-        Task { [weak self] in
-            let found = await SafariStream.find(track.id)
             await MainActor.run {
                 guard let self, self.token == current, self.active else { return }
                 self.use(found, for: track)

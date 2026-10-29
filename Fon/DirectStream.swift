@@ -1,9 +1,9 @@
 import Foundation
 import JavaScriptCore
 
-/// Прямой путь к звуку без окна (решение владельца 29.10.2026, вариант 3): та же страница, что открывало скрытое
-/// окно (`www.youtube.com/watch?app=desktop`, Safari на iPhone, вход в аккаунт), но запросом самого приложения.
-/// Ссылка на файл itag 18 там зашифрована (`signatureCipher`: подпись `s` + параметр `n`, без PO-токена — видно
+/// Поток трека для системного плеера (решение владельца 29.10.2026, вариант 3; проверено в 1.64): страница
+/// `www.youtube.com/watch?app=desktop` (Safari на iPhone, вход в аккаунт) запросом самого приложения — без окон.
+/// Ссылки там зашифрованы (`signatureCipher`: подпись `s` + параметр `n`, без PO-токена — видно
 /// по журналу 1.63). Расшифровывает «решатель» yt-dlp (`ChallengeSolver`) — тот же код, что выполнил бы браузер.
 /// Запросы идут из приложения (URLSession + JavaScriptCore) — работают и в фоне, звук приложения не трогают.
 enum DirectStream {
@@ -36,56 +36,93 @@ enum DirectStream {
         let status = (response["playabilityStatus"] as? [String: Any])?["status"] as? String ?? "?"
         let streaming = response["streamingData"] as? [String: Any] ?? [:]
         let formats = streaming["formats"] as? [[String: Any]] ?? []
-        guard status == "OK", let format = formats.first(where: { ($0["itag"] as? Int) == 18 }) ?? formats.first else {
+        let adaptive = streaming["adaptiveFormats"] as? [[String: Any]] ?? []
+        // Сначала только звук (itag 140 — AAC ~128 кбит/с: меньше трафика, без видео), запасом — файл 360p (itag 18,
+        // работал в 1.64). Отдельный звук может не дать YouTube без PO-токена — тогда плеер возьмёт файл.
+        var picked: [[String: Any]] = []
+        if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) { picked.append(audio) }
+        if let file = formats.first(where: { ($0["itag"] as? Int) == 18 }) ?? formats.first { picked.append(file) }
+        guard status == "OK", !picked.isEmpty else {
             result.log.append("прямо: \(status), файлов нет")
             return result
         }
+        YouTubeStreams.rememberConfig(from: data) // для очереди микса
         guard let jsPath = YouTubeStreams.string(in: data, after: "\"jsUrl\":\""),
               let playerURL = URL(string: YouTubeStreams.origin + jsPath.replacingOccurrences(of: "\\/", with: "/")) else {
             result.log.append("прямо: нет кода плеера")
             return result
         }
-        // Ссылка + что расшифровать: подпись (из signatureCipher) и n (в самой ссылке).
-        var base: String?
-        var signature: String?
-        var signatureParam = "signature"
-        if let direct = format["url"] as? String {
-            base = direct
-        } else if let cipher = format["signatureCipher"] as? String {
-            let items = URLComponents(string: "?" + cipher)?.queryItems ?? []
-            base = items.first { $0.name == "url" }?.value
-            signature = items.first { $0.name == "s" }?.value
-            signatureParam = items.first { $0.name == "sp" }?.value ?? "signature"
-        }
-        guard let base, var components = URLComponents(string: base) else {
-            result.log.append("прямо: нет ссылки в ответе")
+        // Ссылки + что расшифровать: подпись (из signatureCipher) и n (в самой ссылке).
+        let links = picked.compactMap(Link.init)
+        guard !links.isEmpty else {
+            result.log.append("прямо: нет ссылок в ответе")
             return result
         }
-        let n = components.queryItems?.first { $0.name == "n" }?.value
         let started = Date()
         do {
-            let solved = try await ChallengeSolver.shared.solve(playerURL: playerURL, n: n, signature: signature)
-            var items = components.percentEncodedQueryItems ?? []
-            if n != nil, let solvedN = solved.n {
-                items = items.map { $0.name == "n" ? URLQueryItem(name: "n", value: encode(solvedN)) : $0 }
-            }
-            if let solvedSignature = solved.signature {
-                items.append(URLQueryItem(name: signatureParam, value: encode(solvedSignature)))
-            }
-            components.percentEncodedQueryItems = items
-            guard let final = components.url else { throw SolverError.message("ссылка не собралась") }
+            let solved = try await ChallengeSolver.shared.solve(playerURL: playerURL,
+                                                                n: Array(Set(links.compactMap(\.n))),
+                                                                signatures: links.compactMap(\.signature))
             let ms = Int(Date().timeIntervalSince(started) * 1000)
-            result.log.append("прямо: itag \(format["itag"] as? Int ?? 0), расшифровано за \(ms) мс\(solved.note)")
-            result.streams = [AudioStream(url: final, headers: ["User-Agent": YouTubeStreams.iPhoneSafariUserAgent],
-                                          client: "Прямо файл")]
+            result.log.append("прямо: itag \(links.map { String($0.itag) }.joined(separator: "+")), расшифровано за \(ms) мс\(solved.note)")
+            result.streams = links.compactMap { link in
+                guard let url = link.url(solved) else { return nil }
+                return AudioStream(url: url, headers: ["User-Agent": YouTubeStreams.iPhoneSafariUserAgent],
+                                   client: link.audioOnly ? "Прямо звук" : "Прямо файл")
+            }
         } catch {
             result.log.append("прямо: решатель — \(error)")
         }
         return result
     }
 
+    /// Ссылка формата до расшифровки.
+    private struct Link {
+        let itag: Int
+        let audioOnly: Bool
+        let components: URLComponents
+        let n: String?
+        let signature: String?
+        let signatureParam: String
+
+        init?(_ format: [String: Any]) {
+            var base: String?
+            var signature: String?
+            var param = "signature"
+            if let direct = format["url"] as? String {
+                base = direct
+            } else if let cipher = format["signatureCipher"] as? String {
+                let items = URLComponents(string: "?" + cipher)?.queryItems ?? []
+                base = items.first { $0.name == "url" }?.value
+                signature = items.first { $0.name == "s" }?.value
+                param = items.first { $0.name == "sp" }?.value ?? "signature"
+            }
+            guard let base, let components = URLComponents(string: base) else { return nil }
+            itag = format["itag"] as? Int ?? 0
+            audioOnly = (format["mimeType"] as? String ?? "").hasPrefix("audio/")
+            self.components = components
+            n = components.queryItems?.first { $0.name == "n" }?.value
+            self.signature = signature
+            signatureParam = param
+        }
+
+        func url(_ solved: ChallengeSolver.Solved) -> URL? {
+            var components = components
+            var items = components.percentEncodedQueryItems ?? []
+            if let n, let solvedN = solved.n[n] {
+                items = items.map { $0.name == "n" ? URLQueryItem(name: "n", value: DirectStream.encode(solvedN)) : $0 }
+            }
+            if let signature {
+                guard let solvedSignature = solved.signatures[signature] else { return nil }
+                items.append(URLQueryItem(name: signatureParam, value: DirectStream.encode(solvedSignature)))
+            }
+            components.percentEncodedQueryItems = items
+            return components.url
+        }
+    }
+
     /// Значения подписи и n — в ссылку как есть, кроме символов, ломающих параметры.
-    private static func encode(_ value: String) -> String {
+    fileprivate static func encode(_ value: String) -> String {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&=+?#/")
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
@@ -104,9 +141,10 @@ enum SolverError: Error, CustomStringConvertible {
 final class ChallengeSolver {
     static let shared = ChallengeSolver()
 
+    /// Ответы: исходный вызов → решение.
     struct Solved {
-        var n: String?
-        var signature: String?
+        var n: [String: String] = [:]
+        var signatures: [String: String] = [:]
         var note = ""
     }
 
@@ -126,16 +164,16 @@ final class ChallengeSolver {
         return folder
     }()
 
-    func solve(playerURL: URL, n: String?, signature: String?) async throws -> Solved {
+    func solve(playerURL: URL, n: [String], signatures: [String]) async throws -> Solved {
         let player = try await playerCode(playerURL)
         do {
-            return try await run(player: player, n: n, signature: signature)
+            return try await run(player: player, n: n, signatures: signatures)
         } catch {
             // Возможно, YouTube поменял код, а в yt-dlp уже поправили решатель — берём свежий (не чаще раза в час).
             guard await updateScripts() else { throw error }
             // Разобранный старым решателем плеер выброшен — берём исходный код заново.
             let fresh = try await playerCode(playerURL)
-            var solved = try await run(player: fresh, n: n, signature: signature)
+            var solved = try await run(player: fresh, n: n, signatures: signatures)
             solved.note += ", решатель обновлён"
             return solved
         }
@@ -172,13 +210,13 @@ final class ChallengeSolver {
 
     // MARK: - Запуск
 
-    private func run(player: Player, n: String?, signature: String?) async throws -> Solved {
+    private func run(player: Player, n: [String], signatures: [String]) async throws -> Solved {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Solved, Error>) in
             let thread = Thread {
                 self.runLock.lock()
                 defer { self.runLock.unlock() }
                 do {
-                    continuation.resume(returning: try self.runSync(player: player, n: n, signature: signature))
+                    continuation.resume(returning: try self.runSync(player: player, n: n, signatures: signatures))
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -189,11 +227,11 @@ final class ChallengeSolver {
         }
     }
 
-    private func runSync(player: Player, n: String?, signature: String?) throws -> Solved {
+    private func runSync(player: Player, n: [String], signatures: [String]) throws -> Solved {
         let context = try loadContext()
         var requests: [[String: Any]] = []
-        if let n { requests.append(["type": "n", "challenges": [n]]) }
-        if let signature { requests.append(["type": "sig", "challenges": [signature]]) }
+        if !n.isEmpty { requests.append(["type": "n", "challenges": n]) }
+        if !signatures.isEmpty { requests.append(["type": "sig", "challenges": signatures]) }
         guard !requests.isEmpty else { return Solved() }
         let requestsJSON = String(data: try JSONSerialization.data(withJSONObject: requests), encoding: .utf8) ?? "[]"
         context.setObject(requestsJSON, forKeyedSubscript: "__fonRequests" as NSString)
@@ -227,11 +265,10 @@ final class ChallengeSolver {
             guard response["type"] as? String == "result", let data = response["data"] as? [String: String] else {
                 throw SolverError.message(String((response["error"] as? String ?? "не решено").prefix(120)))
             }
-            let challenge = (request["challenges"] as? [String])?.first ?? ""
-            if request["type"] as? String == "n" { solved.n = data[challenge] } else { solved.signature = data[challenge] }
+            if request["type"] as? String == "n" { solved.n = data } else { solved.signatures = data }
         }
-        if n != nil, solved.n == nil { throw SolverError.message("n не решён") }
-        if signature != nil, solved.signature == nil { throw SolverError.message("подпись не решена") }
+        if n.contains(where: { solved.n[$0] == nil }) { throw SolverError.message("n не решён") }
+        if signatures.contains(where: { solved.signatures[$0] == nil }) { throw SolverError.message("подпись не решена") }
         return solved
     }
 

@@ -17,10 +17,10 @@ extension Settings {
         set { UserDefaults.standard.set(newValue, forKey: "youtubeVolume") }
     }
 
-    /// Системный плеер для музыки (эксперимент, выключен по умолчанию): звук режима музыки играет
-    /// AVPlayer напрямую, без веб-страницы. Не вышло — тот же трек включается в обычном веб-плеере.
+    /// Системный плеер для музыки: звук режима музыки играет AVPlayer напрямую, без веб-страницы. С 1.65 включён
+    /// по умолчанию (владелец: работает стабильно), выключается в ⚙. Не вышло — трек играет обычный веб-плеер.
     static var nativeAudio: Bool {
-        get { UserDefaults.standard.bool(forKey: "nativeAudio") }
+        get { UserDefaults.standard.object(forKey: "nativeAudio") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "nativeAudio") }
     }
 }

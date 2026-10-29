@@ -9,9 +9,6 @@ final class HiddenPage: NSObject, WKNavigationDelegate {
     static let youtube = HiddenPage(url: "https://m.youtube.com/robots.txt", script: Scripts.cloud)
     /// music.youtube.com — подборки и исполнители YouTube Music.
     static let music = HiddenPage(url: "https://music.youtube.com/robots.txt", script: Scripts.music)
-    /// www.youtube.com как Safari на Mac — защитный токен (BotGuard) для потока системного плеера.
-    static let desktop = HiddenPage(url: "https://www.youtube.com/robots.txt", script: Scripts.potoken,
-                                    userAgent: YouTubeStreams.desktopUserAgent)
 
     private struct Job {
         let run: () -> Void
@@ -20,17 +17,15 @@ final class HiddenPage: NSObject, WKNavigationDelegate {
 
     private let url: URL
     private let script: String
-    private let userAgent: String?
     private var webView: WKWebView?
     private var ready = false
     private var loading = false
     private var pending: [Job] = []
     private var running = false
 
-    private init(url: String, script: String, userAgent: String? = nil) {
+    private init(url: String, script: String) {
         self.url = URL(string: url)!
         self.script = script
-        self.userAgent = userAgent
     }
 
     func start(in view: UIView) {
@@ -38,7 +33,7 @@ final class HiddenPage: NSObject, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 2, height: 2), configuration: config)
-        webView.customUserAgent = userAgent ?? WebViewFactory.safariUserAgent()
+        webView.customUserAgent = WebViewFactory.safariUserAgent()
         webView.alpha = 0.01
         webView.isUserInteractionEnabled = false
         webView.navigationDelegate = self
