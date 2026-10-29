@@ -19,6 +19,12 @@ extension Settings {
 
     /// Системный плеер для музыки: звук режима музыки играет AVPlayer напрямую, без веб-страницы. С 1.65 включён
     /// по умолчанию (владелец: работает стабильно), выключается в ⚙. Не вышло — трек играет обычный веб-плеер.
+    /// Видео вместо обложки в музыкальном плеере (кнопка в углу обложки; владелец: «когда не хочется смотреть видео»).
+    static var videoArtwork: Bool {
+        get { UserDefaults.standard.object(forKey: "videoArtwork") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "videoArtwork") }
+    }
+
     static var nativeAudio: Bool {
         get { UserDefaults.standard.object(forKey: "nativeAudio") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "nativeAudio") }
