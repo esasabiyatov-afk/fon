@@ -37,17 +37,11 @@ enum DirectStream {
         let streaming = response["streamingData"] as? [String: Any] ?? [:]
         let formats = streaming["formats"] as? [[String: Any]] ?? []
         let adaptive = streaming["adaptiveFormats"] as? [[String: Any]] ?? []
-        // Сначала только звук (itag 140 — AAC ~128 кбит/с: меньше трафика, без видео), запасом — файл 360p (itag 18,
-        // работал в 1.64). Отдельный звук может не дать YouTube без PO-токена — тогда плеер возьмёт файл.
+        // Сначала только звук (itag 140 — AAC ~128 кбит/с), если у него есть ссылка, иначе файл 360p (itag 18).
+        // Журнал 1.66: у отдельных дорожек ссылок нет — YouTube отдаёт их только по своему протоколу (SABR,
+        // serverAbrStreamingUrl), так что играет itag 18; звук тот же, трафик ~4× больше. Свой SABR не делаем.
         var picked: [[String: Any]] = []
-        if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) {
-            if audio["url"] == nil && audio["signatureCipher"] == nil {
-                result.log.append("прямо: звук без ссылки (\(adaptive.count) дорожек, SABR: \(streaming["serverAbrStreamingUrl"] != nil ? "да" : "нет"))")
-            }
-            picked.append(audio)
-        } else {
-            result.log.append("прямо: звука нет (\(adaptive.count) дорожек)")
-        }
+        if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) { picked.append(audio) }
         if let file = formats.first(where: { ($0["itag"] as? Int) == 18 }) ?? formats.first { picked.append(file) }
         guard status == "OK", !picked.isEmpty else {
             result.log.append("прямо: \(status), файлов нет")
