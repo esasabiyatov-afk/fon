@@ -27,6 +27,14 @@ enum YouTubeSession {
         }
     }
 
+    /// Свежая копия перед каждым поиском потока: Google время от времени обновляет cookies входа, и за час-другой
+    /// игры старая копия могла устареть (страница видео отвечала бы как без входа).
+    static func refreshed() async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { refresh { done.resume() } }
+        }
+    }
+
     static var cookieHeader: String? {
         lock.lock()
         defer { lock.unlock() }
@@ -283,6 +291,9 @@ final class NativeAudio: NSObject {
     private var interrupted = false
     private var recoveries: [Date] = []
     private var stallTimer: Timer?
+    private var watchdog: Timer?
+    private var waitingSince: Date?
+    private var refreshingStream = false
     /// Передача из веб-плеера (возврат в режим музыки): с какого места и на паузе ли.
     private var pendingStart: Double?
     private var pendingPaused = false
@@ -464,7 +475,7 @@ final class NativeAudio: NSObject {
         let limit = Timer(timeInterval: 30, repeats: false) { [weak self] _ in
             guard let self, self.token == current, self.active, !self.playedOnceCurrent else { return }
             self.log("30 с без звука")
-            self.fallBackToWeb()
+            self.trackFailed()
         }
         RunLoop.main.add(limit, forMode: .common)
         deadline = limit
@@ -574,13 +585,57 @@ final class NativeAudio: NSObject {
         return "\(error.code)"
     }
 
-    /// Первый трек не заиграл (или два подряд) — переходим на веб-плеер с этим же треком.
+    /// Трек не заиграл. На экране: первый трек (или два подряд) — в веб-плеер с этим же треком.
+    /// В фоне веб-плеер не запустится (владелец: «переходит в обычный плеер и вообще останавливается») —
+    /// там пропускаем трек, а после трёх неудач подряд (скорее всего, нет сети) встаём на паузу: ▶ попробует снова.
     private func trackFailed() {
         failuresInRow += 1
-        if !playedOnce || failuresInRow >= 2 {
-            fallBackToWeb()
+        if UIApplication.shared.applicationState == .active {
+            if !playedOnce || failuresInRow >= 2 { fallBackToWeb() } else { next() }
+        } else if failuresInRow < 3 {
+            next() // один трек недоступен (возраст, регион, медленная сеть) — пропускаем
         } else {
-            next() // один трек недоступен (возраст, регион) — пропускаем
+            log("3 трека подряд не заиграли — пауза")
+            report()
+            token = UUID()
+            stallTimer?.invalidate()
+            deadline?.invalidate()
+            userPaused = true
+            player.replaceCurrentItem(with: nil) // ▶ — заново этот трек
+            publish()
+            endBackgroundTask()
+        }
+    }
+
+    /// Раз в секунду: поток посреди трека «грузится» дольше 10 с (сменилась сеть, ссылка устарела после
+    /// долгой паузы) — берём новую ссылку и продолжаем с того же места (владелец: «в какой-то момент долго грузит»).
+    private func watchStall() {
+        guard active, !userPaused, !interrupted, !refreshingStream, playedOnceCurrent,
+              player.timeControlStatus == .waitingToPlayAtSpecifiedRate else {
+            waitingSince = nil
+            return
+        }
+        let since = waitingSince ?? Date()
+        waitingSince = since
+        guard Date().timeIntervalSince(since) > 10, let track = currentTrack else { return }
+        waitingSince = nil
+        refreshingStream = true
+        NativeAudio.lastLog += "; грузится >10 с на \(Int(player.currentTime().seconds)) с — новая ссылка"
+        beginBackgroundTask()
+        let current = token
+        Task { [weak self] in
+            let found = await DirectStream.find(track.id)
+            await MainActor.run {
+                guard let self else { return }
+                self.refreshingStream = false
+                guard self.token == current, self.active else { return }
+                guard !found.streams.isEmpty else {
+                    NativeAudio.lastLog += "; новой ссылки нет: " + found.log.joined(separator: "; ")
+                    return
+                }
+                self.candidates = found.streams
+                self.tryNextCandidate() // с того же места (`resumeAt`)
+            }
         }
     }
 
@@ -620,7 +675,12 @@ final class NativeAudio: NSObject {
 
     func play() {
         userPaused = false
-        if player.currentItem == nil { playCurrent() } else { player.play() }
+        if player.currentItem == nil {
+            failuresInRow = 0 // после «3 трека подряд не заиграли» — пробуем заново
+            playCurrent()
+        } else {
+            player.play()
+        }
         publish()
     }
 
@@ -790,6 +850,9 @@ final class NativeAudio: NSObject {
         guard !active else { return }
         active = true
         try? AVAudioSession.sharedInstance().setActive(true)
+        let watchdog = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.watchStall() }
+        RunLoop.main.add(watchdog, forMode: .common)
+        self.watchdog = watchdog
         let center = MPRemoteCommandCenter.shared()
         func on(_ command: MPRemoteCommand, _ action: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus) {
             command.isEnabled = true
@@ -814,6 +877,8 @@ final class NativeAudio: NSObject {
         token = UUID()
         stallTimer?.invalidate()
         deadline?.invalidate()
+        watchdog?.invalidate()
+        refreshingStream = false
         player.pause()
         player.replaceCurrentItem(with: nil)
         commandTargets.forEach { $0.0.removeTarget($0.1) }

@@ -8,6 +8,7 @@ import JavaScriptCore
 /// Запросы идут из приложения (URLSession + JavaScriptCore) — работают и в фоне, звук приложения не трогают.
 enum DirectStream {
     static func find(_ videoID: String) async -> YouTubeStreams.Result {
+        await YouTubeSession.refreshed()
         var result = YouTubeStreams.Result()
         guard let url = URL(string: "\(YouTubeStreams.origin)/watch?app=desktop&v=\(videoID)&hl=ru") else { return result }
         var request = URLRequest(url: url, timeoutInterval: 15)
