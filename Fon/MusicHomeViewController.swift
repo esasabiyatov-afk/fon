@@ -389,15 +389,6 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         action()
     }
 
-    func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
-                        point: CGPoint) -> UIContextMenuConfiguration? {
-        guard let indexPath = indexPaths.first, let unsubscribe = sections[indexPath.section].items[indexPath.item].unsubscribe else { return nil }
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
-            UIMenu(children: [UIAction(title: "Отписаться", image: UIImage(systemName: "person.badge.minus"),
-                                       attributes: .destructive) { _ in unsubscribe() }])
-        }
-    }
-
     // Лёгкое «нажатие» карточки, как в музыкальных приложениях.
     func collectionView(_ collectionView: UICollectionView, didHighlightItemAt indexPath: IndexPath) {
         animatePress(collectionView.cellForItem(at: indexPath), down: true)
@@ -514,8 +505,12 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     }
 
     /// Карточка: квадратная обложка (у исполнителя — круглая) и подписи под ней.
-    private final class CardCell: UICollectionViewCell {
+    private final class CardCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
         private let artwork = UIImageView()
+        /// Меню «Отписаться» — только у исполнителей в «Подписках» и только на самой ячейке: в 1.68 меню на всём
+        /// списке совпало с жалобой «на главной ничего не нажимается».
+        private var unsubscribe: (() -> Void)?
+        private var menu: UIContextMenuInteraction?
         private let placeholder = UIImageView()
         private let titleLabel = UILabel()
         private let subtitleLabel = UILabel()
@@ -538,7 +533,25 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            guard let unsubscribe else { return nil }
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+                UIMenu(children: [UIAction(title: "Отписаться", image: UIImage(systemName: "person.badge.minus"),
+                                           attributes: .destructive) { _ in unsubscribe() }])
+            }
+        }
+
         fileprivate func configure(_ item: Item, large: Bool) {
+            unsubscribe = item.unsubscribe
+            if unsubscribe != nil, menu == nil {
+                let interaction = UIContextMenuInteraction(delegate: self)
+                addInteraction(interaction)
+                menu = interaction
+            } else if unsubscribe == nil, let interaction = menu {
+                removeInteraction(interaction)
+                menu = nil
+            }
             titleLabel.text = item.title
             subtitleLabel.text = item.subtitle
             round = item.round
