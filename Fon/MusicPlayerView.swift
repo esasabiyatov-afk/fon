@@ -1,4 +1,5 @@
 import UIKit
+import AVFoundation
 
 /// Плеер в стиле музыкальных сервисов: большая обложка, фон под её цвет, лайк, плейлисты.
 /// Сам звук играет веб-плеер YouTube, который лежит под этим экраном.
@@ -19,8 +20,12 @@ final class MusicPlayerView: UIView {
         didSet {
             queueButton.isHidden = systemPlayer
             [volumeSlider, volumeLow, volumeHigh].forEach { $0.isHidden = !systemPlayer }
+            attachVideo()
         }
     }
+    /// Системный плеер всё равно качает файл 360p — его картинка показывается вместо обложки (просьба владельца),
+    /// в том же месте и размере; пока кадра нет (поиск, только звук) — обложка.
+    var videoPlayer: AVPlayer? { didSet { attachVideo() } }
 
     private let gradient = CAGradientLayer()
     private let collapseButton = UIButton(type: .system)
@@ -30,6 +35,10 @@ final class MusicPlayerView: UIView {
     private let videoButton = UIButton(type: .system)
     private let artworkContainer = UIView()
     private let artworkView = UIImageView()
+    private let videoView = UIView()
+    private let videoLayer = AVPlayerLayer()
+    private var readyObservation: NSKeyValueObservation?
+    private var inBackground = false
     /// Ширина к высоте у текущей обложки: 1 — квадрат, 16/9 — кадр видео.
     private var artworkAspect: CGFloat = 1
     private let titleLabel = UILabel()
@@ -89,7 +98,26 @@ final class MusicPlayerView: UIView {
         artworkView.backgroundColor = UIColor(white: 0.16, alpha: 1)
         artworkView.tintColor = UIColor(white: 0.4, alpha: 1)
         artworkContainer.addSubview(artworkView)
+        videoView.clipsToBounds = true
+        videoView.layer.cornerRadius = 10
+        videoView.isUserInteractionEnabled = false
+        videoView.alpha = 0
+        videoLayer.videoGravity = .resizeAspectFill // как обложка: кадр 16:9 или квадрат альбома из середины
+        videoView.layer.addSublayer(videoLayer)
+        artworkContainer.addSubview(videoView)
         addSubview(artworkContainer)
+        readyObservation = videoLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.updateVideoVisibility() }
+        }
+        // В фоне плеер с подключённой картинкой iOS ставит на паузу — на это время картинку отключаем.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.inBackground = true
+            self?.attachVideo()
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.inBackground = false
+            self?.attachVideo()
+        }
 
         titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
         titleLabel.adjustsFontSizeToFitWidth = true // длинное название чуть уменьшается, а не обрезается сразу
@@ -182,6 +210,7 @@ final class MusicPlayerView: UIView {
         duration = 0
         slider.value = 0
         showTimes(0)
+        videoView.alpha = 0 // кадр прошлого трека не показываем
         if let id { loadArtwork(id) } else { artworkView.image = nil }
         updateLike()
     }
@@ -211,6 +240,20 @@ final class MusicPlayerView: UIView {
             updateLike()
         }
         tick()
+    }
+
+    private func attachVideo() {
+        let player = systemPlayer && !inBackground ? videoPlayer : nil
+        if videoLayer.player !== player { videoLayer.player = player }
+        updateVideoVisibility()
+    }
+
+    private func updateVideoVisibility() {
+        let show = videoLayer.player != nil && videoLayer.isReadyForDisplay
+        guard (videoView.alpha == 1) != show else { return }
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.videoView.alpha = show ? 1 : 0
+        }
     }
 
     private func loadArtwork(_ id: String) {
@@ -378,6 +421,11 @@ final class MusicPlayerView: UIView {
         artworkContainer.bounds = CGRect(x: 0, y: 0, width: art, height: art / artworkAspect)
         artworkContainer.center = artCenter
         artworkView.frame = artworkContainer.bounds
+        videoView.frame = artworkContainer.bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        videoLayer.frame = videoView.bounds
+        CATransaction.commit()
         artworkContainer.layer.shadowPath = UIBezierPath(roundedRect: artworkContainer.bounds, cornerRadius: 10).cgPath
     }
 

@@ -243,6 +243,8 @@ final class NativeAudio: NSObject {
     }
 
     private let player = AVPlayer()
+    /// Тот же плеер — для картинки в музыкальном плеере (файл 360p вместо обложки, просьба владельца).
+    var output: AVPlayer { player }
     private var queue: [Track] = []
     private var index = 0
     private var playlistID: String?

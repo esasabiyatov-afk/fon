@@ -117,6 +117,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
         musicView.onVolume = { value in NativeAudio.shared.setVolume(value) }
+        musicView.videoPlayer = NativeAudio.shared.output
         addSubview(musicView)
 
         // Системный плеер (настройка): его состояние показываем так же, как сообщения веб-плеера.
