@@ -721,6 +721,7 @@ final class NativeAudio: NSObject {
             MPNowPlayingInfoPropertyPlaybackRate: state.paused ? 0.0 : 1.0
         ]
         if state.duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = state.duration }
+        MPRemoteCommandCenter.shared().likeCommand.isActive = CloudLikes.shared.isLiked(state.id)
         let center = MPNowPlayingInfoCenter.default()
         if let artwork = center.nowPlayingInfo?[MPMediaItemPropertyArtwork], artworkID == state.id {
             info[MPMediaItemPropertyArtwork] = artwork
@@ -756,6 +757,15 @@ final class NativeAudio: NSObject {
         on(center.changePlaybackPositionCommand) { [weak self] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
             self?.seek(event.positionTime)
+            return .success
+        }
+        // ♡ на экране блокировки / в пункте управления (просьба владельца после 1.69; проба — покажет ли iOS).
+        center.likeCommand.localizedTitle = "Понравившиеся"
+        center.likeCommand.localizedShortTitle = "♡"
+        on(center.likeCommand) { [weak self] _ in
+            guard let track = self?.currentTrack, !track.title.isEmpty else { return .commandFailed }
+            CloudLikes.shared.setLiked(track, !CloudLikes.shared.isLiked(track.id))
+            self?.publish()
             return .success
         }
     }

@@ -36,6 +36,7 @@ final class MusicPlayerView: UIView {
     private let queueButton = UIButton(type: .system)
     private let videoButton = UIButton(type: .system)
     private let artworkContainer = UIView()
+    private let artworkSwipe = UIPanGestureRecognizer()
     private let artworkView = UIImageView()
     private let videoView = UIView()
     private let videoLayer = AVPlayerLayer()
@@ -108,6 +109,10 @@ final class MusicPlayerView: UIView {
         videoView.layer.addSublayer(videoLayer)
         artworkContainer.addSubview(videoView)
         addSubview(artworkContainer)
+        // Свайп обложки влево/вправо — следующий/предыдущий трек (просьба владельца после 1.69).
+        artworkSwipe.addTarget(self, action: #selector(handleArtworkSwipe(_:)))
+        artworkSwipe.delegate = self
+        artworkContainer.addGestureRecognizer(artworkSwipe)
         readyObservation = videoLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.updateVideoVisibility() }
         }
@@ -349,6 +354,47 @@ final class MusicPlayerView: UIView {
     @objc private func collapseTapped() { onCollapse?() }
     @objc private func queueTapped() { onShowQueue?() }
     @objc private func videoTapped() { onVideoMode?() }
+    /// Свайп обложки — только горизонтальный; вертикальный остаётся сворачиванию плеера.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === artworkSwipe else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+        let v = artworkSwipe.velocity(in: self)
+        return abs(v.x) > abs(v.y) * 1.2
+    }
+
+    @objc private func handleArtworkSwipe(_ pan: UIPanGestureRecognizer) {
+        let scale = paused ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
+        let tx = pan.translation(in: self).x
+        let vx = pan.velocity(in: self).x
+        switch pan.state {
+        case .changed:
+            artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: tx, y: 0))
+            artworkContainer.alpha = 1 - min(0.5, abs(tx) / bounds.width)
+        case .ended where abs(tx) > 80 || abs(vx) > 600:
+            let forward = (abs(vx) > 600 ? vx : tx) < 0 // влево — следующий
+            let out = forward ? -bounds.width : bounds.width
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onCommand?(forward ? "next" : "prev")
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn], animations: {
+                self.artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: out, y: 0))
+                self.artworkContainer.alpha = 0
+            }) { _ in
+                // Новая обложка въезжает с другой стороны.
+                self.artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: -out * 0.5, y: 0))
+                UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                    self.artworkContainer.transform = self.paused ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
+                    self.artworkContainer.alpha = 1
+                }
+            }
+        case .ended, .cancelled, .failed:
+            UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                self.artworkContainer.transform = scale
+                self.artworkContainer.alpha = 1
+            }
+        default:
+            break
+        }
+    }
+
     @objc private func prevTapped() { onCommand?("prev") }
     @objc private func nextTapped() { onCommand?("next") }
     @objc private func loopTapped() { onCommand?("loop") }
@@ -464,3 +510,5 @@ final class MusicPlayerView: UIView {
         volumeSlider.frame = CGRect(x: x + 28, y: vy, width: max(0, width - 60), height: 30)
     }
 }
+
+extension MusicPlayerView: UIGestureRecognizerDelegate {}
