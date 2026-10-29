@@ -23,8 +23,21 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         var symbol: String? = nil
         var round = false
         var action: (() -> Void)? = nil
-        /// Исполнитель из подписок — по долгому нажатию «Отписаться».
+        /// Исполнитель из подписок — по долгому нажатию «Отписаться». Ставится после создания карточки.
         var unsubscribe: (() -> Void)? = nil
+
+        /// Свой init: замыкание после скобок — всегда `action`. С автоматическим init Swift 5 отдавал его
+        /// последнему параметру (`unsubscribe`), и в 1.68–1.69 карточки «Главной» не нажимались.
+        init(title: String, subtitle: String = "", artworkID: String? = nil, artworkURL: URL? = nil,
+             symbol: String? = nil, round: Bool = false, action: (() -> Void)? = nil) {
+            self.title = title
+            self.subtitle = subtitle
+            self.artworkID = artworkID
+            self.artworkURL = artworkURL
+            self.symbol = symbol
+            self.round = round
+            self.action = action
+        }
     }
 
     fileprivate struct Section {
