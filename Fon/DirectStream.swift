@@ -24,6 +24,7 @@ enum DirectStream {
         if let details = response["videoDetails"] as? [String: Any] {
             result.title = details["title"] as? String
             result.author = details["author"] as? String
+            result.channelID = details["channelId"] as? String
         }
         let status = (response["playabilityStatus"] as? [String: Any])?["status"] as? String ?? "?"
         let streaming = response["streamingData"] as? [String: Any] ?? [:]

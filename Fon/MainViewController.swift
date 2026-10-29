@@ -93,6 +93,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             self?.setPlayerState(.mini)
         }
         playerView.onMusicModeChanged = { [weak self] in self?.musicModeChanged() }
+        playerView.onOpenArtist = { [weak self] id, name in self?.openArtist(channelID: id, name: name) }
         playerView.onFullscreenChanged = { [weak self] on, vertical in self?.fullscreenChanged(on, vertical: vertical) }
         playerView.onSearch = { [weak self] query in self?.presentSearch(prefill: query) }
         playerView.onTrackEnding = { [weak self] in
@@ -304,6 +305,20 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let nav = embed(home)
         homeNav = nav
         return nav
+    }
+
+    /// Исполнитель из плеера: плеер сворачивается, на «Главной» — музыка с его канала (без влогов и прочего).
+    private func openArtist(channelID: String, name: String) {
+        setPlayerState(.mini)
+        guard Settings.musicMode else {
+            if let url = URL(string: base + "/channel/" + channelID) { webViewForLoading().load(URLRequest(url: url)) }
+            return
+        }
+        musicFeedShown = false
+        showTab(0)
+        let list = TrackListViewController(kind: .artist(channelID: channelID, name: name))
+        list.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
+        homeController().pushViewController(list, animated: true)
     }
 
     /// «Подписки» в режиме музыки — исполнители и их новые треки.

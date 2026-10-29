@@ -101,6 +101,7 @@ enum YouTubeStreams {
         var streams: [AudioStream] = []
         var title: String?
         var author: String?
+        var channelID: String?
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
@@ -228,6 +229,9 @@ final class NativeAudio: NSObject {
 
     private(set) var active = false
     private let player = AVPlayer()
+    /// Канал каждого сыгранного трека (id и название) — для перехода к исполнителю из плеера.
+    private var channels: [String: (id: String, name: String)] = [:]
+    func channel(for trackID: String) -> (id: String, name: String)? { channels[trackID] }
     /// Тот же плеер — для картинки в музыкальном плеере (файл 360p вместо обложки, просьба владельца).
     var output: AVPlayer { player }
     private var queue: [Track] = []
@@ -426,6 +430,7 @@ final class NativeAudio: NSObject {
 
     /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
+        if let id = result.channelID { channels[track.id] = (id, result.author ?? track.artist) }
         if queue.indices.contains(index), queue[index].id == track.id, queue[index].title.isEmpty, let title = result.title {
             let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
             queue[index] = Track(id: track.id, title: clean.title, artist: clean.artist)

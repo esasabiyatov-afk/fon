@@ -84,13 +84,16 @@ final class LibraryViewController: UITableViewController {
     }
 }
 
-/// Список треков: «Понравившиеся» (облако) или «Недавно слушали» (на телефоне).
+/// Список треков: «Понравившиеся» (облако), «Недавно слушали» (на телефоне) или музыка исполнителя
+/// (видео его канала, только музыкальные — нажатие на исполнителя в плеере).
 final class TrackListViewController: UITableViewController {
-    enum Kind { case liked, history }
+    enum Kind: Equatable { case liked, history, artist(channelID: String, name: String) }
 
     var onPlay: PlayHandler?
     private let kind: Kind
     private var tracks: [Track] = []
+    private var artistTracks: [Track]?
+    private var artistError: String?
 
     init(kind: Kind) {
         self.kind = kind
@@ -101,13 +104,17 @@ final class TrackListViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = kind == .liked ? "Понравившиеся" : "Недавно слушали"
+        switch kind {
+        case .liked: title = "Понравившиеся"
+        case .history: title = "Недавно слушали"
+        case .artist(_, let name): title = name.replacingOccurrences(of: " - Topic", with: "")
+        }
         tableView.backgroundColor = .black
         tableView.rowHeight = 64
         tableView.separatorInset.left = 76
         tableView.register(TrackCell.self, forCellReuseIdentifier: "track")
         tableView.tableHeaderView = makeHeader()
-        if kind == .liked {
+        if kind != .history {
             refreshControl = UIRefreshControl()
             refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         } else {
@@ -117,6 +124,23 @@ final class TrackListViewController: UITableViewController {
         nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil) // ♡ у треков
         if kind == .history { nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil) }
         reload()
+        loadArtist()
+    }
+
+    private func loadArtist(completion: (() -> Void)? = nil) {
+        guard case let .artist(channelID, name) = kind else { return }
+        MusicFeed.shared.channelMusic(channelID, channelName: name) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let tracks):
+                self.artistTracks = tracks
+                self.artistError = nil
+            case .failure(let error):
+                self.artistError = CloudLikes.describe(error)
+            }
+            self.reload()
+            completion?()
+        }
     }
 
     /// Шапка с кнопками — по ширине таблицы (иначе «Перемешать» уезжала за край).
@@ -128,11 +152,17 @@ final class TrackListViewController: UITableViewController {
     }
 
     @objc private func reload() {
-        tracks = kind == .liked ? CloudLikes.shared.tracks : Library.shared.history
+        switch kind {
+        case .liked: tracks = CloudLikes.shared.tracks
+        case .history: tracks = Library.shared.history
+        case .artist: tracks = artistTracks ?? []
+        }
         tableView.reloadData()
         if tracks.isEmpty {
             let label = UILabel()
-            if kind == .liked {
+            if case .artist = kind {
+                label.text = artistError ?? (artistTracks == nil ? "Загрузка…" : "На канале не нашлось музыки")
+            } else if kind == .liked {
                 label.text = CloudLikes.shared.lastError
                     ?? (CloudLikes.shared.loaded ? "Нажмите ♡ в плеере —\nтрек сохранится в ваш плейлист\nYouTube «Fon — музыка»" : "Загрузка…")
             } else {
@@ -149,7 +179,8 @@ final class TrackListViewController: UITableViewController {
     }
 
     @objc private func pullToRefresh() {
-        CloudLikes.shared.refresh { [weak self] in self?.refreshControl?.endRefreshing() }
+        let done: () -> Void = { [weak self] in self?.refreshControl?.endRefreshing() }
+        if case .artist = kind { loadArtist(completion: done) } else { CloudLikes.shared.refresh(completion: done) }
     }
 
     @objc private func clearHistory() {
@@ -216,12 +247,17 @@ final class TrackListViewController: UITableViewController {
         let track = tracks[indexPath.row]
         if kind == .liked, let url = CloudLikes.shared.playURL(startingAt: track.id) {
             onPlay?(url, sourceName, tracks.map(\.id))
+        } else if case .artist = kind {
+            // Нажатый трек и следующие за ним — одной очередью.
+            let queue = Array(tracks[indexPath.row...].map(\.id).prefix(50))
+            if let url = YouTubeLinks.queue(queue) { onPlay?(url, sourceName, queue) }
         } else if let url = YouTubeLinks.mix(track.id) {
             onPlay?(url, "Микс", nil) // из истории — трек и похожие на него
         }
     }
 
     override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        if case .artist = kind { return nil }
         let track = tracks[indexPath.row]
         let title = kind == .liked ? "Убрать" : "Удалить"
         let action = UIContextualAction(style: .destructive, title: title) { [weak self] _, _, done in

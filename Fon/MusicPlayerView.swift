@@ -9,6 +9,8 @@ final class MusicPlayerView: UIView {
     var onCollapse: (() -> Void)?
     var onShowQueue: (() -> Void)?
     var onVideoMode: (() -> Void)?
+    /// Нажали на исполнителя — его музыка с канала.
+    var onArtist: (() -> Void)?
     /// Своя громкость YouTube (0…1), отдельно от громкости телефона.
     var onVolume: ((Double) -> Void)?
 
@@ -127,6 +129,8 @@ final class MusicPlayerView: UIView {
         artistLabel.textColor = UIColor(white: 1, alpha: 0.65)
         addSubview(titleLabel)
         addSubview(artistLabel)
+        artistLabel.isUserInteractionEnabled = true
+        artistLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(artistTapped)))
         setup(likeButton, "heart", 22, #selector(likeTapped))
 
         let d: CGFloat = 13
@@ -240,6 +244,12 @@ final class MusicPlayerView: UIView {
             updateLike()
         }
         tick()
+    }
+
+    @objc private func artistTapped() {
+        guard track != nil else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onArtist?()
     }
 
     private func attachVideo() {

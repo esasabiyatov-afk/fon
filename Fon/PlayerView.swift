@@ -10,6 +10,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onCollapse: (() -> Void)?
     var onClose: (() -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
+    /// Исполнитель текущего трека: id канала и его название.
+    var onOpenArtist: ((String, String) -> Void)?
     var onMusicModeChanged: (() -> Void)?
     /// (включён ли, вертикальное ли видео)
     var onFullscreenChanged: ((Bool, Bool) -> Void)?
@@ -116,6 +118,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
+        musicView.onArtist = { [weak self] in self?.openArtist() }
         musicView.onVolume = { value in NativeAudio.shared.setVolume(value) }
         musicView.videoPlayer = NativeAudio.shared.output
         addSubview(musicView)
@@ -297,6 +300,22 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         if let id = currentVideoID { updateMiniArtwork(id) }
         applyPageState()
         setNeedsLayout()
+    }
+
+    /// Канал исполнителя: у системного плеера — со страницы трека, у веб-плеера — из ответа плеера YouTube.
+    private func openArtist() {
+        guard let id = currentVideoID else { return }
+        if NativeAudio.shared.active {
+            if let channel = NativeAudio.shared.channel(for: id) { onOpenArtist?(channel.id, channel.name) }
+            return
+        }
+        let js = "(() => { try { const r = document.getElementById('movie_player').getPlayerResponse().videoDetails; "
+            + "return [r.channelId, r.author]; } catch (e) {} const d = (window.ytInitialPlayerResponse || {}).videoDetails; "
+            + "return d ? [d.channelId, d.author] : null; })()"
+        webView.evaluateJavaScript(js) { [weak self] value, _ in
+            guard let pair = value as? [String], pair.count == 2, !pair[0].isEmpty else { return }
+            self?.onOpenArtist?(pair[0], pair[1])
+        }
     }
 
     private func setShowingPage(_ on: Bool) {

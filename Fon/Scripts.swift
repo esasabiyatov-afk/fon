@@ -1103,6 +1103,20 @@ enum Scripts {
       }
       return { chip: true, videos, mixes };
     },
+    // Видео канала (вкладка «Видео», до 3 страниц; нет вкладки — главная канала): для экрана исполнителя.
+    async channelVideos(channelId) {
+      const out = [], seen = new Set();
+      let r = null;
+      try { r = await api('browse', { browseId: channelId, params: 'EgZ2aWRlb3PyBgQKAjoA' }); } catch (e) {}
+      for (let page = 0; page < 3 && r; page++) {
+        collectVideos(r, out, seen);
+        const next = findAll(r, 'continuationCommand').filter((c) => c && c.token).pop();
+        r = null;
+        if (next) { try { r = await api('browse', { continuation: next.token }); } catch (e) {} }
+      }
+      if (!out.length) collectVideos(await api('browse', { browseId: channelId }), out, seen);
+      return out;
+    },
     // Отписаться от канала (кнопка в «Подписках» режима музыки).
     async unsubscribe(channelId) {
       await api('subscription/unsubscribe', { channelIds: [String(channelId).replace(/^MPLA/, '')] });

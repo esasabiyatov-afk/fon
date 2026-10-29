@@ -323,6 +323,27 @@ final class MusicFeed {
         return s
     }
 
+    /// Музыка исполнителя — видео его канала, только музыкальные (как в «Подписках»: канал «- Topic»/VEVO,
+    /// значок исполнителя, названия «(Official Video)», «клип»… или «Исполнитель - Песня»), новые сверху.
+    func channelMusic(_ channelID: String, channelName: String, completion: @escaping (Result<[Track], Error>) -> Void) {
+        HiddenPage.youtube.call("__fonCloud.channelVideos(id)", { ["id": channelID] }) { result in
+            switch result {
+            case .success(let value):
+                let tracks: [Track] = (value as? [[String: Any]] ?? []).compactMap { video in
+                    guard let id = video["id"] as? String else { return nil }
+                    let title = video["title"] as? String ?? ""
+                    guard video["music"] as? Bool == true || Self.looksLikeMusic(title: title, channel: channelName)
+                            || title.contains(" - ") || title.contains(" – ") else { return nil }
+                    let clean = TrackTitle.clean(title: title, artist: channelName)
+                    return Track(id: id, title: clean.title, artist: clean.artist)
+                }
+                completion(.success(tracks))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
     /// Отписаться от исполнителя (долгое нажатие в «Подписках», просьба владельца).
     func unsubscribe(_ artist: MusicItem, completion: @escaping (Bool) -> Void) {
         guard let channel = artist.browseId else { return completion(false) }
