@@ -40,7 +40,14 @@ enum DirectStream {
         // Сначала только звук (itag 140 — AAC ~128 кбит/с: меньше трафика, без видео), запасом — файл 360p (itag 18,
         // работал в 1.64). Отдельный звук может не дать YouTube без PO-токена — тогда плеер возьмёт файл.
         var picked: [[String: Any]] = []
-        if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) { picked.append(audio) }
+        if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) {
+            if audio["url"] == nil && audio["signatureCipher"] == nil {
+                result.log.append("прямо: звук без ссылки (\(adaptive.count) дорожек, SABR: \(streaming["serverAbrStreamingUrl"] != nil ? "да" : "нет"))")
+            }
+            picked.append(audio)
+        } else {
+            result.log.append("прямо: звука нет (\(adaptive.count) дорожек)")
+        }
         if let file = formats.first(where: { ($0["itag"] as? Int) == 18 }) ?? formats.first { picked.append(file) }
         guard status == "OK", !picked.isEmpty else {
             result.log.append("прямо: \(status), файлов нет")
