@@ -23,7 +23,6 @@ final class MusicPlayerView: UIView {
     var systemPlayer = false {
         didSet {
             [volumeSlider, volumeLow, volumeHigh].forEach { $0.isHidden = !systemPlayer }
-            videoToggle.isHidden = !systemPlayer
             attachVideo()
         }
     }
@@ -43,8 +42,6 @@ final class MusicPlayerView: UIView {
     private let artworkView = UIImageView()
     private let videoView = UIView()
     private let videoLayer = AVPlayerLayer()
-    /// Маленькая кнопка в углу обложки: видео ↔ просто обложка.
-    private let videoToggle = UIButton(type: .system)
     private var readyObservation: NSKeyValueObservation?
     private var inBackground = false
     /// Ширина к высоте у текущей обложки: 1 — квадрат, 16/9 — кадр видео.
@@ -113,13 +110,8 @@ final class MusicPlayerView: UIView {
         videoLayer.videoGravity = .resizeAspectFill // как обложка: кадр 16:9 или квадрат альбома из середины
         videoView.layer.addSublayer(videoLayer)
         artworkContainer.addSubview(videoView)
-        videoToggle.backgroundColor = UIColor(white: 0, alpha: 0.45)
-        videoToggle.tintColor = .white
-        videoToggle.layer.cornerRadius = 15
-        videoToggle.addTarget(self, action: #selector(videoToggleTapped), for: .touchUpInside)
-        videoToggle.isHidden = true
-        artworkContainer.addSubview(videoToggle)
-        updateVideoToggle()
+        // Нажатие на обложку или видео — переключает одно на другое (просьба владельца после 1.71).
+        artworkContainer.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(videoToggleTapped)))
         addSubview(artworkContainer)
         // Свайп обложки влево/вправо — следующий/предыдущий трек (просьба владельца после 1.69).
         artworkSwipe.addTarget(self, action: #selector(handleArtworkSwipe(_:)))
@@ -280,16 +272,10 @@ final class MusicPlayerView: UIView {
     }
 
     @objc private func videoToggleTapped() {
+        guard systemPlayer else { return } // у веб-плеера видео на месте обложки нет
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Settings.videoArtwork.toggle()
-        updateVideoToggle()
         attachVideo()
-    }
-
-    private func updateVideoToggle() {
-        let symbol = Settings.videoArtwork ? "photo" : "play.rectangle"
-        videoToggle.setImage(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)), for: .normal)
-        videoToggle.accessibilityLabel = Settings.videoArtwork ? "Показывать обложку" : "Показывать видео"
     }
 
     private func updateVideoVisibility() {
@@ -516,7 +502,6 @@ final class MusicPlayerView: UIView {
         artworkContainer.center = artCenter
         artworkView.frame = artworkContainer.bounds
         videoView.frame = artworkContainer.bounds
-        videoToggle.frame = CGRect(x: artworkContainer.bounds.width - 38, y: artworkContainer.bounds.height - 38, width: 30, height: 30)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         videoLayer.frame = videoView.bounds
