@@ -782,7 +782,22 @@ final class NativeAudio: NSObject {
 
     // MARK: - Экран блокировки
 
+    /// Экран блокировки сам двигает ползунок по `PlaybackRate`, поэтому тикать в него дважды в секунду не нужно:
+    /// обновляем при смене трека/паузы/длительности и когда время ушло от ожидаемого (перемотка).
+    private var nowPlayingSignature = ""
+    private var nowPlayingStamp: (time: Double, at: CFAbsoluteTime)?
+
     private func updateNowPlaying(_ state: State) {
+        let command = MPRemoteCommandCenter.shared().likeCommand
+        let liked = CloudLikes.shared.isLiked(state.id)
+        if command.isActive != liked { command.isActive = liked }
+        let signature = "\(state.id)|\(state.title)|\(state.artist)|\(state.paused)|\(Int(state.duration))"
+        let now = CFAbsoluteTimeGetCurrent()
+        var drift = Double.infinity
+        if let last = nowPlayingStamp { drift = abs((state.paused ? last.time : last.time + (now - last.at)) - state.time) }
+        guard signature != nowPlayingSignature || drift > 1.5 else { return }
+        nowPlayingSignature = signature
+        nowPlayingStamp = (state.time, now)
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: state.title,
             MPMediaItemPropertyArtist: state.artist,
@@ -790,7 +805,6 @@ final class NativeAudio: NSObject {
             MPNowPlayingInfoPropertyPlaybackRate: state.paused ? 0.0 : 1.0
         ]
         if state.duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = state.duration }
-        MPRemoteCommandCenter.shared().likeCommand.isActive = CloudLikes.shared.isLiked(state.id)
         let center = MPNowPlayingInfoCenter.default()
         if let artwork = center.nowPlayingInfo?[MPMediaItemPropertyArtwork], artworkID == state.id {
             info[MPMediaItemPropertyArtwork] = artwork
@@ -853,6 +867,8 @@ final class NativeAudio: NSObject {
         commandTargets.forEach { $0.0.removeTarget($0.1) }
         commandTargets = []
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        nowPlayingSignature = ""
+        nowPlayingStamp = nil
         artworkID = nil
         prefetched = [:]
         endBackgroundTask()

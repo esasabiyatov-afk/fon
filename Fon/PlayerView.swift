@@ -59,7 +59,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let pipButton = UIButton(type: .system)
     /// ♡ в режиме видео — сохраняет видео в «Понравившиеся» режима музыки (плейлист «Fon — музыка»).
     private let likeButton = UIButton(type: .system)
+    /// Полный экран: сверху кнопка выхода и название — показываются вместе с панелью YouTube (просьба владельца после 1.71).
+    private let fullBar = FullscreenBar()
+    private var controlsShown = false
     private var currentTrack: Track?
+    private var shownPaused: Bool?
     private var likeShown: Bool?
     private var miniGestures: [UIGestureRecognizer] = []
     private let dragGesture = UIPanGestureRecognizer()
@@ -156,6 +160,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         NotificationCenter.default.addObserver(self, selector: #selector(updateLikeButton), name: CloudLikes.didChange, object: nil)
         [collapseButton, likeButton, pipButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
         addSubview(topBar)
+        fullBar.exitButton.addTarget(self, action: #selector(exitFullTapped), for: .touchUpInside)
+        fullBar.alpha = 0
+        fullBar.isHidden = true
+        addSubview(fullBar)
 
         // Мини: нажатие или свайп вверх — развернуть.
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniTapped))
@@ -435,8 +443,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func setFullscreen(_ on: Bool, vertical: Bool = false) {
         guard on != isFullscreen else { return }
         isFullscreen = on
+        if !on { controlsShown = false }
         sentSafeArea = nil // страница могла перезагрузиться — отступы передаём заново
         updateVisibility()
+        updateFullBar()
         setNeedsLayout()
         onFullscreenChanged?(on, vertical)
         // После поворота экрана — ещё раз перерисовать видео, когда раскладка устоится.
@@ -450,6 +460,22 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     func exitFullscreen() {
         runJS("window.__fon && __fon.setFull && __fon.setFull(false)")
+    }
+
+    @objc private func exitFullTapped() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        exitFullscreen()
+    }
+
+    /// Кнопка выхода и название сверху — пока видна панель YouTube.
+    private func updateFullBar() {
+        let show = isFullscreen && controlsShown
+        if show { fullBar.isHidden = false }
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction], animations: {
+            self.fullBar.alpha = show ? 1 : 0
+        }, completion: { _ in
+            if !(self.isFullscreen && self.controlsShown) { self.fullBar.isHidden = true }
+        })
     }
 
     // MARK: - Перетаскивание вниз
@@ -599,6 +625,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
                 // Видео — на весь экран (с полями видео стало мельче — владельцу не понравилось),
                 // а кнопки YouTube — в безопасной области: странице передаём отступы «чёлки» и полоски «домой».
                 webView.frame = bounds
+                fullBar.insets = safeAreaInsets
+                fullBar.frame = CGRect(x: 0, y: 0, width: w, height: safeAreaInsets.top + 56)
+                bringSubviewToFront(fullBar)
                 sendSafeArea()
                 return
             }
@@ -663,11 +692,18 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// Что играет сейчас (веб-плеер раз в секунду или системный плеер) — мини-полоска, шапка и музыкальный экран.
     private func applyState(id: String?, title: String, artist: String, paused: Bool, time: Double, duration: Double, loop: Bool) {
         let shown = musicMode ? TrackTitle.clean(title: title, artist: artist) : (title: title, artist: artist)
-        titleLabel.text = shown.title
-        subtitleLabel.text = shown.artist
-        topTitleLabel.text = title
-        let symbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
-        playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
+        // Состояние приходит дважды в секунду — подписи и значок трогаем, только если они изменились.
+        if titleLabel.text != shown.title { titleLabel.text = shown.title }
+        if subtitleLabel.text != shown.artist { subtitleLabel.text = shown.artist }
+        if topTitleLabel.text != title {
+            topTitleLabel.text = title
+            fullBar.titleLabel.text = title
+        }
+        if shownPaused != paused {
+            shownPaused = paused
+            let symbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+            playPauseButton.setImage(UIImage(systemName: paused ? "play.fill" : "pause.fill", withConfiguration: symbols), for: .normal)
+        }
         progress = duration > 0 ? CGFloat(min(1, max(0, time / duration))) : 0
         if !NativeAudio.shared.active {
             webTime = time
@@ -712,6 +748,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             youTubeMenuTop = CGFloat((body["top"] as? NSNumber)?.doubleValue ?? -1)
         case "fullscreen":
             setFullscreen(body["on"] as? Bool == true, vertical: body["vertical"] as? Bool == true)
+        case "controls":
+            controlsShown = body["shown"] as? Bool == true
+            updateFullBar()
         case "browse":
             if let s = body["url"] as? String, let url = URL(string: s) { onOpenInBrowse?(url) }
         default:
@@ -772,5 +811,50 @@ extension UIView {
         toast.center = center
         addSubview(toast)
         UIView.animate(withDuration: 0.3, delay: 1.4, options: []) { toast.alpha = 0 } completion: { _ in toast.removeFromSuperview() }
+    }
+}
+
+
+/// Верхняя полоса полного экрана: кнопка выхода и название видео на мягком затемнении. Касания принимает только кнопка —
+/// остальное достаётся странице (панель YouTube, свайпы).
+private final class FullscreenBar: UIView {
+    let exitButton = UIButton(type: .system)
+    let titleLabel = UILabel()
+    var insets: UIEdgeInsets = .zero { didSet { setNeedsLayout() } }
+    private let gradient = CAGradientLayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        gradient.colors = [UIColor(white: 0, alpha: 0.65).cgColor, UIColor(white: 0, alpha: 0).cgColor]
+        layer.addSublayer(gradient)
+        exitButton.setImage(UIImage(systemName: "arrow.down.right.and.arrow.up.left",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
+        exitButton.tintColor = .white
+        exitButton.accessibilityLabel = "Выйти из полного экрана"
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.lineBreakMode = .byTruncatingTail
+        addSubview(titleLabel)
+        addSubview(exitButton)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        CATransaction.commit()
+        let top = insets.top
+        exitButton.frame = CGRect(x: insets.left + 4, y: top + 4, width: 48, height: 44)
+        // Справа у панели YouTube субтитры и ⚙ — название до них.
+        let x = insets.left + 56
+        titleLabel.frame = CGRect(x: x, y: top + 4, width: max(0, bounds.width - x - insets.right - 150), height: 44)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let p = convert(point, to: exitButton)
+        return exitButton.point(inside: p, with: event) && !isHidden && alpha > 0.1 ? exitButton : nil
     }
 }

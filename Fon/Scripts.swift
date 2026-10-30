@@ -389,6 +389,11 @@ enum Scripts {
     html.fon-mini .player-controls-content,
     html.fon-mini .ytp-unmute { display: none !important; }
     ytm-pivot-bar-renderer { display: none !important; }
+    /* Шапка YouTube (логотип, поиск, ⋮) в окне плеера не нужна (просьба владельца после 1.71): прячем её, а место,
+       которое страница под неё оставляла (отступ ytm-app и сдвиг плеера на 48 px), убираем — видео сразу под нашей шапкой. */
+    ytm-mobile-topbar-renderer, header.mobile-topbar-header, .mobile-topbar-header, #header-bar { display: none !important; }
+    ytm-app { padding-top: 0 !important; }
+    #player-container-id, .player-container { top: 0 !important; }
 
     html.fon-music #player-container-id,
     html.fon-music .player-container,
@@ -637,7 +642,7 @@ enum Scripts {
       }
     }
   };
-  setInterval(tidyFullscreen, 1000);
+  setInterval(() => { tidyFullscreen(); if (fon.hideMoreButton) fon.hideMoreButton(); }, 1000);
   fon.tidyFullscreen = tidyFullscreen;
 
   // Видео «зависло» на загрузке (часто после долгой паузы в свёрнутом приложении: WebKit выгружает буфер).
@@ -745,7 +750,7 @@ enum Scripts {
   for (const n of ['fullscreenEnabled', 'webkitFullscreenEnabled']) getter(Document.prototype, n, () => true);
   // Кнопка полного экрана YouTube в нашем полном экране не выводила из него (владелец: «кнопка свернуть
   // не работает») — YouTube снова просил «войти». Пока полный экран включён, нажатие на неё — выход.
-  const FULL_BUTTON = /полноэкран|full\s?screen/i;
+  const FULL_BUTTON = /полноэкран|full\s?screen|свернуть|minimi[sz]e/i;
   const shown = (el) => {
     for (let n = el; n && n !== document.body; n = n.parentElement) {
       const cs = getComputedStyle(n);
@@ -753,16 +758,51 @@ enum Scripts {
     }
     return true;
   };
+  const labelOf = (b) => b.getAttribute('aria-label') || b.getAttribute('title') || '';
+  // Кнопки в правом нижнем углу панели: «полный экран» и ⋮ рядом с ней (в вертикальном полном экране ⋮ ничего не
+  // делает — владелец: «зачем она вообще»). Полный экран ищем по классу/подписи; не нашли — это предпоследняя
+  // из кнопок в правом нижнем углу (последняя — ⋮).
+  const fullControls = () => {
+    const roots = [document.getElementById('player-control-overlay'), document.querySelector('ytm-custom-control')];
+    const all = [];
+    for (const root of roots) if (root) all.push(...root.querySelectorAll('button, [role="button"]'));
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const corner = all.filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.width > 0 && r.top + r.height / 2 > vh * 0.75 && r.left + r.width / 2 > vw * 0.6;
+    }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+    let full = all.find((b) => b.classList.contains('fullscreen-icon') || FULL_BUTTON.test(labelOf(b))) || null;
+    let more = null;
+    if (full) {
+      const fr = full.getBoundingClientRect();
+      more = corner.find((b) => b !== full && !b.contains(full) && !full.contains(b) && b.getBoundingClientRect().left > fr.left + fr.width / 2) || null;
+    } else if (corner.length >= 2) {
+      full = corner[corner.length - 2];
+      more = corner[corner.length - 1];
+    }
+    return { full, more };
+  };
+  fon.hideMoreButton = () => {
+    if (!fon.isFull) return;
+    const { more } = fullControls();
+    if (more) more.classList.add('fon-hidden-full');
+  };
   const fullButton = (target) => {
     if (!fon.isFull || !target || !target.closest) return null;
     const b = target.closest('.fullscreen-icon, button, [role="button"]');
     if (!b) return null;
-    const label = b.getAttribute('aria-label') || b.getAttribute('title') || '';
-    if (!b.classList.contains('fullscreen-icon') && !FULL_BUTTON.test(label)) return null;
+    if (!b.classList.contains('fullscreen-icon') && !FULL_BUTTON.test(labelOf(b))) return null;
     return shown(b) ? b : null; // панель скрыта — касание лишь показывает её
   };
+  // Касание по самой кнопке по координатам — на случай, когда цель касания не сама кнопка (прозрачный слой сверху).
+  const onFullButton = (x, y) => {
+    const { full } = fullControls();
+    if (!full || !shown(full)) return false;
+    const r = full.getBoundingClientRect();
+    return x >= r.left - 8 && x <= r.right + 8 && y >= r.top - 8 && y <= r.bottom + 8;
+  };
   window.addEventListener('click', (e) => {
-    if (!fullButton(e.target)) return;
+    if (!fullButton(e.target) && !(fon.isFull && onFullButton(e.clientX, e.clientY))) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     setFull(false);
@@ -772,9 +812,25 @@ enum Scripts {
   window.addEventListener('touchstart', (e) => { const t = e.touches && e.touches[0]; if (t) { tapX = t.clientX; tapY = t.clientY; } }, true);
   window.addEventListener('touchend', (e) => {
     const t = e.changedTouches && e.changedTouches[0];
-    if (!t || Math.abs(t.clientX - tapX) > 12 || Math.abs(t.clientY - tapY) > 12 || !fullButton(e.target)) return;
+    if (!t || Math.abs(t.clientX - tapX) > 12 || Math.abs(t.clientY - tapY) > 12) return;
+    if (fon.isFull) tapShownUntil = Date.now() + 3500;
+    if (!fullButton(e.target) && !(fon.isFull && onFullButton(t.clientX, t.clientY))) return;
     setTimeout(() => { if (fon.isFull) setFull(false); }, 350);
   }, true);
+
+  // Панель YouTube показана или скрыта — приложение показывает название сверху вместе с ней (просьба владельца
+  // после 1.71). Смотрим на кнопку паузы/полного экрана: видна ли она; не нашли — 3,5 с после касания.
+  let tapShownUntil = 0, controlsShown = false;
+  const controlsVisible = () => {
+    const probe = document.querySelector('.player-control-play-pause-icon, .fullscreen-icon, .player-settings-icon');
+    return probe ? shown(probe) : Date.now() < tapShownUntil;
+  };
+  setInterval(() => {
+    const now = fon.isFull && controlsVisible();
+    if (now === controlsShown) return;
+    controlsShown = now;
+    fon.post({ type: 'controls', shown: now });
+  }, 250);
 
   // --- 4b. Режим музыки и экономия: самое низкое качество видео, когда картинка не нужна.
   // YouTube запоминает выбранное качество в localStorage — из-за этого 144p «прилипало»
