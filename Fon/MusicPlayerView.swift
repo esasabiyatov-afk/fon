@@ -44,8 +44,8 @@ final class MusicPlayerView: UIView {
     private let videoLayer = AVPlayerLayer()
     private var readyObservation: NSKeyValueObservation?
     private var inBackground = false
-    /// Ширина к высоте у текущей обложки: 1 — квадрат, 16/9 — кадр видео.
-    private var artworkAspect: CGFloat = 1
+    /// Ширина к высоте у текущей обложки (кадр 16:9; квадрат — только у картинки по ссылке).
+    private var artworkAspect: CGFloat = 16.0 / 9
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
     private let likeButton = UIButton(type: .system)
@@ -292,7 +292,7 @@ final class MusicPlayerView: UIView {
         ArtworkLoader.shared.load(id, size: .player) { [weak self] image, color in
             guard let self, self.track == nil || self.track?.id == id else { return }
             if let image {
-                // Обложка как есть: квадрат альбома или кадр видео 16:9 — без чёрных полей.
+                // Кадр видео 16:9 — без чёрных полей.
                 let aspect = image.size.width > 0 ? min(2, max(1, image.size.width / image.size.height)) : 1
                 UIView.transition(with: self.artworkView, duration: 0.3, options: .transitionCrossDissolve) {
                     self.artworkView.contentMode = .scaleAspectFill
@@ -484,7 +484,7 @@ final class MusicPlayerView: UIView {
         let artCenter: CGPoint
         if w > h * 1.15 {
             // Альбомная ориентация: обложка слева, управление справа.
-            art = max(120, min(contentBottom - contentTop, w * 0.42))
+            art = max(120, min((contentBottom - contentTop) * artworkAspect, w * 0.42))
             artCenter = CGPoint(x: safe.left + side + art / 2, y: (contentTop + contentBottom) / 2)
             let px = artCenter.x + art / 2 + side * 1.5
             let pw = min(520, w - px - side - safe.right)
@@ -495,7 +495,7 @@ final class MusicPlayerView: UIView {
             let py = contentBottom - panelHeight
             layoutPanel(x: px, y: py, width: pw)
             let space = py - contentTop - 24
-            art = max(120, min(pw, space))
+            art = max(120, min(pw, space * artworkAspect))
             artCenter = CGPoint(x: w / 2, y: contentTop + space / 2 + 4)
         }
         artworkContainer.bounds = CGRect(x: 0, y: 0, width: art, height: art / artworkAspect)

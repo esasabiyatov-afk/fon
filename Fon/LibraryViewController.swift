@@ -339,8 +339,8 @@ final class TrackCell: UITableViewCell {
         super.layoutSubviews()
         let h = contentView.bounds.height
         let w = contentView.bounds.width
-        artwork.frame = CGRect(x: 16, y: (h - 48) / 2, width: 48, height: 48)
-        let x: CGFloat = 76
+        artwork.frame = CGRect(x: 16, y: (h - 48) / 2, width: 85, height: 48) // 16:9
+        let x: CGFloat = 113
         likeButton.frame = CGRect(x: w - 52, y: (h - 44) / 2, width: 44, height: 44)
         titleLabel.frame = CGRect(x: x, y: h / 2 - 20, width: max(0, w - x - 56), height: 21)
         artistLabel.frame = CGRect(x: x, y: h / 2 + 2, width: max(0, w - x - 56), height: 18)

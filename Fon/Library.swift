@@ -75,7 +75,8 @@ final class Library {
 /// раз загруженная обложка при следующих запусках берётся с телефона, а не из сети.
 final class ArtworkLoader {
     static let shared = ArtworkLoader()
-    /// player — для плеера: обложка как есть (квадрат альбома или кадр 16:9 без полей).
+    /// Все обложки — кадр 16:9 без чёрных полос (просьба владельца после 1.71: «это же ютуб — не квадраты»).
+    /// small — строки и карточки, large — крупные карточки, player — музыкальный плеер.
     enum Size { case small, large, player }
 
     private let images = NSCache<NSString, UIImage>()
@@ -96,9 +97,16 @@ final class ArtworkLoader {
     /// completion приходит на главном потоке: картинка и её средний цвет (кроме .small).
     func load(_ id: String, size: Size, completion: @escaping (UIImage?, UIColor?) -> Void) {
         // mqdefault — 16:9 без чёрных полос; maxres есть не у всех видео, тогда берём поменьше.
-        let names = size == .small ? ["mqdefault", "hqdefault"] : ["maxresdefault", "sddefault", "hqdefault"]
-        cached("\(id)-\(size)", color: size != .small, completion: completion) { [weak self] done in
-            self?.fetch(id, names: names[...], maxSide: size == .small ? 160 : 900, wide: size == .player, done: done)
+        let names: [String]
+        let maxWidth: CGFloat
+        switch size {
+        case .small: (names, maxWidth) = (["mqdefault", "hqdefault"], 320)
+        case .large: (names, maxWidth) = (["sddefault", "hqdefault"], 640)
+        case .player: (names, maxWidth) = (["maxresdefault", "sddefault", "hqdefault"], 900)
+        }
+        // «-16x9» в ключе: в кэше на диске от прежних версий лежат квадратные обложки под старыми ключами.
+        cached("\(id)-\(size)-16x9", color: size != .small, completion: completion) { [weak self] done in
+            self?.fetch(id, names: names[...], maxWidth: maxWidth, done: done)
         }
     }
 
@@ -174,7 +182,7 @@ final class ArtworkLoader {
     }
 
     /// Сбой сети (ответа нет вовсе) — повторяем тот же размер ещё дважды, а не сдаёмся с пустой обложкой.
-    private func fetch(_ id: String, names: ArraySlice<String>, maxSide: CGFloat, wide: Bool, attempt: Int = 0,
+    private func fetch(_ id: String, names: ArraySlice<String>, maxWidth: CGFloat, attempt: Int = 0,
                        done: @escaping (UIImage?) -> Void) {
         guard let name = names.first, let url = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg") else {
             done(nil)
@@ -183,21 +191,19 @@ final class ArtworkLoader {
         URLSession.shared.dataTask(with: url) { data, response, _ in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             if ok, let data, let image = UIImage(data: data), image.size.width > 150 {
-                done(ArtworkLoader.squareArtwork(image, maxSide: maxSide, wide: wide))
+                done(ArtworkLoader.wideArtwork(image, maxWidth: maxWidth))
             } else if response == nil, attempt < 2 {
                 DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
-                    self.fetch(id, names: names, maxSide: maxSide, wide: wide, attempt: attempt + 1, done: done)
+                    self.fetch(id, names: names, maxWidth: maxWidth, attempt: attempt + 1, done: done)
                 }
             } else {
-                self.fetch(id, names: names.dropFirst(), maxSide: maxSide, wide: wide, done: done)
+                self.fetch(id, names: names.dropFirst(), maxWidth: maxWidth, done: done)
             }
         }.resume()
     }
 
-    /// Обложка из превью. Сначала берём кадр 16:9 (у превью 4:3 сверху и снизу чёрные полосы).
-    /// Если по бокам кадра однотонные поля — в центре обложка альбома, вырезаем этот квадрат.
-    /// Иначе для карточек — центральный квадрат кадра (без полей), а для плеера (wide) — кадр 16:9 целиком.
-    static func squareArtwork(_ image: UIImage, maxSide: CGFloat, wide: Bool = false) -> UIImage? {
+    /// Обложка из превью: кадр 16:9 (у превью 4:3 — hqdefault, sddefault — сверху и снизу чёрные полосы, их обрезаем).
+    static func wideArtwork(_ image: UIImage, maxWidth: CGFloat) -> UIImage? {
         guard let cg = image.cgImage else { return image }
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
         let bandH = min(h, w * 9 / 16)
@@ -208,51 +214,10 @@ final class ArtworkLoader {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
-
-        if wide && !hasFlatSides(band) {
-            let bw = min(CGFloat(band.width), maxSide)
-            let bh = bw * CGFloat(band.height) / CGFloat(band.width)
-            return UIGraphicsImageRenderer(size: CGSize(width: bw, height: bh), format: format).image { _ in
-                UIImage(cgImage: band).draw(in: CGRect(x: 0, y: 0, width: bw, height: bh))
-            }
-        }
-        let bw = CGFloat(band.width), bh = CGFloat(band.height)
-        guard let square = band.cropping(to: CGRect(x: (bw - bh) / 2, y: 0, width: bh, height: bh).integral) else { return image }
-        let side = min(bh, maxSide)
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
-            UIImage(cgImage: square).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
-        }
-    }
-
-    /// Однотонные ли поля слева и справа от центрального квадрата (как у видео «Topic» с обложкой альбома).
-    private static func hasFlatSides(_ band: CGImage) -> Bool {
-        let width = 64, height = 36
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        return pixels.withUnsafeMutableBytes { buffer -> Bool in
-            guard let ctx = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
-                                      bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return true }
-            ctx.interpolationQuality = .low
-            ctx.draw(band, in: CGRect(x: 0, y: 0, width: width, height: height))
-            let strip = (width - height) / 2
-            func stats(_ columns: Range<Int>) -> (mean: Double, deviation: Double) {
-                var sum = 0.0, squares = 0.0, count = 0.0
-                for y in 0..<height {
-                    for x in columns {
-                        let i = (y * width + x) * 4
-                        let l = (0.299 * Double(buffer[i]) + 0.587 * Double(buffer[i + 1]) + 0.114 * Double(buffer[i + 2])) / 255
-                        sum += l
-                        squares += l * l
-                        count += 1
-                    }
-                }
-                let mean = sum / count
-                return (mean, (max(0, squares / count - mean * mean)).squareRoot())
-            }
-            // Крайний столбец у самого квадрата не берём — там бывает край обложки.
-            let left = stats(0..<(strip - 1))
-            let right = stats((width - strip + 1)..<width)
-            return left.deviation < 0.06 && right.deviation < 0.06 && abs(left.mean - right.mean) < 0.08
+        let bw = min(CGFloat(band.width), maxWidth)
+        let bh = bw * CGFloat(band.height) / CGFloat(band.width)
+        return UIGraphicsImageRenderer(size: CGSize(width: bw, height: bh), format: format).image { _ in
+            UIImage(cgImage: band).draw(in: CGRect(x: 0, y: 0, width: bw, height: bh))
         }
     }
 

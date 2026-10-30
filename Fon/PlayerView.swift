@@ -575,11 +575,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let h = bounds.height
             let leftWidth: CGFloat
             if musicMode {
-                // Обложка трека; маленький веб-плеер прячется под ней и продолжает играть.
+                // Обложка трека (16:9, как видео); маленький веб-плеер прячется под ней и продолжает играть.
                 let side = h - 16
-                miniArtwork.frame = CGRect(x: 8, y: 8, width: side, height: side)
+                miniArtwork.frame = CGRect(x: 8, y: 8, width: (side * 16 / 9).rounded(), height: side)
                 webView.frame = miniArtwork.frame
-                leftWidth = 8 + side
+                leftWidth = miniArtwork.frame.maxX
             } else {
                 let videoW = (h * 16 / 9).rounded()
                 webView.frame = CGRect(x: 0, y: 0, width: videoW, height: h)

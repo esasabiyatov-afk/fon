@@ -141,7 +141,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 if let url = YouTubeLinks.myMix(seed: seed.id) { self?.onPlay?(url, "Мой микс", nil) }
             })
         }
-        for track in history.prefix(6 - quick.count) {
+        let quickCount = view.bounds.width > 600 ? 6 : 4 // сетка карточек: 2 ряда
+        for track in history.prefix(quickCount - quick.count) {
             quick.append(mixItem(track))
         }
         result.append(Section(title: Self.greeting(), style: .quick, items: quick))
@@ -308,16 +309,21 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             let section: NSCollectionLayoutSection
             switch style {
             case .quick:
-                let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(wide ? 1.0 / 3 : 0.5), heightDimension: .fractionalHeight(1)))
+                // Быстрый доступ — сетка карточек 16:9 (обложка сверху, название под ней).
+                let columns: CGFloat = wide ? 3 : 2
+                let thumbWidth = (environment.container.effectiveContentSize.width - 24) / columns - 8
+                let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1 / columns), heightDimension: .fractionalHeight(1)))
                 item.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4)
-                let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(56)), subitems: [item])
+                let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute((thumbWidth * 9 / 16).rounded() + 42)), subitems: [item])
                 section = NSCollectionLayoutSection(group: group)
                 section.interGroupSpacing = 8
                 section.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 24, trailing: 12)
             case .large, .small, .round:
-                let side: CGFloat = style == .large ? 160 : (style == .round ? 120 : 132)
+                // Карточки 16:9; исполнители — круглые аватары, как у каналов YouTube.
+                let side: CGFloat = style == .large ? 240 : (style == .round ? 120 : 190)
+                let artHeight = style == .round ? side : (side * 9 / 16).rounded()
                 let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .fractionalHeight(1)))
-                let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .absolute(side), heightDimension: .absolute(side + 46)), subitems: [item])
+                let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .absolute(side), heightDimension: .absolute(artHeight + 46)), subitems: [item])
                 section = NSCollectionLayoutSection(group: group)
                 section.orthogonalScrollingBehavior = .continuous
                 section.interGroupSpacing = 14
@@ -470,6 +476,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         }
     }
 
+    /// Быстрый доступ: обложка 16:9 сверху, название под ней (у «Понравившихся» — сердце на цветном фоне).
     private final class QuickCell: UICollectionViewCell {
         private let artwork = UIImageView()
         private let titleLabel = UILabel()
@@ -477,12 +484,10 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
         override init(frame: CGRect) {
             super.init(frame: frame)
-            contentView.backgroundColor = UIColor(white: 0.14, alpha: 1)
-            contentView.layer.cornerRadius = 6
-            contentView.clipsToBounds = true
             artwork.clipsToBounds = true
+            artwork.layer.cornerRadius = 8
             artwork.tintColor = .white
-            titleLabel.font = .systemFont(ofSize: 13, weight: .bold)
+            titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
             titleLabel.textColor = .white
             titleLabel.numberOfLines = 2
             contentView.addSubview(artwork)
@@ -503,7 +508,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 }
             } else {
                 artworkKey = nil
-                artwork.image = UIImage(systemName: item.symbol ?? "music.note", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .bold))
+                artwork.image = UIImage(systemName: item.symbol ?? "music.note", withConfiguration: UIImage.SymbolConfiguration(pointSize: 30, weight: .bold))
                 artwork.contentMode = .center
                 artwork.backgroundColor = item.symbol == "heart.fill" ? PlayerView.accent : UIColor(white: 0.25, alpha: 1)
             }
@@ -511,13 +516,16 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            let h = contentView.bounds.height
-            artwork.frame = CGRect(x: 0, y: 0, width: h, height: h)
-            titleLabel.frame = CGRect(x: h + 10, y: 0, width: max(0, contentView.bounds.width - h - 16), height: h)
+            let w = contentView.bounds.width
+            let artHeight = (w * 9 / 16).rounded()
+            artwork.frame = CGRect(x: 0, y: 0, width: w, height: artHeight)
+            titleLabel.frame = CGRect(x: 0, y: artHeight + 4, width: w, height: max(0, contentView.bounds.height - artHeight - 4))
+            titleLabel.sizeToFit()
+            titleLabel.frame.size.width = w
         }
     }
 
-    /// Карточка: квадратная обложка (у исполнителя — круглая) и подписи под ней.
+    /// Карточка: обложка 16:9 (у исполнителя — круглая) и подписи под ней.
     private final class CardCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
         private let artwork = UIImageView()
         /// Меню «Отписаться» — только у исполнителей в «Подписках» и только на самой ячейке: в 1.68 меню на всём
@@ -585,11 +593,12 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         override func layoutSubviews() {
             super.layoutSubviews()
             let w = contentView.bounds.width
-            artwork.frame = CGRect(x: 0, y: 0, width: w, height: w)
+            let artHeight = round ? w : (w * 9 / 16).rounded() // карточки 16:9, исполнители — круг
+            artwork.frame = CGRect(x: 0, y: 0, width: w, height: artHeight)
             artwork.layer.cornerRadius = round ? w / 2 : 8
             placeholder.frame = artwork.frame
-            titleLabel.frame = CGRect(x: 0, y: w + 6, width: w, height: 18)
-            subtitleLabel.frame = CGRect(x: 0, y: w + 25, width: w, height: 16)
+            titleLabel.frame = CGRect(x: 0, y: artHeight + 6, width: w, height: 18)
+            subtitleLabel.frame = CGRect(x: 0, y: artHeight + 25, width: w, height: 16)
         }
     }
 
@@ -629,8 +638,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             super.layoutSubviews()
             let h = contentView.bounds.height
             let side = h - 4
-            artwork.frame = CGRect(x: 0, y: 2, width: side, height: side)
-            let x = side + 12
+            artwork.frame = CGRect(x: 0, y: 2, width: (side * 16 / 9).rounded(), height: side) // 16:9
+            let x = artwork.frame.maxX + 12
             let w = max(0, contentView.bounds.width - x)
             titleLabel.frame = CGRect(x: x, y: h / 2 - 20, width: w, height: 20)
             subtitleLabel.frame = CGRect(x: x, y: h / 2 + 1, width: w, height: 18)

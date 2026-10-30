@@ -1355,8 +1355,8 @@ enum Scripts {
     }, 500);
   }
 
-  // Режим музыки: результаты поиска и лента — компактным списком (обложка 64×64 слева, название справа),
-  // как в музыкальных приложениях — больше результатов на экране (просьба владельца после 1.69).
+  // Режим музыки: результаты поиска и лента — компактным списком (обложка 16:9, 112×63, слева, название справа) —
+  // больше результатов на экране (просьба владельца после 1.69; прямоугольная обложка — после 1.71).
   // Вёрстка m.youtube проверена в Chromium с iPhone-UA: ytm-media-item > a.media-item-thumbnail-container
   // (ytm-thumbnail-cover) + .media-item-details (.media-channel — аватар, .media-item-info).
   fon.addStyle(`
@@ -1365,16 +1365,15 @@ enum Scripts {
       display: flex !important; flex-direction: row !important; align-items: center !important;
       gap: 12px; padding: 6px 4px 6px 12px !important; margin: 0 !important; }
     html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) .media-item-thumbnail-container {
-      flex: 0 0 64px !important; width: 64px !important; height: 64px !important; min-width: 0 !important;
+      flex: 0 0 112px !important; width: 112px !important; height: 63px !important; min-width: 0 !important;
       padding: 0 !important; margin: 0 !important; border-radius: 6px !important; overflow: hidden !important; }
     html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) :is(ytm-thumbnail-cover, yt-collections-stack) {
-      position: relative !important; display: block !important; width: 64px !important; height: 64px !important;
+      position: relative !important; display: block !important; width: 112px !important; height: 63px !important;
       padding: 0 !important; margin: 0 !important; border-radius: 6px !important; overflow: hidden !important; }
     html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) ytm-thumbnail-cover :is(img, .video-thumbnail-bg) {
       position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
       object-fit: cover !important; }
-    /* у превью hqdefault видео чёрные поля сверху и снизу */
-    html.fon-list ytm-video-with-context-renderer ytm-thumbnail-cover img[src*="/hq"]:not([src*="hq720"]) { transform: scale(1.34); }
+    /* у превью hqdefault (4:3) чёрные полосы сверху и снизу — object-fit: cover в рамке 16:9 обрезает их ровно */
     html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) :is(.videoThumbnailGroupOverlayBottomLeftRightGroup,
       .media-channel, #video-preview-portal, ytm-badge-supported-renderer, .ytCollectionsStackCollectionStack1,
       .ytCollectionsStackCollectionStack2, .radioBottomOverlayHost) { display: none !important; }

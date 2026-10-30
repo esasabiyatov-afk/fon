@@ -305,8 +305,8 @@ private final class QueueTrackCell: UITableViewCell {
         content.secondaryText = track.artist
         content.secondaryTextProperties.color = .secondaryLabel
         content.textProperties.numberOfLines = 1
-        content.imageProperties.maximumSize = CGSize(width: 44, height: 44)
-        content.imageProperties.reservedLayoutSize = CGSize(width: 44, height: 44)
+        content.imageProperties.maximumSize = CGSize(width: 80, height: 45) // 16:9
+        content.imageProperties.reservedLayoutSize = CGSize(width: 80, height: 45)
         content.imageProperties.cornerRadius = 4
         artworkID = track.id
         accessoryType = .none
@@ -390,7 +390,7 @@ private final class VersionCard: UIControl {
             imageView.topAnchor.constraint(equalTo: topAnchor),
             imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor),
+            imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 9.0 / 16),
             label.topAnchor.constraint(equalTo: imageView.bottomAnchor, constant: 6),
             label.leadingAnchor.constraint(equalTo: leadingAnchor),
             label.trailingAnchor.constraint(equalTo: trailingAnchor),
