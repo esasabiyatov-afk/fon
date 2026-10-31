@@ -60,16 +60,22 @@ final class MusicFeed {
         var artists: [MusicItem] = []
         var releases: [MusicItem] = []
         var subscriptionsDate: Date?
+        // Экран «Лента YouTube» (миксы и видео ленты с чипом «Музыка»); необязательные — старый файл кэша читается.
+        var feedMixes: [MusicItem]?
+        var feedVideos: [MusicItem]?
+        var feedDate: Date?
     }
 
     private var cache = Cache()
     private let fileURL: URL
     private var homeCompletions: [() -> Void]?
     private var subscriptionsCompletions: [() -> Void]?
+    private var feedCompletions: [() -> Void]?
 
     private(set) var homeError: String?
     private(set) var subscriptionsError: String?
     private(set) var signedOut = false
+    private(set) var feedError: String?
 
     var shelves: [MusicShelf] { cache.shelves }
     var artists: [MusicItem] { cache.artists }
@@ -78,6 +84,10 @@ final class MusicFeed {
     var subscriptionsLoaded: Bool { cache.subscriptionsDate != nil }
     var isLoadingHome: Bool { homeCompletions != nil }
     var isLoadingSubscriptions: Bool { subscriptionsCompletions != nil }
+    /// Лента YouTube с чипом «Музыка»: миксы и видео.
+    var feedMixes: [MusicItem] { cache.feedMixes ?? [] }
+    var feedVideos: [MusicItem] { cache.feedVideos ?? [] }
+    var isLoadingFeed: Bool { feedCompletions != nil }
 
     private init() {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -144,21 +154,66 @@ final class MusicFeed {
                 self.finishHome([], error: "Подборки не загрузились (\(reason); лента: \(Self.message(error))).")
                 return
             }
-            let mixes: [MusicItem] = (dict["mixes"] as? [[String: Any]] ?? []).compactMap { mix in
-                guard let title = mix["title"] as? String, let id = mix["videoId"] as? String else { return nil }
-                return MusicItem(title: title, subtitle: "Микс YouTube", thumb: nil, videoId: id, playlistId: mix["playlistId"] as? String)
-            }
-            let videos: [MusicItem] = (dict["videos"] as? [[String: Any]] ?? []).compactMap { video in
-                guard let id = video["id"] as? String else { return nil }
-                let clean = TrackTitle.clean(title: video["title"] as? String ?? "", artist: video["channel"] as? String ?? "")
-                return MusicItem(title: clean.title, subtitle: clean.artist, thumb: nil, videoId: id)
-            }
+            let (mixes, videos) = Self.parseFeed(dict)
             var shelves: [MusicShelf] = []
             if !mixes.isEmpty { shelves.append(MusicShelf(title: "Миксы для вас", kind: .cards, items: mixes)) }
             if !videos.isEmpty { shelves.append(MusicShelf(title: "Быстрый выбор", kind: .songs, items: Array(videos.prefix(16)))) }
             if videos.count > 16 { shelves.append(MusicShelf(title: "Рекомендации", kind: .cards, items: Array(videos.dropFirst(16)))) }
             let chip = dict["chip"] as? Bool ?? false
             self.finishHome(shelves, error: shelves.isEmpty ? "Подборки не загрузились (\(reason); лента: \(chip ? "пусто" : "нет фильтра «Музыка»"))." : nil)
+        }
+    }
+
+    /// Миксы и видео из ответа `__fonCloud.musicFeed()`.
+    private static func parseFeed(_ dict: [String: Any]) -> (mixes: [MusicItem], videos: [MusicItem]) {
+        let mixes: [MusicItem] = (dict["mixes"] as? [[String: Any]] ?? []).compactMap { mix in
+            guard let title = mix["title"] as? String, let id = mix["videoId"] as? String else { return nil }
+            return MusicItem(title: title, subtitle: "Микс YouTube", thumb: nil, videoId: id, playlistId: mix["playlistId"] as? String)
+        }
+        let videos: [MusicItem] = (dict["videos"] as? [[String: Any]] ?? []).compactMap { video in
+            guard let id = video["id"] as? String else { return nil }
+            let clean = TrackTitle.clean(title: video["title"] as? String ?? "", artist: video["channel"] as? String ?? "")
+            return MusicItem(title: clean.title, subtitle: clean.artist, thumb: nil, videoId: id)
+        }
+        return (mixes, videos)
+    }
+
+    // MARK: - Лента YouTube
+
+    /// Экран «Лента YouTube: музыка» (плитки и компактный список вместо веб-ленты). Не чаще раза в 15 минут, force — по жесту.
+    func loadFeed(force: Bool = false, completion: (() -> Void)? = nil) {
+        if !force, let date = cache.feedDate, Date().timeIntervalSince(date) < 15 * 60, !feedVideos.isEmpty {
+            completion?()
+            return
+        }
+        if feedCompletions != nil {
+            if let completion { feedCompletions?.append(completion) }
+            return
+        }
+        feedCompletions = completion.map { [$0] } ?? []
+        feedError = nil
+        notify()
+        HiddenPage.youtube.call("__fonCloud.musicFeed()", { [:] }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                let dict = value as? [String: Any] ?? [:]
+                let (mixes, videos) = Self.parseFeed(dict)
+                if mixes.isEmpty && videos.isEmpty {
+                    self.feedError = dict["chip"] as? Bool == true ? "Лента пуста." : "В ленте YouTube нет фильтра «Музыка»."
+                } else {
+                    self.cache.feedMixes = mixes
+                    self.cache.feedVideos = videos
+                    self.cache.feedDate = Date()
+                    self.save()
+                }
+            case .failure(let error):
+                self.feedError = "Лента не загрузилась (\(Self.message(error)))."
+            }
+            let completions = self.feedCompletions ?? []
+            self.feedCompletions = nil
+            self.notify()
+            completions.forEach { $0() }
         }
     }
 

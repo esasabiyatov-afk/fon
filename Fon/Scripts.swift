@@ -389,11 +389,6 @@ enum Scripts {
     html.fon-mini .player-controls-content,
     html.fon-mini .ytp-unmute { display: none !important; }
     ytm-pivot-bar-renderer { display: none !important; }
-    /* Шапка YouTube (логотип, поиск, ⋮) в окне плеера не нужна (просьба владельца после 1.71): прячем её, а место,
-       которое страница под неё оставляла (отступ ytm-app и сдвиг плеера на 48 px), убираем — видео сразу под нашей шапкой. */
-    ytm-mobile-topbar-renderer, header.mobile-topbar-header, .mobile-topbar-header, #header-bar { display: none !important; }
-    ytm-app { padding-top: 0 !important; }
-    #player-container-id, .player-container { top: 0 !important; }
 
     html.fon-music #player-container-id,
     html.fon-music .player-container,
@@ -479,6 +474,10 @@ enum Scripts {
     /* Вертикальный полный экран: субтитры сразу под картинкой, а не внизу экрана. */
     /* Ряд «Нравится/Поделиться/Сохранить» и «Другие видео» в полном экране наезжали на время и главу. */
     html.fon-full .fon-hidden-full { display: none !important; }
+    /* Допы YouTube в полном экране — ⋮ («ещё», ничего не делает), подсказка «Другие видео» с миниатюрой, закрывавшая
+       кнопку, и полоса похожих видео внизу (скриншот владельца после 1.72). Время, ползунок, ⚙, субтитры и
+       пауза — в других элементах панели. */
+    html.fon-full player-fullscreen-controls { display: none !important; }
     html.fon-full.fon-cap-below .caption-window {
       top: var(--fon-cap-top, auto) !important; bottom: auto !important;
     }
@@ -1150,12 +1149,12 @@ enum Scripts {
       }
       if (!r) return { chip: false, videos: [], mixes: [] };
       const videos = [], mixes = [], seen = new Set();
-      for (let page = 0; page < 3 && r; page++) {
+      for (let page = 0; page < 4 && r; page++) {
         collectVideos(r, videos, seen);
         collectMixes(r, mixes, seen);
         const next = findAll(r, 'continuationCommand').filter((c) => c && c.token).pop();
         r = null;
-        if (next && videos.length < 40) { try { r = await api('browse', { continuation: next.token }); } catch (e) {} }
+        if (next && videos.length < 60) { try { r = await api('browse', { continuation: next.token }); } catch (e) {} }
       }
       return { chip: true, videos, mixes };
     },

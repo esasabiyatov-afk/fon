@@ -20,6 +20,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onTrackEnding: (() -> Void)?
 
     static let miniHeight: CGFloat = 64
+    /// Высота шапки m.youtube (логотип, поиск) на странице видео.
+    static let pageHeaderHeight: CGFloat = 48
     static let accent = UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1)
 
     private(set) var mode: Mode = .expanded
@@ -638,8 +640,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             likeButton.frame = CGRect(x: w - safeAreaInsets.right - 148, y: top, width: 48, height: 44)
             musicButton.frame = CGRect(x: w - safeAreaInsets.right - 52, y: top, width: 48, height: 44)
             topTitleLabel.frame = CGRect(x: safeAreaInsets.left + 56, y: top, width: max(0, w - safeAreaInsets.left - safeAreaInsets.right - 56 - 152), height: 44)
-            webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY,
-                                   width: w - safeAreaInsets.left - safeAreaInsets.right, height: bounds.height - topBar.frame.maxY)
+            // Шапку YouTube (логотип, поиск, ⋮; 48 pt) прячем под нашей верхней панелью: страница сдвинута вверх на её высоту.
+            // Убирать шапку стилями нельзя — от её высоты считаются прилипающие блоки страницы (вышел зазор над чипами).
+            webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY - Self.pageHeaderHeight,
+                                   width: w - safeAreaInsets.left - safeAreaInsets.right,
+                                   height: bounds.height - topBar.frame.maxY + Self.pageHeaderHeight)
         }
     }
 

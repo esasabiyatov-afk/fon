@@ -6,7 +6,7 @@ import UIKit
 /// (или без сети) — свои: «Миксы для вас» по истории и лайкам, «Недавно слушали», «Понравившиеся».
 /// «Подписки»: исполнители, на которых вы подписаны, и их новые треки — без остальных видео.
 final class MusicHomeViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
-    enum Kind { case home, subscriptions }
+    enum Kind { case home, subscriptions, feed }
 
     var onPlay: PlayHandler?
     var onOpenLikes: (() -> Void)?
@@ -86,11 +86,13 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: animated)
+        // У ленты — шапка навигации со стрелкой «назад»: на неё попадают нажатием на карточку «Ещё».
+        navigationController?.setNavigationBarHidden(kind != .feed, animated: animated)
         reload()
         switch kind {
         case .home: MusicFeed.shared.loadHome()
         case .subscriptions: MusicFeed.shared.loadSubscriptions()
+        case .feed: MusicFeed.shared.loadFeed()
         }
     }
 
@@ -111,6 +113,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             MusicFeed.shared.loadHome(force: true, completion: done)
         case .subscriptions:
             MusicFeed.shared.loadSubscriptions(force: true, completion: done)
+        case .feed:
+            MusicFeed.shared.loadFeed(force: true, completion: done)
         }
     }
 
@@ -119,7 +123,12 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     /// Перерисовываем, только если что-то поменялось, — иначе карусели сбрасывали бы прокрутку.
     @objc private func reload() {
         guard isViewLoaded else { return }
-        let built = kind == .home ? homeSections() : subscriptionSections()
+        let built: [Section]
+        switch kind {
+        case .home: built = homeSections()
+        case .subscriptions: built = subscriptionSections()
+        case .feed: built = feedSections()
+        }
         let newSignature = built.map { section in
             section.title + "|" + section.items.map { $0.title + $0.subtitle + ($0.artworkURL?.absoluteString ?? $0.artworkID ?? "") }.joined(separator: ",")
         }.joined(separator: "\n")
@@ -204,6 +213,33 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             result.append(Section(title: "", style: .message, items: [Item(title: "Загружаем подборки…")]))
         } else if let error = MusicFeed.shared.homeError {
             result.append(Section(title: "", style: .message, items: [Item(title: error + "\nПотяните вниз, чтобы повторить.")]))
+        }
+        return result
+    }
+
+    /// «Лента YouTube: музыка» — плитки, как на главной, а ниже компактный список, как в поиске.
+    private func feedSections() -> [Section] {
+        let feed = MusicFeed.shared
+        let mixes = feed.feedMixes, videos = feed.feedVideos
+        guard !mixes.isEmpty || !videos.isEmpty else {
+            let text: String
+            if feed.isLoadingFeed || feed.feedError == nil {
+                text = "Загружаем ленту…"
+            } else {
+                text = (feed.feedError ?? "") + "\nПотяните вниз, чтобы повторить."
+            }
+            return [Section(title: "Лента YouTube", style: .message, items: [Item(title: text)])]
+        }
+        var result: [Section] = []
+        let tileCount = view.bounds.width > 600 ? 6 : 4
+        if !videos.isEmpty {
+            result.append(Section(title: "Для вас", style: .quick, items: videos.prefix(tileCount).map { musicItem($0, source: "Лента YouTube") }))
+        }
+        if !mixes.isEmpty {
+            result.append(Section(title: "Миксы для вас", style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
+        }
+        if videos.count > tileCount {
+            result.append(Section(title: "Рекомендации", style: .list, items: videos.dropFirst(tileCount).map { musicItem($0, source: "Лента YouTube") }))
         }
         return result
     }
@@ -394,7 +430,9 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     func collectionView(_ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> UICollectionReusableView {
         let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "header", for: indexPath) as! HeaderView
         let first = indexPath.section == 0
-        header.configure(sections[indexPath.section].title, big: first, onSearch: first ? { [weak self] in self?.onSearch?() } : nil)
+        // На экране ленты есть шапка навигации (назад и название) — лупа в заголовке не нужна.
+        let showSearch = first && kind != .feed
+        header.configure(sections[indexPath.section].title, big: first, onSearch: showSearch ? { [weak self] in self?.onSearch?() } : nil)
         return header
     }
 

@@ -298,9 +298,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             self?.homeNav?.pushViewController(list, animated: true)
         }
         home.onSearch = { [weak self] in self?.presentSearch(prefill: nil) }
+        // «Лента YouTube: музыка» — нативный экран: плитки и компактный список (просьба владельца после 1.72).
         home.onOpenFeed = { [weak self] in
-            self?.musicFeedShown = true
-            self?.showTab(0)
+            let feed = MusicHomeViewController(kind: .feed)
+            feed.title = "Лента YouTube"
+            feed.onPlay = { url, source, queue in self?.play(url, source: source, queue: queue) }
+            self?.homeNav?.pushViewController(feed, animated: true)
         }
         let nav = embed(home)
         homeNav = nav
