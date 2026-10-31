@@ -431,7 +431,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "header", for: indexPath) as! HeaderView
         let first = indexPath.section == 0
         // На экране ленты есть шапка навигации (назад и название) — лупа в заголовке не нужна.
-        let showSearch = first && kind != .feed
+        let showSearch = first && self.kind != .feed // параметр `kind` — вид дополнения, а не экрана
         header.configure(sections[indexPath.section].title, big: first, onSearch: showSearch ? { [weak self] in self?.onSearch?() } : nil)
         return header
     }
