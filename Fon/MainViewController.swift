@@ -13,7 +13,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case mode // переключатель «Видео / Музыка» — в центре панели
     }
 
-    private enum TabContent { case web(String), library, musicHome, musicSubscriptions, history, search, none }
+    private enum TabContent { case web(String), library, musicHome, musicSubscriptions, videoHome, videoSubscriptions, history, search, none }
 
     private let browseContainer = UIView()
     private var browseViews: [Int: WKWebView] = [:]
@@ -23,6 +23,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var homeNav: UINavigationController?
     private var historyNav: UINavigationController?
     private var subscriptionsNav: UINavigationController?
+    /// Режим «Видео»: свои ленты «Главная» и «Подписки» (как в приложении YouTube, без перезагрузок).
+    private var videoHomeNav: UINavigationController?
+    private var videoSubscriptionsNav: UINavigationController?
+    /// Окна вкладок, которые iOS выгрузила из памяти, пока они были скрыты: грузим заново, только когда их откроют.
+    private var terminatedViews = Set<ObjectIdentifier>()
     private var searchVC: SearchViewController?
     /// Поиск — не вкладка на панели, а отдельное место в той же области (открывается лупой YouTube
     /// или лупой на подборках); панель и мини-плеер остаются, вернуться — любой вкладкой.
@@ -134,6 +139,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+        nc.addObserver(self, selector: #selector(willResignActive), name: UIApplication.willResignActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(didBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioRouteChanged(_:)), name: AVAudioSession.routeChangeNotification, object: nil)
         nc.addObserver(self, selector: #selector(cloudFailed(_:)), name: CloudLikes.didFail, object: nil)
@@ -170,6 +177,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             let left = safe.left + SidebarView.width + 16
             let y = bounds.height - max(safe.bottom, 12) - h - 8
             return CGRect(x: left, y: y, width: max(0, bounds.width - left - safe.right - 16), height: h)
+        }
+        if !Settings.musicMode {
+            // Режим видео — маленькое окно с видео в правом нижнем углу, как в приложении YouTube.
+            let width = min(traitCollection.userInterfaceIdiom == .pad ? 340 : 210, bounds.width * 0.55)
+            let height = (width * 9 / 16).rounded()
+            return CGRect(x: bounds.width - safe.right - width - 10, y: tabBar.frame.minY - height - 10, width: width, height: height)
         }
         if Settings.musicMode {
             // Режим музыки — плавающая карточка над вкладками, как в Apple Music.
@@ -268,8 +281,9 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             playerView.isHidden = false
             playerView.transform = .identity // мог остаться сдвиг от перетаскивания
             playerView.frame = miniPlayerFrame() // в альбомной ориентации не под «чёлкой»
-            playerView.layer.cornerRadius = sidebarActive || Settings.musicMode ? 14 : 0
-            setBrowseBottomInset(sidebarActive ? PlayerView.miniHeight + 16 : (Settings.musicMode ? PlayerView.miniHeight + 12 : PlayerView.miniHeight))
+            playerView.layer.cornerRadius = sidebarActive || Settings.musicMode ? 14 : 10
+            // Окно видео плавает над лентой, как в приложении YouTube, — отступ снизу не нужен.
+            setBrowseBottomInset(sidebarActive ? PlayerView.miniHeight + 16 : (Settings.musicMode ? PlayerView.miniHeight + 12 : 0))
         case .expanded:
             playerView.isHidden = false
             playerView.frame = bounds
@@ -298,6 +312,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         homeNav?.additionalSafeAreaInsets.bottom = inset
         historyNav?.additionalSafeAreaInsets.bottom = inset
         subscriptionsNav?.additionalSafeAreaInsets.bottom = inset
+        videoHomeNav?.additionalSafeAreaInsets.bottom = inset
+        videoSubscriptionsNav?.additionalSafeAreaInsets.bottom = inset
     }
 
     private func applyBottomInset(to webView: WKWebView) {
@@ -406,6 +422,20 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         return nav
     }
 
+    /// Лента режима «Видео»: «Главная» (FEwhat_to_watch) или «Подписки» (FEsubscriptions).
+    private func videoFeedController(home: Bool) -> UINavigationController {
+        if let nav = home ? videoHomeNav : videoSubscriptionsNav { return nav }
+        let feed = VideoFeedViewController(browseID: home ? "FEwhat_to_watch" : "FEsubscriptions", title: home ? "Главная" : "Подписки")
+        feed.onPlay = { [weak self] url in self?.play(url, source: "YouTube", queue: nil) }
+        feed.navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "magnifyingglass"), style: .plain,
+                                                                 target: self, action: #selector(searchButtonTapped))
+        let nav = embed(feed)
+        if home { videoHomeNav = nav } else { videoSubscriptionsNav = nav }
+        return nav
+    }
+
+    @objc private func searchButtonTapped() { presentSearch(prefill: nil) }
+
     /// Нативный раздел (медиатека, подборки) внутри области вкладок.
     private func embed(_ root: UIViewController) -> UINavigationController {
         let nav = UINavigationController(rootViewController: root)
@@ -427,10 +457,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let music = Settings.musicMode
         switch tabs[index].kind {
         // Главная в режиме музыки — подборки; лента YouTube с фильтром «Музыка» — по карточке.
-        case .home: return music ? (musicFeedShown ? .web("/#fon-music") : .musicHome) : .web("/")
+        // Режим видео — своя лента «Главной»; веб-страница — когда в неё ушла ссылка (флаг `musicFeedShown` для обоих режимов).
+        case .home: return music ? (musicFeedShown ? .web("/#fon-music") : .musicHome) : (musicFeedShown ? .web("/") : .videoHome)
         case .history: return music ? .history : .web("/feed/history")
         // Подписки в режиме музыки — только исполнители и их музыка.
-        case .subscriptions: return music ? .musicSubscriptions : .web("/feed/subscriptions")
+        case .subscriptions: return music ? .musicSubscriptions : .videoSubscriptions
         case .you: return music ? .library : .web("/feed/library")
         case .mode: return .none
         }
@@ -445,6 +476,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         homeNav?.view.isHidden = true
         historyNav?.view.isHidden = true
         subscriptionsNav?.view.isHidden = true
+        videoHomeNav?.view.isHidden = true
+        videoSubscriptionsNav?.view.isHidden = true
         searchVC?.view.isHidden = true
         if case .web = tabContent {} else { browseViews.values.forEach { $0.isHidden = true } }
         switch tabContent {
@@ -462,10 +495,18 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             homeController().view.isHidden = false
         case .musicSubscriptions:
             subscriptionsController().view.isHidden = false
+        case .videoHome:
+            videoFeedController(home: true).view.isHidden = false
+        case .videoSubscriptions:
+            videoFeedController(home: false).view.isHidden = false
         case .web(let root):
             let webView = browseView(for: index)
             browseViews.forEach { $0.value.isHidden = $0.key != index }
-            if browseRoots[index] != root {
+            if terminatedViews.remove(ObjectIdentifier(webView)) != nil {
+                // Пока окно было скрыто, iOS выгрузила его — грузим сейчас, когда его открыли.
+                if let url = webView.url { webView.load(URLRequest(url: url)) } else { load(path: root, in: webView) }
+                browseRoots[index] = root
+            } else if browseRoots[index] != root {
                 load(path: root, in: webView)
                 browseRoots[index] = root
             }
@@ -490,7 +531,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     /// Повторное нажатие на открытую вкладку: сначала наверх, потом к началу раздела.
     private func reselectTab(_ index: Int) {
         // Лента на «Главной» в режиме музыки — повторное нажатие возвращает к подборкам.
-        if index == 0 && Settings.musicMode && musicFeedShown {
+        if index == 0 && musicFeedShown {
             musicFeedShown = false
             showTab(0)
             return
@@ -508,6 +549,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             }
         case .musicSubscriptions:
             (subscriptionsNav?.viewControllers.first as? MusicHomeViewController)?.scrollToTop()
+        case .videoHome:
+            (videoHomeNav?.viewControllers.first as? VideoFeedViewController)?.scrollToTop()
+        case .videoSubscriptions:
+            (videoSubscriptionsNav?.viewControllers.first as? VideoFeedViewController)?.scrollToTop()
         case .web(let root):
             let webView = browseView(for: index)
             let scroll = webView.scrollView
@@ -630,6 +675,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Скрытое окно не грузим сразу — iOS выгрузила его из-за памяти, сразу снова занять память — выгрузит опять.
+        if webView.isHidden {
+            terminatedViews.insert(ObjectIdentifier(webView))
+            return
+        }
         if let url = webView.url {
             webView.load(URLRequest(url: url))
         } else if let index = browseViews.first(where: { $0.value === webView })?.key, case let .web(root) = content(for: index) {
@@ -638,6 +688,17 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     // MARK: - Фон и прерывания
+
+    /// Режим видео: уходим на домашний экран — видео продолжает играть окошком («картинка в картинке»), как в приложении YouTube.
+    @objc private func willResignActive() {
+        guard !Settings.musicMode, playerState != .hidden else { return }
+        playerView.startAutoPiP()
+    }
+
+    /// Вернулись (или это был только пункт управления) — видео снова в приложении.
+    @objc private func didBecomeActive() {
+        playerView.stopAutoPiP()
+    }
 
     @objc private func didEnterBackground() {
         try? AVAudioSession.sharedInstance().setActive(true)

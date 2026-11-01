@@ -1,0 +1,277 @@
+import UIKit
+
+/// Режим «Видео»: «Главная» и «Подписки» — свои плавные ленты, как в приложении YouTube (просьба владельца после 1.78:
+/// «всё плавно и не грузит снова и снова»). Данные — внутренний API YouTube из скрытого окна (`__fonCloud.videoFeed`),
+/// страница за страницей при прокрутке; загруженное держится в памяти — при переключении вкладок не грузится заново,
+/// обновить — потянуть вниз. Видео играет обычный плеер YouTube (качество как в приложении).
+/// iPhone — одна колонка во всю ширину, iPad — сетка (колонка на каждые ~360 pt).
+final class VideoFeedViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
+    struct Video {
+        let id: String
+        let title: String
+        let channel: String
+        let channelID: String
+        let avatar: URL?
+        let meta: String
+        let duration: String
+
+        init?(_ dict: [String: Any]) {
+            guard let id = dict["id"] as? String, let title = dict["title"] as? String, !title.isEmpty else { return nil }
+            self.id = id
+            self.title = title
+            channel = dict["channel"] as? String ?? ""
+            channelID = dict["channelId"] as? String ?? ""
+            avatar = (dict["avatar"] as? String).flatMap { URL(string: $0.hasPrefix("//") ? "https:" + $0 : $0) }
+            meta = dict["meta"] as? String ?? ""
+            duration = dict["duration"] as? String ?? ""
+        }
+    }
+
+    var onPlay: ((URL) -> Void)?
+
+    private let browseID: String
+    private var videos: [Video] = []
+    private var nextToken: String?
+    private var loading = false
+    private var message: String?
+    private var collectionView: UICollectionView!
+
+    init(browseID: String, title: String) {
+        self.browseID = browseID
+        super.init(nibName: nil, bundle: nil)
+        self.title = title
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        collectionView.backgroundColor = .black
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.register(VideoCell.self, forCellWithReuseIdentifier: "video")
+        collectionView.register(StatusCell.self, forCellWithReuseIdentifier: "status")
+        let refresh = UIRefreshControl()
+        refresh.tintColor = .white
+        refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
+        collectionView.refreshControl = refresh
+        view.addSubview(collectionView)
+        load(reset: true)
+    }
+
+    func scrollToTop() {
+        collectionView?.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: true)
+    }
+
+    @objc private func pullToRefresh() {
+        load(reset: true) { [weak self] in self?.collectionView.refreshControl?.endRefreshing() }
+    }
+
+    // MARK: - Данные
+
+    private func load(reset: Bool, completion: (() -> Void)? = nil) {
+        guard !loading, reset || nextToken != nil else {
+            completion?()
+            return
+        }
+        loading = true
+        if videos.isEmpty { message = "Загрузка…" }
+        let browseID = browseID
+        let token: Any = reset ? NSNull() : (nextToken ?? NSNull())
+        HiddenPage.youtube.call("__fonCloud.videoFeed(browseId, token)", { ["browseId": browseID, "token": token] }) { [weak self] result in
+            guard let self else { return }
+            self.loading = false
+            switch result {
+            case .success(let value):
+                let dict = value as? [String: Any] ?? [:]
+                let page = (dict["items"] as? [[String: Any]] ?? []).compactMap(Video.init)
+                if reset {
+                    self.videos = page
+                } else {
+                    let known = Set(self.videos.map(\.id))
+                    self.videos += page.filter { !known.contains($0.id) }
+                }
+                self.nextToken = dict["next"] as? String
+                self.message = self.videos.isEmpty ? "Здесь пока пусто.\nПотяните вниз, чтобы обновить." : nil
+            case .failure(let error):
+                let text = ((error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String) ?? error.localizedDescription
+                if self.videos.isEmpty {
+                    self.message = text.contains("signed-out")
+                        ? "Войдите в аккаунт Google: «Вы» → «Войти»."
+                        : "Лента не загрузилась.\nПотяните вниз, чтобы повторить."
+                }
+            }
+            self.collectionView.reloadData()
+            completion?()
+        }
+    }
+
+    // MARK: - Раскладка
+
+    private func makeLayout() -> UICollectionViewCompositionalLayout {
+        UICollectionViewCompositionalLayout { [weak self] _, environment in
+            let width = environment.container.effectiveContentSize.width
+            if self?.videos.isEmpty ?? true {
+                let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(200))
+                return NSCollectionLayoutSection(group: .horizontal(layoutSize: size, subitems: [NSCollectionLayoutItem(layoutSize: size)]))
+            }
+            // iPhone — во всю ширину без полей, как в приложении; iPad — сетка карточек со скруглением.
+            let columns = max(1, Int(width / 360))
+            let inset: CGFloat = columns == 1 ? 0 : 16
+            let spacing: CGFloat = 16
+            let itemWidth = (width - inset * 2 - spacing * CGFloat(columns - 1)) / CGFloat(columns)
+            let height = (itemWidth * 9 / 16).rounded() + VideoCell.textHeight
+            let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1 / CGFloat(columns)), heightDimension: .fractionalHeight(1)))
+            let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(height)),
+                                                           repeatingSubitem: item, count: columns)
+            group.interItemSpacing = .fixed(spacing)
+            let section = NSCollectionLayoutSection(group: group)
+            section.interGroupSpacing = columns == 1 ? 8 : 20
+            section.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: inset, bottom: 24, trailing: inset)
+            return section
+        }
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: { _ in self.collectionView.collectionViewLayout.invalidateLayout() })
+    }
+
+    // MARK: - UICollectionView
+
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        videos.isEmpty ? 1 : videos.count
+    }
+
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        if videos.isEmpty {
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "status", for: indexPath) as! StatusCell
+            cell.label.text = message ?? "Загрузка…"
+            return cell
+        }
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "video", for: indexPath) as! VideoCell
+        cell.configure(videos[indexPath.item], rounded: view.bounds.width >= 720)
+        return cell
+    }
+
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        // Подгружаем следующую страницу заранее — лента не «упирается» в конец.
+        if !videos.isEmpty, indexPath.item >= videos.count - 6 { load(reset: false) }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        guard videos.indices.contains(indexPath.item),
+              let url = YouTubeLinks.watch(videos[indexPath.item].id) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onPlay?(url)
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didHighlightItemAt indexPath: IndexPath) {
+        UIView.animate(withDuration: 0.12) { collectionView.cellForItem(at: indexPath)?.alpha = 0.6 }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didUnhighlightItemAt indexPath: IndexPath) {
+        UIView.animate(withDuration: 0.25) { collectionView.cellForItem(at: indexPath)?.alpha = 1 }
+    }
+}
+
+/// Карточка видео, как в приложении YouTube: превью 16:9 с длительностью, ниже аватар канала, название в две строки
+/// и «канал · просмотры · когда».
+private final class VideoCell: UICollectionViewCell {
+    static let textHeight: CGFloat = 84
+
+    private let thumbnail = UIImageView()
+    private let durationLabel = UILabel()
+    private let avatar = UIImageView()
+    private let titleLabel = UILabel()
+    private let metaLabel = UILabel()
+    private var videoID: String?
+    private var avatarURL: URL?
+    private var rounded = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        thumbnail.contentMode = .scaleAspectFill
+        thumbnail.clipsToBounds = true
+        thumbnail.backgroundColor = UIColor(white: 0.14, alpha: 1)
+        durationLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        durationLabel.textColor = .white
+        durationLabel.backgroundColor = UIColor(white: 0, alpha: 0.75)
+        durationLabel.textAlignment = .center
+        durationLabel.layer.cornerRadius = 4
+        durationLabel.clipsToBounds = true
+        avatar.contentMode = .scaleAspectFill
+        avatar.clipsToBounds = true
+        avatar.backgroundColor = UIColor(white: 0.2, alpha: 1)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.numberOfLines = 2
+        metaLabel.font = .systemFont(ofSize: 12)
+        metaLabel.textColor = UIColor(white: 0.65, alpha: 1)
+        metaLabel.numberOfLines = 1
+        [thumbnail, durationLabel, avatar, titleLabel, metaLabel].forEach { contentView.addSubview($0) }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(_ video: VideoFeedViewController.Video, rounded: Bool) {
+        self.rounded = rounded
+        titleLabel.text = video.title
+        metaLabel.text = [video.channel, video.meta].filter { !$0.isEmpty }.joined(separator: " · ")
+        durationLabel.text = video.duration
+        durationLabel.isHidden = video.duration.isEmpty
+        videoID = video.id
+        thumbnail.image = nil
+        ArtworkLoader.shared.load(video.id, size: .large) { [weak self] image, _ in
+            guard self?.videoID == video.id else { return }
+            self?.thumbnail.image = image
+        }
+        avatarURL = video.avatar
+        avatar.image = nil
+        if let url = video.avatar {
+            ArtworkLoader.shared.load(url: url) { [weak self] image in
+                guard self?.avatarURL == url else { return }
+                self?.avatar.image = image
+            }
+        }
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let w = contentView.bounds.width
+        let thumbHeight = (w * 9 / 16).rounded()
+        thumbnail.frame = CGRect(x: 0, y: 0, width: w, height: thumbHeight)
+        thumbnail.layer.cornerRadius = rounded ? 12 : 0
+        let durationSize = durationLabel.sizeThatFits(CGSize(width: 120, height: 20))
+        durationLabel.frame = CGRect(x: w - durationSize.width - 18, y: thumbHeight - 26, width: durationSize.width + 10, height: 20)
+        let pad: CGFloat = rounded ? 0 : 12
+        avatar.frame = CGRect(x: pad, y: thumbHeight + 12, width: 36, height: 36)
+        avatar.layer.cornerRadius = 18
+        let textX = avatar.frame.maxX + 12
+        let textW = max(0, w - textX - pad)
+        let titleSize = titleLabel.sizeThatFits(CGSize(width: textW, height: 44))
+        titleLabel.frame = CGRect(x: textX, y: thumbHeight + 10, width: textW, height: min(42, titleSize.height))
+        metaLabel.frame = CGRect(x: textX, y: titleLabel.frame.maxY + 3, width: textW, height: 16)
+    }
+}
+
+private final class StatusCell: UICollectionViewCell {
+    let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.font = .systemFont(ofSize: 15)
+        label.textColor = UIColor(white: 0.6, alpha: 1)
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        label.frame = contentView.bounds.insetBy(dx: 24, dy: 0)
+        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        contentView.addSubview(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}

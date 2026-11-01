@@ -337,6 +337,18 @@ enum Scripts {
         }
         break;
       }
+      // Автоматическая «картинка в картинке» при выходе на домашний экран (режим видео) — только включить / выключить.
+      case 'pipOn':
+        if (v && !v.paused && typeof v.webkitSetPresentationMode === 'function' && v.webkitPresentationMode !== 'picture-in-picture') {
+          try { v.disablePictureInPicture = false; v.removeAttribute('disablepictureinpicture'); } catch (e) {}
+          v.webkitSetPresentationMode('picture-in-picture');
+        }
+        break;
+      case 'pipOff':
+        if (v && typeof v.webkitSetPresentationMode === 'function' && v.webkitPresentationMode === 'picture-in-picture') {
+          v.webkitSetPresentationMode('inline');
+        }
+        break;
       case 'prev':
         if (v && v.currentTime > 3) v.currentTime = 0; else history.back();
         break;
@@ -1142,6 +1154,38 @@ enum Scripts {
         r = next && next.token ? await api('browse', { continuation: next.token }) : null;
       }
       return out;
+    },
+    // Режим «Видео»: «Главная» (FEwhat_to_watch) и «Подписки» (FEsubscriptions) — своими плавными лентами, как в
+    // приложении YouTube (просьба владельца после 1.78). Страница за страницей: token — продолжение из прошлого ответа.
+    // { items: [{ id, title, channel, channelId, avatar, meta, duration }], next }
+    async videoFeed(browseId, token) {
+      const r = token ? await api('browse', { continuation: token }) : await api('browse', { browseId });
+      const items = [], seen = new Set();
+      const avatarOf = (v) => findAll(v || {}, 'url').find((u) => typeof u === 'string' && /ggpht\.com|googleusercontent\.com/.test(u)) || '';
+      const add = (x) => { if (x.id && x.title && !seen.has(x.id)) { seen.add(x.id); items.push(x); } };
+      for (const v of findAll(r, 'videoWithContextRenderer').concat(findAll(r, 'videoRenderer'))) {
+        if (!v || !v.videoId || findAll(v, 'reelWatchEndpoint').length) continue;
+        const by = v.shortBylineText || v.longBylineText || v.ownerText;
+        add({ id: v.videoId, title: text(v.headline || v.title), channel: text(by),
+              channelId: findAll(by || {}, 'browseId')[0] || '',
+              avatar: avatarOf(v.channelThumbnail || v.channelThumbnailSupportedRenderers),
+              meta: [text(v.shortViewCountText || v.viewCountText), text(v.publishedTimeText)].filter(Boolean).join(' · '),
+              duration: text(v.lengthText) });
+      }
+      for (const l of findAll(r, 'lockupViewModel')) {
+        if (!l || !l.contentId || (l.contentType && l.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO')) continue;
+        if (findAll(l, 'reelWatchEndpoint').length) continue;
+        const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
+        const rows = (findAll(meta, 'metadataRows')[0] || []).map((row) =>
+          (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean));
+        const badge = findAll(l, 'thumbnailBadgeViewModel')[0];
+        add({ id: l.contentId, title: (meta.title && meta.title.content) || '', channel: (rows[0] && rows[0][0]) || '',
+              channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
+              avatar: avatarOf(meta.image || findAll(l, 'decoratedAvatarViewModel')[0]),
+              meta: (rows[1] || []).join(' · '), duration: (badge && badge.text) || '' });
+      }
+      const next = findAll(r, 'continuationCommand').filter((c) => c && c.token).pop();
+      return { items, next: next ? next.token : null };
     },
     // Запасные подборки, если YouTube Music недоступен: главная YouTube с фильтром «Музыка».
     // { chip, videos: [...], mixes: [{ title, playlistId, videoId }] }

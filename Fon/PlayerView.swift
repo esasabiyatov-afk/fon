@@ -253,6 +253,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func updateVisibility() {
         let isMini = mode == .mini
         [titleLabel, subtitleLabel, miniLikeButton, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
+        // Окно видео: без подписей и ♡, кнопки — на тёмных кружках поверх картинки.
+        if isMini && !musicMode { [titleLabel, subtitleLabel, miniLikeButton].forEach { $0.isHidden = true } }
+        for button in [playPauseButton, closeButton] {
+            button.backgroundColor = isMini && !musicMode ? UIColor(white: 0, alpha: 0.45) : .clear
+            button.layer.cornerRadius = isMini && !musicMode ? 18 : 0
+        }
         let miniSymbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
         closeButton.setImage(UIImage(systemName: musicMode ? "forward.fill" : "xmark", withConfiguration: miniSymbols), for: .normal)
         closeButton.accessibilityLabel = musicMode ? "Следующий трек" : "Закрыть"
@@ -479,6 +485,22 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         runJS("window.__fon && __fon.repaint && __fon.repaint()")
     }
 
+    /// Выход на домашний экран в режиме видео — видео продолжает играть окошком поверх других приложений, как в
+    /// приложении YouTube (просьба владельца после 1.78). Вернулись (или это был лишь пункт управления) — обратно.
+    private var autoPiP = false
+
+    func startAutoPiP() {
+        guard !musicMode, !webPaused, currentVideoID != nil else { return }
+        autoPiP = true
+        runJS("window.__fon && __fon.cmd && __fon.cmd('pipOn')")
+    }
+
+    func stopAutoPiP() {
+        guard autoPiP else { return }
+        autoPiP = false
+        runJS("window.__fon && __fon.cmd && __fon.cmd('pipOff')")
+    }
+
     func exitFullscreen() {
         runJS("window.__fon && __fon.setFull && __fon.setFull(false)")
     }
@@ -638,9 +660,14 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
                 webView.frame = miniArtwork.frame
                 leftWidth = miniArtwork.frame.maxX
             } else {
-                let videoW = (h * 16 / 9).rounded()
-                webView.frame = CGRect(x: 0, y: 0, width: videoW, height: h)
-                leftWidth = videoW
+                // Режим видео — маленькое окно с видео, как в приложении YouTube (просьба владельца после 1.78):
+                // видео на всё окно, ⏸ снизу слева, ✕ сверху справа; нажатие — развернуть, вниз — закрыть.
+                webView.frame = bounds
+                let b: CGFloat = 36
+                playPauseButton.frame = CGRect(x: 6, y: h - b - 6, width: b, height: b)
+                closeButton.frame = CGRect(x: w - b - 6, y: 6, width: b, height: b)
+                progressView.frame = CGRect(x: 0, y: h - 3, width: w * progress, height: 3)
+                return
             }
             let buttonW: CGFloat = 48
             closeButton.frame = CGRect(x: w - buttonW, y: 0, width: buttonW, height: h)
@@ -824,6 +851,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         decisionHandler(WebViewFactory.policy(for: navigationAction))
+    }
+
+    /// iOS выгрузила страницу плеера из памяти — грузим то же видео снова (иначе вместо видео пустое окно).
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if let url = webView.url, url.absoluteString != "about:blank" { webView.load(URLRequest(url: url)) }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
