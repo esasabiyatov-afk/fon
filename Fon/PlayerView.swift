@@ -853,11 +853,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         decisionHandler(WebViewFactory.policy(for: navigationAction))
     }
 
-    /// iOS выгрузила страницу плеера из памяти — грузим то же видео снова (иначе вместо видео пустое окно).
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if let url = webView.url, url.absoluteString != "about:blank" { webView.load(URLRequest(url: url)) }
-    }
-
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         applyPageState() // повторно применяем режимы после перезагрузки страницы
     }

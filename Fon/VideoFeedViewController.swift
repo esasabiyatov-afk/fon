@@ -80,7 +80,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         loading = true
         if videos.isEmpty { message = "Загрузка…" }
         let browseID = browseID
-        let token: Any = reset ? NSNull() : (nextToken ?? NSNull())
+        let token: Any = reset ? NSNull() : (nextToken.map { $0 as Any } ?? NSNull())
         HiddenPage.youtube.call("__fonCloud.videoFeed(browseId, token)", { ["browseId": browseID, "token": token] }) { [weak self] result in
             guard let self else { return }
             self.loading = false
