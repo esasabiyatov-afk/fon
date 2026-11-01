@@ -485,22 +485,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         runJS("window.__fon && __fon.repaint && __fon.repaint()")
     }
 
-    /// Выход на домашний экран в режиме видео — видео продолжает играть окошком поверх других приложений, как в
-    /// приложении YouTube (просьба владельца после 1.78). Вернулись (или это был лишь пункт управления) — обратно.
-    private var autoPiP = false
-
-    func startAutoPiP() {
-        guard !musicMode, !webPaused, currentVideoID != nil else { return }
-        autoPiP = true
-        runJS("window.__fon && __fon.cmd && __fon.cmd('pipOn')")
-    }
-
-    func stopAutoPiP() {
-        guard autoPiP else { return }
-        autoPiP = false
-        runJS("window.__fon && __fon.cmd && __fon.cmd('pipOff')")
-    }
-
     func exitFullscreen() {
         runJS("window.__fon && __fon.setFull && __fon.setFull(false)")
     }

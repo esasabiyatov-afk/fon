@@ -141,8 +141,6 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
-        nc.addObserver(self, selector: #selector(willResignActive), name: UIApplication.willResignActiveNotification, object: nil)
-        nc.addObserver(self, selector: #selector(didBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
         nc.addObserver(self, selector: #selector(audioRouteChanged(_:)), name: AVAudioSession.routeChangeNotification, object: nil)
         nc.addObserver(self, selector: #selector(cloudFailed(_:)), name: CloudLikes.didFail, object: nil)
@@ -704,17 +702,6 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     }
 
     // MARK: - Фон и прерывания
-
-    /// Режим видео: уходим на домашний экран — видео продолжает играть окошком («картинка в картинке»), как в приложении YouTube.
-    @objc private func willResignActive() {
-        guard !Settings.musicMode, playerState != .hidden else { return }
-        playerView.startAutoPiP()
-    }
-
-    /// Вернулись (или это был только пункт управления) — видео снова в приложении.
-    @objc private func didBecomeActive() {
-        playerView.stopAutoPiP()
-    }
 
     @objc private func didEnterBackground() {
         try? AVAudioSession.sharedInstance().setActive(true)
