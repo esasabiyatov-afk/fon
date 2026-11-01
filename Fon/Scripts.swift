@@ -673,8 +673,23 @@ enum Scripts {
   // остаются время, глава, прогресс, ⚙, субтитры и кнопки плеера.
   const ACTION = /^(нравится|не нравится|поделиться|сохранить|like|dislike|share|save)/i;
   const MORE = /^(другие видео|more videos)$/i;
+  // Прятать можно только «допы»: блок, где есть пауза, ползунок, ⚙ или кнопка полного экрана, не трогаем. На iPad
+  // ряд «Нравится/Поделиться» и «Другие видео» лежат в одном блоке с кнопками плеера — его прятали целиком, и в полном
+  // экране не оставалось кнопок (жалоба владельца после 1.82).
+  const CORE = '.player-control-play-pause-icon, .fullscreen-icon, .player-settings-icon, .player-controls-middle, ' +
+    '[role="slider"], .ytm-progress-bar, .progress-bar, .time-display, .ytp-time-display, ytm-scrubber, .scrubber';
+  const safeToHide = (el) => {
+    if (!el || !el.querySelector) return false;
+    if (el.matches(CORE) || el.querySelector(CORE)) return false;
+    return el.querySelectorAll('button, [role="button"]').length <= 5;
+  };
+  const hideFull = (el) => { if (safeToHide(el)) el.classList.add('fon-hidden-full'); };
+  const unhideCore = () => {
+    for (const el of document.querySelectorAll('.fon-hidden-full')) if (!safeToHide(el)) el.classList.remove('fon-hidden-full');
+  };
   const tidyFullscreen = () => {
     if (!fon.isFull) return;
+    unhideCore();
     for (const root of [document.getElementById('player-control-overlay'), document.getElementById('player-container-id')]) {
       if (!root) continue;
       const buttons = Array.from(root.querySelectorAll('button[aria-label], [role="button"][aria-label]'))
@@ -682,19 +697,21 @@ enum Scripts {
       if (buttons.length >= 2) {
         let row = buttons[0].parentElement;
         while (row && row !== root && !buttons.every((b) => row.contains(b))) row = row.parentElement;
-        if (row && row !== root) row.classList.add('fon-hidden-full');
+        if (row && row !== root && safeToHide(row)) row.classList.add('fon-hidden-full');
+        else for (const b of buttons) hideFull(b);
       } else {
-        for (const b of buttons) b.classList.add('fon-hidden-full');
+        for (const b of buttons) hideFull(b);
       }
       for (const el of root.querySelectorAll('span, div, button, a, yt-formatted-string')) {
         if (el.children.length || !MORE.test((el.textContent || '').trim())) continue;
         const box = el.closest('button, [role="button"], a') || el.parentElement;
         let target = box;
         // Подняться до блока с превью рядом с надписью, но не выше самой панели.
-        while (target && target.parentElement && target.parentElement !== root && target.parentElement.querySelector('img') && !target.querySelector('img')) {
+        while (target && target.parentElement && target.parentElement !== root && target.parentElement.querySelector('img') &&
+               !target.querySelector('img') && safeToHide(target.parentElement)) {
           target = target.parentElement;
         }
-        if (target && target !== root) target.classList.add('fon-hidden-full');
+        if (target && target !== root) hideFull(target);
       }
     }
   };
@@ -708,7 +725,7 @@ enum Scripts {
     for (const img of extra.querySelectorAll('img')) {
       if (img.getBoundingClientRect().width < 40) continue; // аватарки не трогаем
       const box = img.closest('button, a, [role="button"]') || img.parentElement;
-      if (box && box !== extra) box.classList.add('fon-hidden-full');
+      if (box && box !== extra) hideFull(box);
     }
   };
   setInterval(() => { tidyFullscreen(); hideFullscreenThumbs(); if (fon.hideMoreButton) fon.hideMoreButton(); }, 1000);
@@ -853,8 +870,9 @@ enum Scripts {
   };
   fon.hideMoreButton = () => {
     if (!fon.isFull) return;
-    const { more } = fullControls();
-    if (more) more.classList.add('fon-hidden-full');
+    const { full, more } = fullControls();
+    // Только настоящая ⋮: не кнопка полного экрана и не что-то с подписью другой кнопки плеера.
+    if (more && more !== full && !FULL_BUTTON.test(labelOf(more)) && /^(ещё|еще|more|другие действия|действия|меню|)$/i.test(labelOf(more).trim())) hideFull(more);
   };
   const fullButton = (target) => {
     if (!fon.isFull || !target || !target.closest) return null;
