@@ -499,7 +499,8 @@ enum Scripts {
     if (root.classList.contains('fon-mini') === on) return;
     root.classList.toggle('fon-mini', on);
     for (const t of [60, 350, 900]) setTimeout(() => fire(window, 'resize'), t);
-    if (!on) setTimeout(() => { try { fon.repaint(); } catch (e) {} }, 500);
+    // И в окно мини-плеера, и обратно — перерисовать: в окне мини-плеера видео бывало чёрным (скриншот после 1.81).
+    for (const t of [400, 1200]) setTimeout(() => { try { fon.repaint(); } catch (e) {} }, t);
   };
 
   // --- 4a. Полный экран. На iPhone YouTube включает системный полноэкранный плеер iOS —
@@ -1190,13 +1191,16 @@ enum Scripts {
         if (!l || !l.contentId || (l.contentType && l.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO')) continue;
         if (findAll(l, 'reelWatchEndpoint').length) continue;
         const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
-        const rows = (findAll(meta, 'metadataRows')[0] || []).map((row) =>
-          (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean));
+        // Канал, просмотры и дата бывают и в разных строках, и в одной (тогда дата не показывалась — скриншот
+        // владельца после 1.81): берём все части подряд — первая канал, остальное «просмотры · когда».
+        const parts = [].concat(...(findAll(meta, 'metadataRows')[0] || []).map((row) =>
+          (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean)))
+          .filter((t) => !/^\s*[•·]\s*$/.test(t));
         const badge = findAll(l, 'thumbnailBadgeViewModel')[0];
-        add({ id: l.contentId, title: (meta.title && meta.title.content) || '', channel: (rows[0] && rows[0][0]) || '',
+        add({ id: l.contentId, title: (meta.title && meta.title.content) || '', channel: parts[0] || '',
               channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
               avatar: avatarOf(meta.image || findAll(l, 'decoratedAvatarViewModel')[0]),
-              meta: (rows[1] || []).join(' · '), duration: (badge && badge.text) || '' });
+              meta: parts.slice(1).join(' · '), duration: (badge && badge.text) || '' });
       }
       const next = findAll(r, 'continuationCommand').filter((c) => c && c.token).pop();
       return { items, next: next ? next.token : null };
