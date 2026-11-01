@@ -348,6 +348,7 @@ enum Scripts {
         if (v && typeof v.webkitSetPresentationMode === 'function' && v.webkitPresentationMode === 'picture-in-picture') {
           v.webkitSetPresentationMode('inline');
         }
+        for (const t of [300, 1000]) setTimeout(() => { fire(window, 'resize'); try { fon.repaint(); } catch (e) {} }, t);
         break;
       case 'prev':
         if (v && v.currentTime > 3) v.currentTime = 0; else history.back();
@@ -396,6 +397,17 @@ enum Scripts {
     html.fon-mini video {
       position: fixed !important; top: 0 !important; left: 0 !important;
       width: 100vw !important; height: 100vh !important; object-fit: cover !important;
+    }
+    /* Обычный плеер: видео всегда ровно в своей рамке. После окна мини-плеера, «картинки в картинке»
+       или поворота YouTube оставлял у видео старые размеры и сдвиг — картинка вылезала поверх названия
+       (скриншот владельца после 1.80). */
+    html:not(.fon-mini):not(.fon-full) .html5-video-container {
+      position: absolute !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important; overflow: hidden !important;
+    }
+    html:not(.fon-mini):not(.fon-full) .html5-video-container video {
+      position: absolute !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important; object-fit: contain !important;
     }
     html.fon-mini #player-control-overlay,
     html.fon-mini .player-controls-content,
@@ -499,6 +511,7 @@ enum Scripts {
     if (root.classList.contains('fon-mini') === on) return;
     root.classList.toggle('fon-mini', on);
     for (const t of [60, 350, 900]) setTimeout(() => fire(window, 'resize'), t);
+    if (!on) setTimeout(() => { try { fon.repaint(); } catch (e) {} }, 500);
   };
 
   // --- 4a. Полный экран. На iPhone YouTube включает системный полноэкранный плеер iOS —
