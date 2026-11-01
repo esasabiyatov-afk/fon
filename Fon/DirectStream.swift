@@ -7,8 +7,36 @@ import JavaScriptCore
 /// по журналу 1.63). Расшифровывает «решатель» yt-dlp (`ChallengeSolver`) — тот же код, что выполнил бы браузер.
 /// Запросы идут из приложения (URLSession + JavaScriptCore) — работают и в фоне, звук приложения не трогают.
 enum DirectStream {
+    /// На iPad (iPadOS 26.2, вход есть, 1.76) страница отдала форматы без ссылок — «ссылки не разобрались»: похоже, этому
+    /// посетителю/аккаунту YouTube включил только свой протокол (SABR). Тогда пробуем ещё раз без cookies экспериментов
+    /// посетителя (VISITOR_INFO1_LIVE, PREF…), а затем совсем без cookies — пока не найдётся обычная ссылка.
     static func find(_ videoID: String) async -> YouTubeStreams.Result {
         await YouTubeSession.refreshed()
+        let visitor: Set<String> = ["VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "__Secure-ROLLOUT_TOKEN", "PREF", "YSC", "__Secure-YEC"]
+        let attempts: [(label: String, cookie: String?)] = [
+            ("", YouTubeSession.cookieHeader),
+            ("без cookies посетителя", YouTubeSession.cookieHeaderWithout(visitor)),
+            ("без входа", nil)
+        ]
+        var reasons: [String] = []
+        var last = YouTubeStreams.Result()
+        for (index, attempt) in attempts.enumerated() {
+            let result = await self.attempt(videoID, cookie: attempt.cookie)
+            if !result.streams.isEmpty {
+                var found = result
+                if index > 0 { found.reason = "сработало \(attempt.label)" }
+                return found
+            }
+            reasons.append(attempt.label.isEmpty ? (result.reason ?? "?") : "\(attempt.label): \(result.reason ?? "?")")
+            // Повтор помогает только когда у форматов нет ссылок; сеть, капча, вход — не лечатся.
+            last = result
+            last.reason = reasons.joined(separator: "; ")
+            guard result.noLinks else { break }
+        }
+        return last
+    }
+
+    private static func attempt(_ videoID: String, cookie: String?) async -> YouTubeStreams.Result {
         var result = YouTubeStreams.Result()
         func fail(_ reason: String) -> YouTubeStreams.Result {
             result.reason = reason
@@ -20,7 +48,7 @@ enum DirectStream {
         request.setValue(YouTubeStreams.iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return fail("YouTube не ответил (сеть)") }
         let http = reply as? HTTPURLResponse
         if let final = http?.url, final.path.hasPrefix("/sorry") || final.host != url.host { return fail("YouTube просит проверку (капча)") }
@@ -44,7 +72,14 @@ enum DirectStream {
             let why = ((response["playabilityStatus"] as? [String: Any])?["reason"] as? String) ?? ""
             return fail("YouTube: \(status) \(why.prefix(60))")
         }
-        guard !picked.isEmpty else { return fail("нет подходящего формата") }
+        // Для диагностики: есть ли у ответа свой протокол YouTube и какие поля у выбранного формата.
+        let sabr = streaming["serverAbrStreamingUrl"] != nil ? "SABR: да" : "SABR: нет"
+        let fields = (picked.last ?? [:]).keys.filter { !["itag", "mimeType", "bitrate", "width", "height"].contains($0) }.sorted()
+        let detail = "форматов \(formats.count)+\(adaptive.count), \(sabr), поля: \(fields.prefix(12).joined(separator: ","))"
+        guard !picked.isEmpty else {
+            result.noLinks = true
+            return fail("нет подходящего формата (\(detail))")
+        }
         YouTubeStreams.rememberConfig(from: data) // для очереди микса
         guard let jsPath = YouTubeStreams.string(in: data, after: "\"jsUrl\":\""),
               let playerURL = URL(string: YouTubeStreams.origin + jsPath.replacingOccurrences(of: "\\/", with: "/")) else {
@@ -52,7 +87,10 @@ enum DirectStream {
         }
         // Ссылки + что расшифровать: подпись (из signatureCipher) и n (в самой ссылке).
         let links = picked.compactMap(Link.init)
-        guard !links.isEmpty else { return fail("ссылки не разобрались") }
+        guard !links.isEmpty else {
+            result.noLinks = true
+            return fail("ссылки не разобрались (\(detail))")
+        }
         let solved: ChallengeSolver.Solved
         do {
             solved = try await ChallengeSolver.shared.solve(playerURL: playerURL,
@@ -85,7 +123,7 @@ enum DirectStream {
             var param = "signature"
             if let direct = format["url"] as? String {
                 base = direct
-            } else if let cipher = format["signatureCipher"] as? String {
+            } else if let cipher = (format["signatureCipher"] ?? format["cipher"]) as? String {
                 let items = URLComponents(string: "?" + cipher)?.queryItems ?? []
                 base = items.first { $0.name == "url" }?.value
                 signature = items.first { $0.name == "s" }?.value

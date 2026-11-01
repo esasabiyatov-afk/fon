@@ -55,10 +55,12 @@ enum YouTubeSession {
         return "cookies: \(cookies.count), вход: \(signedIn ? "да" : "нет")"
     }
 
-    static var cookieHeader: String? {
+    static var cookieHeader: String? { cookieHeaderWithout([]) }
+
+    static func cookieHeaderWithout(_ names: Set<String>) -> String? {
         lock.lock()
         defer { lock.unlock() }
-        return HTTPCookie.requestHeaderFields(with: cookies)["Cookie"]
+        return HTTPCookie.requestHeaderFields(with: cookies.filter { !names.contains($0.name) })["Cookie"]
     }
 
     private static var sapisid: String? {
@@ -124,6 +126,8 @@ enum YouTubeStreams {
         var channelID: String?
         /// Почему потока нет (для подсказки при переходе в веб-плеер).
         var reason: String?
+        /// У форматов на странице не нашлось ссылок (повтор без cookies посетителя может помочь).
+        var noLinks = false
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
