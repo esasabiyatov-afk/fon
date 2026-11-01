@@ -486,10 +486,7 @@ enum Scripts {
     /* Вертикальный полный экран: субтитры сразу под картинкой, а не внизу экрана. */
     /* Ряд «Нравится/Поделиться/Сохранить» и «Другие видео» в полном экране наезжали на время и главу. */
     html.fon-full .fon-hidden-full { display: none !important; }
-    /* Допы YouTube в полном экране — ⋮ («ещё», ничего не делает), подсказка «Другие видео» с миниатюрой, закрывавшая
-       кнопку, и полоса похожих видео внизу (скриншот владельца после 1.72). Время, ползунок, ⚙, субтитры и
-       пауза — в других элементах панели. */
-    html.fon-full player-fullscreen-controls { display: none !important; }
+
     html.fon-full.fon-cap-below .caption-window {
       top: var(--fon-cap-top, auto) !important; bottom: auto !important;
     }
@@ -653,7 +650,20 @@ enum Scripts {
       }
     }
   };
-  setInterval(() => { tidyFullscreen(); if (fon.hideMoreButton) fon.hideMoreButton(); }, 1000);
+  // Миниатюры похожих видео в полноэкранной панели (подсказка «Другие видео», закрывавшая кнопку выхода, и полоса
+  // внизу). Прятать всю `player-fullscreen-controls` нельзя: на iPad в ней все кнопки полного экрана (жалоба владельца
+  // после 1.78: «в полном экране кнопок нету»). Значки там — svg, а миниатюры — img: прячем только их блоки.
+  const hideFullscreenThumbs = () => {
+    if (!fon.isFull) return;
+    const extra = document.querySelector('player-fullscreen-controls');
+    if (!extra) return;
+    for (const img of extra.querySelectorAll('img')) {
+      if (img.getBoundingClientRect().width < 40) continue; // аватарки не трогаем
+      const box = img.closest('button, a, [role="button"]') || img.parentElement;
+      if (box && box !== extra) box.classList.add('fon-hidden-full');
+    }
+  };
+  setInterval(() => { tidyFullscreen(); hideFullscreenThumbs(); if (fon.hideMoreButton) fon.hideMoreButton(); }, 1000);
   fon.tidyFullscreen = tidyFullscreen;
 
   // Видео «зависло» на загрузке (часто после долгой паузы в свёрнутом приложении: WebKit выгружает буфер).
@@ -864,6 +874,9 @@ enum Scripts {
     try { localStorage.setItem('fon-music', fon.musicMode ? '1' : '0'); } catch (e) {}
     document.documentElement.classList.toggle('fon-music', fon.musicMode);
     applyQuality();
+    // Из режима музыки в видео: видео долго было скрыто — WebKit мог потерять картинку (на iPad: «видео не идёт,
+    // только обложка, а звук идёт»). Перерисовываем.
+    if (!fon.musicMode) for (const t of [400, 1500]) setTimeout(() => { try { fon.repaint(); } catch (e) {} }, t);
   };
 
   const ytPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
