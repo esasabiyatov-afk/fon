@@ -10,17 +10,21 @@ enum DirectStream {
     static func find(_ videoID: String) async -> YouTubeStreams.Result {
         await YouTubeSession.refreshed()
         var result = YouTubeStreams.Result()
-        guard let url = URL(string: "\(YouTubeStreams.origin)/watch?app=desktop&v=\(videoID)&hl=ru") else { return result }
+        func fail(_ reason: String) -> YouTubeStreams.Result {
+            result.reason = reason
+            return result
+        }
+        guard let url = URL(string: "\(YouTubeStreams.origin)/watch?app=desktop&v=\(videoID)&hl=ru") else { return fail("плохая ссылка") }
         var request = URLRequest(url: url, timeoutInterval: 15)
         request.httpShouldHandleCookies = false
         request.setValue(YouTubeStreams.iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return result }
+        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return fail("YouTube не ответил (сеть)") }
         let http = reply as? HTTPURLResponse
-        if let final = http?.url, final.path.hasPrefix("/sorry") || final.host != url.host { return result }
-        guard let response = YouTubeStreams.jsonObject(in: data, after: "ytInitialPlayerResponse = ") else { return result }
+        if let final = http?.url, final.path.hasPrefix("/sorry") || final.host != url.host { return fail("YouTube просит проверку (капча)") }
+        guard let response = YouTubeStreams.jsonObject(in: data, after: "ytInitialPlayerResponse = ") else { return fail("страница без данных плеера") }
         if let details = response["videoDetails"] as? [String: Any] {
             result.title = details["title"] as? String
             result.author = details["author"] as? String
@@ -36,25 +40,33 @@ enum DirectStream {
         var picked: [[String: Any]] = []
         if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) { picked.append(audio) }
         if let file = formats.first(where: { ($0["itag"] as? Int) == 18 }) ?? formats.first { picked.append(file) }
-        guard status == "OK", !picked.isEmpty else { return result }
+        if status != "OK" {
+            let why = ((response["playabilityStatus"] as? [String: Any])?["reason"] as? String) ?? ""
+            return fail("YouTube: \(status) \(why.prefix(60))")
+        }
+        guard !picked.isEmpty else { return fail("нет подходящего формата") }
         YouTubeStreams.rememberConfig(from: data) // для очереди микса
         guard let jsPath = YouTubeStreams.string(in: data, after: "\"jsUrl\":\""),
               let playerURL = URL(string: YouTubeStreams.origin + jsPath.replacingOccurrences(of: "\\/", with: "/")) else {
-            return result
+            return fail("нет ссылки на код плеера")
         }
         // Ссылки + что расшифровать: подпись (из signatureCipher) и n (в самой ссылке).
         let links = picked.compactMap(Link.init)
-        guard !links.isEmpty else { return result }
-        guard let solved = try? await ChallengeSolver.shared.solve(playerURL: playerURL,
-                                                                   n: Array(Set(links.compactMap(\.n))),
-                                                                   signatures: links.compactMap(\.signature)) else {
-            return result
+        guard !links.isEmpty else { return fail("ссылки не разобрались") }
+        let solved: ChallengeSolver.Solved
+        do {
+            solved = try await ChallengeSolver.shared.solve(playerURL: playerURL,
+                                                            n: Array(Set(links.compactMap(\.n))),
+                                                            signatures: links.compactMap(\.signature))
+        } catch {
+            return fail("решатель: " + String(String(describing: error).prefix(80)))
         }
         result.streams = links.compactMap { link in
             guard let url = link.url(solved) else { return nil }
             return AudioStream(url: url, headers: ["User-Agent": YouTubeStreams.iPhoneSafariUserAgent],
                                client: link.audioOnly ? "Прямо звук" : "Прямо файл")
         }
+        if result.streams.isEmpty { result.reason = "ссылки не собрались" }
         return result
     }
 

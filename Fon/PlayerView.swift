@@ -138,10 +138,14 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         NativeAudio.shared.onState = { [weak self] s in
             self?.applyState(id: s.id, title: s.title, artist: s.artist, paused: s.paused, time: s.time, duration: s.duration, loop: s.loop)
         }
-        NativeAudio.shared.onFallback = { [weak self] url in
+        NativeAudio.shared.onFallback = { [weak self] url, reason in
             guard let self else { return }
             self.musicView.systemPlayer = false
             self.webView.load(URLRequest(url: url))
+            // Почему не вышло — на экране (журнал отладки убран, а на iPad системный плеер не заводился).
+            if let reason {
+                self.showToast("Системный плеер не смог: \(reason). Играет обычный.", at: CGPoint(x: self.bounds.midX, y: self.bounds.midY), duration: 8)
+            }
         }
 
         // Шапка развёрнутого плеера
@@ -810,19 +814,22 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
 extension UIView {
     /// Короткая подсказка поверх экрана, сама исчезает.
-    func showToast(_ text: String, at center: CGPoint) {
+    func showToast(_ text: String, at center: CGPoint, duration: Double = 1.4) {
         let toast = UILabel()
-        toast.text = "  \(text)  "
+        toast.text = text
         toast.font = .systemFont(ofSize: 14, weight: .semibold)
         toast.textColor = .white
+        toast.textAlignment = .center
+        toast.numberOfLines = 0
         toast.backgroundColor = UIColor(white: 0.15, alpha: 0.95)
         toast.layer.cornerRadius = 16
         toast.clipsToBounds = true
-        toast.sizeToFit()
-        toast.frame.size.height = 32
+        // Длинный текст переносится: ширина — не больше ширины экрана без полей.
+        let fit = toast.sizeThatFits(CGSize(width: max(100, bounds.width - 64), height: .greatestFiniteMagnitude))
+        toast.frame.size = CGSize(width: min(fit.width + 24, bounds.width - 32), height: max(32, fit.height + 14))
         toast.center = center
         addSubview(toast)
-        UIView.animate(withDuration: 0.3, delay: 1.4, options: []) { toast.alpha = 0 } completion: { _ in toast.removeFromSuperview() }
+        UIView.animate(withDuration: 0.3, delay: duration, options: []) { toast.alpha = 0 } completion: { _ in toast.removeFromSuperview() }
     }
 }
 

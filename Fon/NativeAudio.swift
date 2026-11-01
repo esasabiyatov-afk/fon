@@ -102,6 +102,8 @@ enum YouTubeStreams {
         var title: String?
         var author: String?
         var channelID: String?
+        /// Почему потока нет (для подсказки при переходе в веб-плеер).
+        var reason: String?
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
@@ -241,7 +243,9 @@ final class NativeAudio: NSObject {
     }
 
     var onState: ((State) -> Void)?
-    var onFallback: ((URL) -> Void)?
+    var onFallback: ((URL, String?) -> Void)?
+    /// Последняя причина, по которой системному плееру не удалось включить трек.
+    private var lastReason: String?
 
     private(set) var active = false
     private let player = AVPlayer()
@@ -502,6 +506,7 @@ final class NativeAudio: NSObject {
             queueChanged()
         }
         candidates += result.streams
+        if result.streams.isEmpty, let reason = result.reason { lastReason = reason }
     }
 
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
@@ -529,6 +534,8 @@ final class NativeAudio: NSObject {
                         self.player.play()
                     }
                 case .failed:
+                    let text = (item.error as NSError?)?.localizedDescription ?? "?"
+                    self.lastReason = "плеер iOS: " + String(text.prefix(70))
                     self.tryNextCandidate()
                 default:
                     break
@@ -617,8 +624,10 @@ final class NativeAudio: NSObject {
     private func fallBackToWeb() {
         guard let track = currentTrack else { return }
         let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
+        let reason = lastReason
+        lastReason = nil
         deactivate()
-        if let url { onFallback?(url) }
+        if let url { onFallback?(url, reason) }
     }
 
     // MARK: - Команды
