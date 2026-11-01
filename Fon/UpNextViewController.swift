@@ -126,10 +126,13 @@ enum TrackVersions {
 }
 
 /// «Далее» — свайп вверх по музыкальному плееру (или кнопка списка): другие версии трека, очередь системного плеера
-/// и «＋» — найти и добавить своё. Только для системного плеера: у веб-плеера очередь ведёт YouTube.
+/// и «＋» — найти и добавить своё. У системного плеера — его очередь, у обычного плеера YouTube — `WebQueue`
+/// (свои добавленные + список YouTube на странице); там же слева «Страница» — страница видео YouTube.
 final class UpNextViewController: UITableViewController {
     private var tracks: [Track] = []
     private var currentID: String?
+    /// Только у обычного плеера: показать страницу YouTube (комментарии, описание).
+    var onShowPage: (() -> Void)?
 
     init() {
         super.init(style: .insetGrouped)
@@ -143,6 +146,9 @@ final class UpNextViewController: UITableViewController {
         navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "plus"), style: .plain,
                                                             target: self, action: #selector(addTapped))
         navigationItem.rightBarButtonItem?.accessibilityLabel = "Добавить в очередь"
+        if onShowPage != nil {
+            navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Страница", style: .plain, target: self, action: #selector(pageTapped))
+        }
         tableView.register(VersionsCell.self, forCellReuseIdentifier: "versions")
         tableView.register(QueueTrackCell.self, forCellReuseIdentifier: "track")
         let nc = NotificationCenter.default
@@ -152,11 +158,16 @@ final class UpNextViewController: UITableViewController {
     }
 
     @objc private func reload() {
-        let audio = NativeAudio.shared
+        let audio = UpNext.source
         tracks = audio.upcoming
         currentID = audio.currentTrack?.id
         if let track = audio.currentTrack { TrackVersions.prepare(track, rawTitle: audio.rawTitle(for: track.id)) }
         tableView.reloadData()
+    }
+
+    @objc private func pageTapped() {
+        let show = onShowPage
+        dismiss(animated: true) { show?() }
     }
 
     @objc private func addTapped() {
@@ -179,7 +190,7 @@ final class UpNextViewController: UITableViewController {
             let id = currentID ?? ""
             cell.configure(TrackVersions.kinds(for: id), TrackVersions.versions(for: id)) { [weak self] track in
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                NativeAudio.shared.playNow(track)
+                UpNext.source.playNow(track)
                 self?.dismiss(animated: true)
             }
             return cell
@@ -192,13 +203,13 @@ final class UpNextViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         guard indexPath.section == 1 else { return }
-        NativeAudio.shared.playUpcoming(at: indexPath.row)
+        UpNext.source.playUpcoming(at: indexPath.row)
     }
 
     override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard indexPath.section == 1 else { return nil }
+        guard indexPath.section == 1, UpNext.source.canRemoveUpcoming(at: indexPath.row) else { return nil }
         let remove = UIContextualAction(style: .destructive, title: "Убрать") { _, _, done in
-            NativeAudio.shared.removeUpcoming(at: indexPath.row)
+            UpNext.source.removeUpcoming(at: indexPath.row)
             done(true)
         }
         return UISwipeActionsConfiguration(actions: [remove])
@@ -283,7 +294,7 @@ final class AddToQueueViewController: UITableViewController, UISearchBarDelegate
         let track = results[indexPath.row]
         guard added.insert(track.id).inserted else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        NativeAudio.shared.insertUpcoming(track, at: insertOffset)
+        UpNext.source.insertUpcoming(track, at: insertOffset)
         insertOffset += 1
         tableView.reloadRows(at: [indexPath], with: .none)
     }

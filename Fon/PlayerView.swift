@@ -128,6 +128,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
         musicView.onShowQueue = { [weak self] in self?.setShowingPage(true) }
         musicView.onShowUpNext = { [weak self] in self?.showUpNext() }
+        WebQueue.shared.runJS = { [weak self] code in self?.runJS(code) }
         musicView.onVideoMode = { [weak self] in self?.toggleMusicMode() }
         musicView.onArtist = { [weak self] in self?.openArtist() }
         musicView.onVolume = { value in NativeAudio.shared.setVolume(value) }
@@ -359,10 +360,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     /// «Далее» — снизу листом поверх плеера.
     private func showUpNext() {
-        guard NativeAudio.shared.active, var top = window?.rootViewController else { return }
+        guard musicMode, var top = window?.rootViewController else { return }
         while let presented = top.presentedViewController { top = presented }
         guard !((top as? UINavigationController)?.viewControllers.first is UpNextViewController) else { return }
-        let nav = UINavigationController(rootViewController: UpNextViewController())
+        let upNext = UpNextViewController()
+        // У обычного плеера YouTube — ещё и его страница (раньше её открывала кнопка списка).
+        if !NativeAudio.shared.active { upNext.onShowPage = { [weak self] in self?.setShowingPage(true) } }
+        let nav = UINavigationController(rootViewController: upNext)
         nav.overrideUserInterfaceStyle = .dark
         if let sheet = nav.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -767,6 +771,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             currentTrack = Track(id: id, title: clean.title, artist: clean.artist)
             updateLikeButton()
         }
+        // «Далее» у обычного плеера (режим музыки на iPad): текущий трек и список YouTube.
+        if musicMode, !NativeAudio.shared.active, let track = currentTrack { WebQueue.shared.update(track: track, rawTitle: title, url: webView.url) }
         if let queue = queueIDs, !queue.contains(id) {
             queueIDs = nil
             musicView.sourceName = "Похожие треки"
@@ -791,6 +797,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             guard musicMode, let id = body["id"] as? String else { return }
             let clean = TrackTitle.clean(title: body["title"] as? String ?? "", artist: body["artist"] as? String ?? "")
             Library.shared.recordPlay(Track(id: id, title: clean.title, artist: clean.artist))
+        case "queueTook":
+            if let id = body["id"] as? String { WebQueue.shared.took(id) }
         case "trackEnding":
             onTrackEnding?()
         case "menu":
@@ -839,6 +847,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         applyPageState() // повторно применяем режимы после перезагрузки страницы
+        WebQueue.shared.pageReloaded()
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,

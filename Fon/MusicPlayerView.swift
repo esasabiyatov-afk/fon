@@ -381,13 +381,23 @@ final class MusicPlayerView: UIView {
 
     /// Вертикальный свайп по ползункам не должен сворачивать плеер.
     func blocksDrag(at point: CGPoint) -> Bool {
-        slider.frame.insetBy(dx: -8, dy: -16).contains(point) || volumeSlider.frame.insetBy(dx: -8, dy: -16).contains(point)
+        if slider.frame.insetBy(dx: -8, dy: -16).contains(point) || volumeSlider.frame.insetBy(dx: -8, dy: -16).contains(point) { return true }
+        // iPad: по обложке вверх/вниз — смена трека, поэтому плеер оттуда не сворачивается (язычок ⌄ сверху).
+        return isPad && artworkFrame.contains(point)
     }
+
+    /// iPad: жесты по обложке другие (просьба владельца после 1.82): вверх — следующий, вниз — предыдущий, влево — «Далее».
+    private var isPad: Bool { traitCollection.userInterfaceIdiom == .pad }
+    private var artworkFrame: CGRect {
+        let b = artworkContainer.bounds, c = artworkContainer.center
+        return CGRect(x: c.x - b.width / 2, y: c.y - b.height / 2, width: b.width, height: b.height)
+    }
+    private var swipeVertical = false
 
     // MARK: - Кнопки
 
     @objc private func collapseTapped() { onCollapse?() }
-    @objc private func queueTapped() { systemPlayer ? onShowUpNext?() : onShowQueue?() }
+    @objc private func queueTapped() { onShowUpNext?() } // «Далее» — и у обычного плеера YouTube (там же «Страница»)
 
     @objc private func handleUpSwipe(_ pan: UIPanGestureRecognizer) {
         guard pan.state == .ended else { return }
@@ -398,14 +408,75 @@ final class MusicPlayerView: UIView {
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === upSwipe {
             let v = upSwipe.velocity(in: self)
-            return systemPlayer && v.y < 0 && -v.y > abs(v.x) * 1.5 && !blocksDrag(at: upSwipe.location(in: self))
+            return !isPad && v.y < 0 && -v.y > abs(v.x) * 1.5 && !blocksDrag(at: upSwipe.location(in: self))
         }
         guard gestureRecognizer === artworkSwipe else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
         let v = artworkSwipe.velocity(in: self)
+        if isPad {
+            swipeVertical = abs(v.y) > abs(v.x)
+            return swipeVertical ? abs(v.y) > abs(v.x) * 1.2 : (v.x < 0 && abs(v.x) > abs(v.y) * 1.2)
+        }
         return abs(v.x) > abs(v.y) * 1.2
     }
 
+    /// iPad: вверх/вниз — трек, влево — «Далее».
+    private func handlePadSwipe(_ pan: UIPanGestureRecognizer) {
+        let scale = paused ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
+        let t = pan.translation(in: self), v = pan.velocity(in: self)
+        let springBack = {
+            UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                self.artworkContainer.transform = scale
+                self.artworkContainer.alpha = 1
+            }
+        }
+        if !swipeVertical {
+            switch pan.state {
+            case .changed:
+                artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: rubber(min(0, t.x)), y: 0))
+            case .ended where t.x < -80 || v.x < -600:
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                springBack()
+                onShowUpNext?()
+            case .ended, .cancelled, .failed:
+                springBack()
+            default:
+                break
+            }
+            return
+        }
+        switch pan.state {
+        case .changed:
+            artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: 0, y: t.y))
+            artworkContainer.alpha = 1 - min(0.5, abs(t.y) / bounds.height)
+        case .ended where abs(t.y) > 80 || abs(v.y) > 600:
+            let forward = (abs(v.y) > 600 ? v.y : t.y) < 0 // вверх — следующий
+            let out = forward ? -bounds.height * 0.6 : bounds.height * 0.6
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onCommand?(forward ? "next" : "prev")
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn], animations: {
+                self.artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: 0, y: out))
+                self.artworkContainer.alpha = 0
+            }) { _ in
+                self.artworkContainer.transform = scale.concatenating(CGAffineTransform(translationX: 0, y: -out * 0.5))
+                UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                    self.artworkContainer.transform = self.paused ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
+                    self.artworkContainer.alpha = 1
+                }
+            }
+        case .ended, .cancelled, .failed:
+            springBack()
+        default:
+            break
+        }
+    }
+
+    private func rubber(_ x: CGFloat) -> CGFloat {
+        let limit: CGFloat = 160
+        return x < 0 ? -limit * (1 - 1 / (-x / limit + 1)) : x
+    }
+
     @objc private func handleArtworkSwipe(_ pan: UIPanGestureRecognizer) {
+        if isPad { handlePadSwipe(pan); return }
         let scale = paused ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
         let tx = pan.translation(in: self).x
         let vx = pan.velocity(in: self).x

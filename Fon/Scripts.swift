@@ -390,6 +390,44 @@ enum Scripts {
     }
   };
 
+  // --- 2a. Своя очередь «Далее» у обычного плеера (режим музыки на iPad, просьба владельца после 1.82):
+  // приложение передаёт id своих добавленных треков, страница включает их по порядку за секунду до конца текущего.
+  fon.queue = [];
+  fon.setQueue = (ids) => { fon.queue = (ids || []).filter((x) => typeof x === 'string'); };
+  const loadID = (id) => {
+    const mp = document.getElementById('movie_player');
+    try {
+      const list = mp && mp.getPlaylist ? mp.getPlaylist() : null;
+      const i = Array.isArray(list) ? list.indexOf(id) : -1;
+      if (i >= 0 && mp.playVideoAt) { mp.playVideoAt(i); return; }
+      if (mp && mp.loadVideoById) {
+        mp.loadVideoById(id);
+        // Адрес страницы — по новому треку: по нему приложение узнаёт, что играет.
+        const u = new URL(location.href);
+        u.searchParams.set('v', id);
+        u.searchParams.delete('t');
+        u.searchParams.delete('index');
+        history.replaceState(history.state, '', u.pathname + u.search);
+        return;
+      }
+    } catch (e) {}
+    location.href = '/watch?v=' + encodeURIComponent(id);
+  };
+  fon.playID = (id) => {
+    const v = fon.video();
+    if (v) v.__fonUserPaused = false;
+    loadID(id);
+  };
+  let tookAt = 0;
+  const takeQueued = () => {
+    if (!fon.queue.length || Date.now() - tookAt < 3000) return;
+    tookAt = Date.now();
+    const id = fon.queue.shift();
+    fon.post({ type: 'queueTook', id });
+    loadID(id);
+  };
+  document.addEventListener('ended', () => { if (fon.queue.length) setTimeout(takeQueued, 0); }, true);
+
   // --- 3. Экран блокировки: «следующий / предыдущий» вместо перемотки на 10 секунд.
   const ms = navigator.mediaSession;
   const ours = {
@@ -1027,6 +1065,7 @@ enum Scripts {
 
     applyQuality();
     unmute(v);
+    if (fon.queue.length && !v.paused && isFinite(v.duration) && v.duration > 5 && v.duration - v.currentTime < 1.2) takeQueued();
     if (id !== lastThumbId) {
       lastThumbId = id;
       document.documentElement.style.setProperty('--fon-thumb', 'url("https://i.ytimg.com/vi/' + id + '/hqdefault.jpg")');
