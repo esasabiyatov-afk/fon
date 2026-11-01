@@ -5,7 +5,7 @@ import UIKit
 /// страница за страницей при прокрутке; загруженное держится в памяти — при переключении вкладок не грузится заново,
 /// обновить — потянуть вниз. Видео играет обычный плеер YouTube (качество как в приложении).
 /// iPhone — одна колонка во всю ширину, iPad — сетка (колонка на каждые ~360 pt).
-final class VideoFeedViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
+final class VideoFeedViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {
     struct Video {
         let id: String
         let title: String
@@ -51,6 +51,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         collectionView.backgroundColor = .black
         collectionView.dataSource = self
+        collectionView.prefetchDataSource = self
         collectionView.delegate = self
         collectionView.register(VideoCell.self, forCellWithReuseIdentifier: "video")
         collectionView.register(StatusCell.self, forCellWithReuseIdentifier: "status")
@@ -84,6 +85,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         HiddenPage.youtube.call("__fonCloud.videoFeed(browseId, token)", { ["browseId": browseID, "token": token] }) { [weak self] result in
             guard let self else { return }
             self.loading = false
+            let before = self.videos.count
             switch result {
             case .success(let value):
                 let dict = value as? [String: Any] ?? [:]
@@ -104,7 +106,13 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
                         : "Лента не загрузилась.\nПотяните вниз, чтобы повторить."
                 }
             }
-            self.collectionView.reloadData()
+            // Следующая страница — только новые карточки, уже показанные не перерисовываются (прокрутка не дёргается).
+            if !reset, before > 0 {
+                let added = (before..<self.videos.count).map { IndexPath(item: $0, section: 0) }
+                if !added.isEmpty { UIView.performWithoutAnimation { self.collectionView.insertItems(at: added) } }
+            } else {
+                self.collectionView.reloadData()
+            }
             completion?()
         }
     }
@@ -155,6 +163,13 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "video", for: indexPath) as! VideoCell
         cell.configure(videos[indexPath.item], rounded: view.bounds.width >= 720)
         return cell
+    }
+
+    /// Обложки следующих карточек грузим заранее, пока их ещё не видно.
+    func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        for indexPath in indexPaths where videos.indices.contains(indexPath.item) {
+            ArtworkLoader.shared.load(videos[indexPath.item].id, size: .large) { _, _ in }
+        }
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {

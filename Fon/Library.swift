@@ -130,7 +130,9 @@ final class ArtworkLoader {
         }
         waiting[key] = [completion]
         let file = directory.appendingPathComponent(Self.fileName(key))
-        let finish: (UIImage?) -> Void = { [weak self] image in
+        let finish: (UIImage?) -> Void = { [weak self] raw in
+            // Распаковываем JPEG здесь, в фоне: иначе это делает главный поток при первом показе — лента дёргается при прокрутке.
+            let image = raw.map { $0.preparingForDisplay() ?? $0 }
             let color = needsColor ? image.flatMap(ArtworkLoader.averageColor) : nil
             DispatchQueue.main.async {
                 guard let self else { return }
