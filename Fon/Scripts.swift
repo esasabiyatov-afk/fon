@@ -97,7 +97,20 @@ enum Scripts {
       if (SHORTS.test((chip.textContent || '').trim())) chip.classList.add('fon-hidden');
     }
     addDates();
+    decodeHandles();
   }, 1500);
+  // Ник канала кириллицей YouTube иногда показывает закодированным: «@%D0%A1%D0%B8…» (скриншот владельца после 1.81).
+  const decodeHandles = () => {
+    try {
+      const found = document.evaluate("//text()[contains(., '@%')]", document.body, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < found.snapshotLength; i++) {
+        const node = found.snapshotItem(i);
+        node.nodeValue = node.nodeValue.replace(/@(?:%[0-9A-Fa-f]{2}|[\w.-])+/g, (h) => {
+          try { return decodeURIComponent(h); } catch (e) { return h; }
+        });
+      }
+    } catch (e) {}
+  };
   // Дата выхода у каждого видео (просьба владельца после 1.81: «на главной, в рекомендациях — везде»).
   // В новой вёрстке m.youtube под карточкой часто только «канал • просмотры», а дата есть лишь в подписи
   // для VoiceOver (aria-label) — дописываем её в строку с просмотрами.
@@ -422,11 +435,11 @@ enum Scripts {
     /* Обычный плеер: видео всегда ровно в своей рамке. После окна мини-плеера, «картинки в картинке»
        или поворота YouTube оставлял у видео старые размеры и сдвиг — картинка вылезала поверх названия
        (скриншот владельца после 1.80). */
-    html:not(.fon-mini):not(.fon-full) .html5-video-container {
+    html:not(.fon-mini):not(.fon-full) #player-container-id .html5-video-container {
       position: absolute !important; top: 0 !important; left: 0 !important;
       width: 100% !important; height: 100% !important; overflow: hidden !important;
     }
-    html:not(.fon-mini):not(.fon-full) .html5-video-container video {
+    html:not(.fon-mini):not(.fon-full) #player-container-id .html5-video-container video.html5-main-video {
       position: absolute !important; top: 0 !important; left: 0 !important;
       width: 100% !important; height: 100% !important; object-fit: contain !important;
     }
