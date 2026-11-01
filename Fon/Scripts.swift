@@ -341,15 +341,33 @@ enum Scripts {
       case 'pipOn':
         if (v && !v.paused && typeof v.webkitSetPresentationMode === 'function' && v.webkitPresentationMode !== 'picture-in-picture') {
           try { v.disablePictureInPicture = false; v.removeAttribute('disablepictureinpicture'); } catch (e) {}
+          fon.autoPip = true;
           v.webkitSetPresentationMode('picture-in-picture');
         }
         break;
-      case 'pipOff':
-        if (v && typeof v.webkitSetPresentationMode === 'function' && v.webkitPresentationMode === 'picture-in-picture') {
-          v.webkitSetPresentationMode('inline');
-        }
-        for (const t of [300, 1000]) setTimeout(() => { fire(window, 'resize'); try { fon.repaint(); } catch (e) {} }, t);
+      // Выход из автоматической PiP. Нельзя переключать, пока iOS ещё входит в неё (пункт управления:
+      // вошли и сразу вернулись) — WebKit застревал посередине: видео съезжало и страница не отвечала
+      // (скриншоты владельца после 1.80). Ждём конца перехода и проверяем ещё несколько раз.
+      case 'pipOff': {
+        if (!fon.autoPip || !v || typeof v.webkitSetPresentationMode !== 'function') break;
+        let tries = 0;
+        const settle = () => {
+          tries++;
+          if (v.webkitPresentationMode === 'picture-in-picture') {
+            try { v.webkitSetPresentationMode('inline'); } catch (e) {}
+          }
+          if (v.webkitPresentationMode === 'inline' && tries > 2) {
+            fon.autoPip = false;
+            fire(window, 'resize');
+            try { fon.repaint(); } catch (e) {}
+            return;
+          }
+          if (tries < 12) setTimeout(settle, 500);
+          else fon.autoPip = false;
+        };
+        setTimeout(settle, 300);
         break;
+      }
       case 'prev':
         if (v && v.currentTime > 3) v.currentTime = 0; else history.back();
         break;
