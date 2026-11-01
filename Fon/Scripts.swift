@@ -96,7 +96,40 @@ enum Scripts {
     for (const chip of document.querySelectorAll('ytm-chip-cloud-chip-renderer, yt-chip-cloud-chip-renderer')) {
       if (SHORTS.test((chip.textContent || '').trim())) chip.classList.add('fon-hidden');
     }
+    addDates();
   }, 1500);
+  // Дата выхода у каждого видео (просьба владельца после 1.81: «на главной, в рекомендациях — везде»).
+  // В новой вёрстке m.youtube под карточкой часто только «канал • просмотры», а дата есть лишь в подписи
+  // для VoiceOver (aria-label) — дописываем её в строку с просмотрами.
+  const DATE_RE = /(\d+\s*[а-яё]+\.?\s+назад|\d+\s*[a-z]+\s+ago|(?:Трансляция|Премьера|Streamed|Premiered)[^,•·]*)/i;
+  const CARDS = 'ytm-video-with-context-renderer, ytm-compact-video-renderer, ytm-video-card-renderer, ytm-rich-item-renderer, yt-lockup-view-model, ytm-lockup-view-model';
+  const addDates = () => {
+    for (const card of document.querySelectorAll(CARDS)) {
+      if (card.dataset.fonDate || card.querySelector('[data-fon-date]')) continue;
+      const own = card.textContent || '';
+      if (DATE_RE.test(own)) { card.dataset.fonDate = '1'; continue; }
+      const tries = +(card.dataset.fonTries || 0);
+      if (tries > 3) continue;
+      card.dataset.fonTries = tries + 1;
+      let date = '';
+      for (const el of [card, ...card.querySelectorAll('[aria-label]')]) {
+        const m = (el.getAttribute && el.getAttribute('aria-label') || '').match(DATE_RE);
+        if (m) { date = m[1]; break; }
+      }
+      if (!date) continue;
+      // Строка с просмотрами — самый глубокий элемент, где они есть.
+      let line = null;
+      for (const el of card.querySelectorAll('span, div, p')) {
+        if (/просмотр|зрител|views|watching/i.test(el.textContent || '') && !el.querySelector('span, div, p')) line = el;
+      }
+      if (!line) continue;
+      const span = document.createElement('span');
+      span.dataset.fonDate = '1';
+      span.textContent = ' • ' + date;
+      line.appendChild(span);
+      card.dataset.fonDate = '1';
+    }
+  };
 
   // --- Лупа в шапке YouTube открывает поиск приложения, а не веб-поиск.
   const currentQuery = () => {
@@ -1067,6 +1100,24 @@ enum Scripts {
     return out;
   };
   const text = (t) => (t ? (t.simpleText || (t.runs || []).map((r) => r.text).join('')) : '');
+  const withDate = (parts, obj) => {
+    if (parts.some((t) => DATE_RE.test(t))) return parts;
+    const d = dateOf(obj);
+    return d ? parts.concat(d) : parts;
+  };
+  // Дата выхода: из частей строки под видео, а нет там — из подписей для VoiceOver (там YouTube пишет «2 дня назад»).
+  const DATE_RE = /(\d+\s*[а-яё]+\.?\s+назад|\d+\s*[a-z]+\s+ago|(?:Трансляция|Премьера|Streamed|Premiered)[^,•·]*)/i;
+  const dateOf = (obj, parts) => {
+    const inParts = (parts || []).find((t) => DATE_RE.test(t));
+    if (inParts) return inParts;
+    for (const key of ['accessibilityText', 'accessibilityLabel', 'label']) {
+      for (const t of findAll(obj, key)) {
+        const m = typeof t === 'string' && t.match(DATE_RE);
+        if (m) return m[1];
+      }
+    }
+    return '';
+  };
   const findPlaylist = async () => {
     const r = await api('playlist/get_add_to_playlist', { videoIds: [PROBE], excludeWatchLater: true });
     const option = findAll(r, 'playlistAddToOptionRenderer').find((o) => text(o.title) === TITLE);
@@ -1085,19 +1136,19 @@ enum Scripts {
         if (!v || !v.videoId || findAll(v, 'reelWatchEndpoint').length) continue;
         const by = v.shortBylineText || v.longBylineText || v.ownerText;
         add({ id: v.videoId, title: text(v.headline || v.title), channel: text(by),
-              channelId: findAll(by, 'browseId')[0] || '', published: text(v.publishedTimeText), music: musicBadge(v) });
+              channelId: findAll(by, 'browseId')[0] || '', published: text(v.publishedTimeText) || dateOf(v), music: musicBadge(v) });
       }
     }
     for (const l of findAll(r, 'lockupViewModel')) {
       if (!l || !l.contentId || (l.contentType && l.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO')) continue;
       if (findAll(l, 'reelWatchEndpoint').length) continue;
       const meta = findAll(l, 'lockupMetadataViewModel')[0] || {};
-      const rows = (findAll(meta, 'metadataRows')[0] || []).map((row) =>
-        (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean));
+      const parts = [].concat(...(findAll(meta, 'metadataRows')[0] || []).map((row) =>
+        (row.metadataParts || []).map((p) => p.text && p.text.content).filter(Boolean)));
       add({ id: l.contentId, title: (meta.title && meta.title.content) || '',
-            channel: (rows[0] && rows[0][0]) || '',
+            channel: parts[0] || '',
             channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
-            published: (rows[1] && rows[1][rows[1].length - 1]) || '', music: musicBadge(l) });
+            published: dateOf(l, parts.slice(1)), music: musicBadge(l) });
     }
     return out;
   };
@@ -1184,7 +1235,7 @@ enum Scripts {
         add({ id: v.videoId, title: text(v.headline || v.title), channel: text(by),
               channelId: findAll(by || {}, 'browseId')[0] || '',
               avatar: avatarOf(v.channelThumbnail || v.channelThumbnailSupportedRenderers),
-              meta: [text(v.shortViewCountText || v.viewCountText), text(v.publishedTimeText)].filter(Boolean).join(' · '),
+              meta: [text(v.shortViewCountText || v.viewCountText), text(v.publishedTimeText) || dateOf(v)].filter(Boolean).join(' · '),
               duration: text(v.lengthText) });
       }
       for (const l of findAll(r, 'lockupViewModel')) {
@@ -1200,7 +1251,7 @@ enum Scripts {
         add({ id: l.contentId, title: (meta.title && meta.title.content) || '', channel: parts[0] || '',
               channelId: findAll(l, 'browseId').find((b) => /^UC/.test(b)) || '',
               avatar: avatarOf(meta.image || findAll(l, 'decoratedAvatarViewModel')[0]),
-              meta: parts.slice(1).join(' · '), duration: (badge && badge.text) || '' });
+              meta: withDate(parts.slice(1), l).join(' · '), duration: (badge && badge.text) || '' });
       }
       const next = findAll(r, 'continuationCommand').filter((c) => c && c.token).pop();
       return { items, next: next ? next.token : null };
