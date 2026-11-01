@@ -140,10 +140,13 @@ enum YouTubeStreams {
 
     /// Поиск видео (`search`, фильтр «Видео») — другие версии трека и «Добавить в очередь».
     /// `title` — название как на YouTube (для проверки «slowed»/«lyrics»), у трека — очищенное.
-    static func search(_ query: String) async -> [(track: Track, title: String)] {
+    /// `anonymous` — без входа в аккаунт: такой поиск не попадает в историю поиска YouTube. Другие версии ищутся
+    /// сами, в фоне — в 1.83 их запросы («… slowed», «… sped up», «… lyrics») заполнили историю поиска владельца.
+    static func search(_ query: String, anonymous: Bool = false) async -> [(track: Track, title: String)] {
         let cfg = config ?? fallbackConfig
-        let body: [String: Any] = ["context": YouTubeAccount.context(cfg.context), "query": query, "params": "EgIQAQ=="]
-        guard let json = await post("search", body: body, config: cfg) else { return [] }
+        let context = anonymous ? cfg.context : YouTubeAccount.context(cfg.context)
+        let body: [String: Any] = ["context": context, "query": query, "params": "EgIQAQ=="]
+        guard let json = await post("search", body: body, config: cfg, signedIn: !anonymous) else { return [] }
         var seen = Set<String>()
         return findAll(json, key: "videoRenderer").compactMap { item in
             guard let video = item as? [String: Any], let id = video["videoId"] as? String, seen.insert(id).inserted else { return nil }
@@ -165,7 +168,7 @@ enum YouTubeStreams {
         }
     }
 
-    private static func post(_ endpoint: String, body: [String: Any], config: Config) async -> [String: Any]? {
+    private static func post(_ endpoint: String, body: [String: Any], config: Config, signedIn: Bool = true) async -> [String: Any]? {
         guard let url = URL(string: "\(origin)/youtubei/v1/\(endpoint)?prettyPrint=false"),
               let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 15)
@@ -182,8 +185,8 @@ enum YouTubeStreams {
         if let visitor = (config.context["client"] as? [String: Any])?["visitorData"] as? String {
             request.setValue(visitor, forHTTPHeaderField: "X-Goog-Visitor-Id")
         }
-        if let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-        if let auth = YouTubeSession.authorization(origin: origin) {
+        if signedIn, let cookie = YouTubeSession.cookieHeader { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        if signedIn, let auth = YouTubeSession.authorization(origin: origin) {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
             YouTubeAccount.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         }

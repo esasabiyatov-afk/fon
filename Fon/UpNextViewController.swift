@@ -65,9 +65,9 @@ enum TrackVersions {
             }
         }
         Task {
-            async let first = YouTubeStreams.search(query(kinds[0]))
-            async let second = YouTubeStreams.search(query(kinds[1]))
-            async let third = YouTubeStreams.search(query(kinds[2]))
+            async let first = YouTubeStreams.search(query(kinds[0]), anonymous: true)
+            async let second = YouTubeStreams.search(query(kinds[1]), anonymous: true)
+            async let third = YouTubeStreams.search(query(kinds[2]), anonymous: true)
             let results = [await first, await second, await third]
             await MainActor.run {
                 TrackVersions.loading.remove(track.id)
