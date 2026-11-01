@@ -171,6 +171,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             let y = bounds.height - max(safe.bottom, 12) - h - 8
             return CGRect(x: left, y: y, width: max(0, bounds.width - left - safe.right - 16), height: h)
         }
+        if Settings.musicMode {
+            // Режим музыки — плавающая карточка над вкладками, как в Apple Music.
+            let x = safe.left + 8
+            return CGRect(x: x, y: tabBar.frame.minY - h - 6, width: max(0, bounds.width - x - safe.right - 8), height: h)
+        }
         return CGRect(x: safe.left, y: tabBar.frame.minY - h, width: bounds.width - safe.left - safe.right, height: h)
     }
 
@@ -263,8 +268,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             playerView.isHidden = false
             playerView.transform = .identity // мог остаться сдвиг от перетаскивания
             playerView.frame = miniPlayerFrame() // в альбомной ориентации не под «чёлкой»
-            playerView.layer.cornerRadius = sidebarActive ? 14 : 0
-            setBrowseBottomInset(sidebarActive ? PlayerView.miniHeight + 16 : PlayerView.miniHeight)
+            playerView.layer.cornerRadius = sidebarActive || Settings.musicMode ? 14 : 0
+            setBrowseBottomInset(sidebarActive ? PlayerView.miniHeight + 16 : (Settings.musicMode ? PlayerView.miniHeight + 12 : PlayerView.miniHeight))
         case .expanded:
             playerView.isHidden = false
             playerView.frame = bounds
@@ -590,6 +595,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         }
         tabBar.setItem(libraryTabIndex, title: music ? "Медиатека" : "Вы", icon: music ? "square.stack.fill" : "person.crop.circle")
         sidebar.setItem(libraryTabIndex, title: "Медиатека", icon: "square.stack.fill")
+        tabBar.selectedColor = music ? PlayerView.accent : .white // выбранная вкладка красная, как в Apple Music
         updateNavigationStyle()
         layoutPlayer()
     }

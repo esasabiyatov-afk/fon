@@ -7,6 +7,8 @@ final class TabBarView: UIView {
 
     var onSelect: ((Int) -> Void)?
     private(set) var selectedIndex = 0
+    /// Цвет выбранной вкладки: в режиме музыки — красный, как в Apple Music.
+    var selectedColor: UIColor = .white { didSet { buttons.indices.forEach(refresh) } }
 
     private let stack = UIStackView()
     private var buttons: [UIButton] = []
@@ -83,7 +85,7 @@ final class TabBarView: UIView {
         config.titleLineBreakMode = .byTruncatingTail
         config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 0)
         let selected = index == selectedIndex
-        config.baseForegroundColor = colors[index] ?? (selected ? .white : UIColor(white: 0.6, alpha: 1))
+        config.baseForegroundColor = colors[index] ?? (selected ? selectedColor : UIColor(white: 0.6, alpha: 1))
         buttons[index].configuration = config
         buttons[index].accessibilityTraits = selected ? [.button, .selected] : .button
     }

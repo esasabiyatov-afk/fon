@@ -253,6 +253,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func updateVisibility() {
         let isMini = mode == .mini
         [titleLabel, subtitleLabel, miniLikeButton, playPauseButton, closeButton, progressView].forEach { $0.isHidden = !isMini }
+        let miniSymbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+        closeButton.setImage(UIImage(systemName: musicMode ? "forward.fill" : "xmark", withConfiguration: miniSymbols), for: .normal)
+        closeButton.accessibilityLabel = musicMode ? "Следующий трек" : "Закрыть"
+        // Мини-плеер режима музыки — карточка чуть светлее фона, как в Apple Music.
+        backgroundColor = isMini && musicMode ? UIColor(white: 0.16, alpha: 1) : UIColor(white: 0.09, alpha: 1)
         miniArtwork.isHidden = !(isMini && musicMode)
         musicView.isHidden = !nativeMusic
         topBar.isHidden = isMini || nativeMusic || isFullscreen
@@ -583,6 +588,16 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
                 frame = current
                 releaseVelocity = max(0, -velocity)
                 onExpand?()
+            } else if pan.state == .ended, dy > 40 || velocity > 500 {
+                // Вниз — закрыть (в режиме музыки вместо ✕ теперь ⏭).
+                UIView.animate(withDuration: 0.2, animations: {
+                    self.alpha = 0
+                }, completion: { _ in
+                    self.alpha = 1
+                    self.transform = .identity
+                    self.stop()
+                    self.onClose?()
+                })
             } else {
                 springBack(self, from: abs(dy), velocity: -abs(velocity))
             }
@@ -690,6 +705,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     @objc private func togglePlay() { command("toggle") }
 
     @objc private func closeTapped() {
+        // Режим музыки — как в Apple Music: справа ⏭, а закрыть — смахнуть мини-плеер вниз.
+        if musicMode {
+            command("next")
+            return
+        }
         stop()
         onClose?()
     }

@@ -165,7 +165,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         for track in history.prefix(quickCount - quick.count) {
             quick.append(mixItem(track))
         }
-        result.append(Section(title: Self.greeting(), style: .quick, items: quick))
+        result.append(Section(title: "Главная", style: .quick, items: quick)) // крупный заголовок, как в Apple Music
 
         if shelves.isEmpty {
             result += localSections(history: history, likes: likes)
@@ -337,15 +337,6 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         }
     }
 
-    private static func greeting() -> String {
-        switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<12: return "Доброе утро"
-        case 12..<18: return "Добрый день"
-        case 18..<23: return "Добрый вечер"
-        default: return "Доброй ночи"
-        }
-    }
-
     // MARK: - Раскладка
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {
@@ -512,7 +503,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
         func configure(_ text: String, big: Bool, onSearch: (() -> Void)?) {
             label.text = text
-            label.font = .systemFont(ofSize: big ? 26 : 21, weight: .bold)
+            label.font = .systemFont(ofSize: big ? 32 : 21, weight: .bold)
             self.onSearch = onSearch
             searchButton.isHidden = onSearch == nil
             setNeedsLayout()

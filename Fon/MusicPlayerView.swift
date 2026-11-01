@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import AVKit
 
 /// Плеер в стиле музыкальных сервисов: большая обложка, фон под её цвет, лайк, плейлисты.
 /// Сам звук играет веб-плеер YouTube, который лежит под этим экраном.
@@ -31,6 +32,11 @@ final class MusicPlayerView: UIView {
     var videoPlayer: AVPlayer? { didSet { attachVideo() } }
 
     private let gradient = CAGradientLayer()
+    /// Фон как в Apple Music: размытая обложка (пока её нет — градиент под цвет).
+    private let backdrop = UIImageView()
+    private let backdropBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+    /// AirPlay — в нижнем ряду, как в Apple Music.
+    private let routeButton = AVRoutePickerView()
     private let collapseButton = UIButton(type: .system)
     private let headerLabel = UILabel()
     private let sourceLabel = UILabel()
@@ -67,7 +73,7 @@ final class MusicPlayerView: UIView {
     private var stamp = CACurrentMediaTime()
     private var scrubbing = false
     private var ticker: Timer?
-    private let panelHeight: CGFloat = 252
+    private let panelHeight: CGFloat = 304
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -75,8 +81,16 @@ final class MusicPlayerView: UIView {
         gradient.colors = [UIColor(white: 0.22, alpha: 1).cgColor, UIColor.black.cgColor]
         gradient.locations = [0, 0.9]
         layer.addSublayer(gradient)
+        backdrop.contentMode = .scaleAspectFill
+        backdrop.clipsToBounds = true
+        addSubview(backdrop)
+        addSubview(backdropBlur)
 
-        setup(collapseButton, "chevron.down", 20, #selector(collapseTapped))
+        // Дизайн Apple Music (просьба владельца после 1.77): «язычок» сверху, обложка (у нас — видео 16:9),
+        // название слева и ♡, ползунок, крупные ⏮ ▶ ⏭ без подложки, громкость, внизу — повтор, режим видео, AirPlay, очередь.
+        setup(collapseButton, "chevron.compact.down", 26, #selector(collapseTapped))
+        collapseButton.tintColor = UIColor(white: 1, alpha: 0.6)
+        collapseButton.accessibilityLabel = "Свернуть"
         setup(queueButton, "list.bullet", 18, #selector(queueTapped))
         setup(videoButton, "play.rectangle", 18, #selector(videoTapped))
         queueButton.accessibilityLabel = "Очередь и похожие"
@@ -86,9 +100,10 @@ final class MusicPlayerView: UIView {
         headerLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         headerLabel.textColor = UIColor(white: 1, alpha: 0.7)
         headerLabel.textAlignment = .center
+        headerLabel.isHidden = true
         sourceLabel.text = sourceName
-        sourceLabel.font = .systemFont(ofSize: 13, weight: .bold)
-        sourceLabel.textColor = .white
+        sourceLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        sourceLabel.textColor = UIColor(white: 1, alpha: 0.55)
         sourceLabel.textAlignment = .center
         addSubview(headerLabel)
         addSubview(sourceLabel)
@@ -134,11 +149,11 @@ final class MusicPlayerView: UIView {
             self?.attachVideo()
         }
 
-        titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: 21, weight: .semibold)
         titleLabel.adjustsFontSizeToFitWidth = true // длинное название чуть уменьшается, а не обрезается сразу
         titleLabel.minimumScaleFactor = 0.7
         titleLabel.textColor = .white
-        artistLabel.font = .systemFont(ofSize: 16)
+        artistLabel.font = .systemFont(ofSize: 19)
         artistLabel.textColor = UIColor(white: 1, alpha: 0.65)
         addSubview(titleLabel)
         addSubview(artistLabel)
@@ -164,9 +179,9 @@ final class MusicPlayerView: UIView {
         }
         remainingLabel.textAlignment = .right
 
-        setup(prevButton, "backward.fill", 28, #selector(prevTapped))
-        setup(playButton, "play.fill", 30, #selector(playTapped))
-        setup(nextButton, "forward.fill", 28, #selector(nextTapped))
+        setup(prevButton, "backward.fill", 32, #selector(prevTapped))
+        setup(playButton, "play.fill", 44, #selector(playTapped))
+        setup(nextButton, "forward.fill", 32, #selector(nextTapped))
         setup(loopButton, "repeat.1", 20, #selector(loopTapped))
         loopButton.accessibilityLabel = "Повтор трека"
         // Громкость YouTube — отдельно от кнопок громкости телефона.
@@ -189,8 +204,10 @@ final class MusicPlayerView: UIView {
         }
         addSubview(volumeSlider)
         [volumeSlider, volumeLow, volumeHigh].forEach { $0.isHidden = true } // до запуска системного плеера
-        playButton.backgroundColor = .white
-        playButton.tintColor = .black
+        routeButton.tintColor = UIColor(white: 1, alpha: 0.7)
+        routeButton.activeTintColor = PlayerView.accent
+        routeButton.prioritizesVideoDevices = false
+        addSubview(routeButton)
         updateButtons()
         showTimes(0)
 
@@ -298,6 +315,9 @@ final class MusicPlayerView: UIView {
                     self.artworkView.contentMode = .scaleAspectFill
                     self.artworkView.image = image
                 }
+                UIView.transition(with: self.backdrop, duration: 0.6, options: .transitionCrossDissolve) {
+                    self.backdrop.image = image
+                }
                 if aspect != self.artworkAspect {
                     self.artworkAspect = aspect
                     UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
@@ -322,7 +342,7 @@ final class MusicPlayerView: UIView {
     }
 
     private func updateButtons() {
-        setSymbol(playButton, paused ? "play.fill" : "pause.fill", 30)
+        setSymbol(playButton, paused ? "play.fill" : "pause.fill", 44)
         loopButton.tintColor = looping ? PlayerView.accent : UIColor(white: 1, alpha: 0.7)
     }
 
@@ -468,17 +488,16 @@ final class MusicPlayerView: UIView {
         CATransaction.setDisableActions(true)
         gradient.frame = bounds
         CATransaction.commit()
+        backdrop.frame = bounds
+        backdropBlur.frame = bounds
 
         let side: CGFloat = w > 600 ? 40 : 24
         let top = safe.top
-        collapseButton.frame = CGRect(x: safe.left + 8, y: top, width: 48, height: 44)
-        videoButton.frame = CGRect(x: w - safe.right - 56, y: top, width: 48, height: 44)
-        queueButton.frame = CGRect(x: w - safe.right - 100, y: top, width: 48, height: 44)
-        headerLabel.frame = CGRect(x: 104, y: top + 5, width: max(0, w - 208), height: 14)
-        sourceLabel.frame = CGRect(x: 104, y: top + 19, width: max(0, w - 208), height: 20)
-        let contentTop = top + 56
-        // Кнопки управления подняты повыше от нижнего края — так удобнее до них дотягиваться.
-        let contentBottom = h - max(safe.bottom, 16) - (w > h * 1.15 ? 12 : 52)
+        // Сверху — «язычок» (свернуть) и откуда играет; кнопки очереди и режима видео — в нижнем ряду.
+        collapseButton.frame = CGRect(x: w / 2 - 40, y: top, width: 80, height: 30)
+        sourceLabel.frame = CGRect(x: 40, y: top + 28, width: max(0, w - 80), height: 16)
+        let contentTop = top + 54
+        let contentBottom = h - max(safe.bottom, 16) - 8
 
         let art: CGFloat
         let artCenter: CGPoint
@@ -521,17 +540,20 @@ final class MusicPlayerView: UIView {
         let offset = min(88, width * 0.27)
         playButton.bounds = CGRect(x: 0, y: 0, width: 72, height: 72)
         playButton.center = CGPoint(x: cx, y: cy)
-        playButton.layer.cornerRadius = 36
-        prevButton.bounds = CGRect(x: 0, y: 0, width: 48, height: 56)
+        prevButton.bounds = CGRect(x: 0, y: 0, width: 56, height: 56)
         prevButton.center = CGPoint(x: cx - offset, y: cy)
         nextButton.bounds = prevButton.bounds
         nextButton.center = CGPoint(x: cx + offset, y: cy)
-        loopButton.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
-        loopButton.center = CGPoint(x: x + width - 18, y: cy)
-        let vy = y + 222
+        let vy = y + 216
         volumeLow.frame = CGRect(x: x, y: vy, width: 20, height: 30)
         volumeHigh.frame = CGRect(x: x + width - 24, y: vy, width: 24, height: 30)
         volumeSlider.frame = CGRect(x: x + 28, y: vy, width: max(0, width - 60), height: 30)
+        // Нижний ряд, как в Apple Music: повтор · режим видео · AirPlay · очередь («Далее»).
+        let by = y + 282
+        for (index, item) in [loopButton, videoButton, routeButton, queueButton].enumerated() {
+            item.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
+            item.center = CGPoint(x: x + width * (CGFloat(index) * 2 + 1) / 8, y: by)
+        }
     }
 }
 
