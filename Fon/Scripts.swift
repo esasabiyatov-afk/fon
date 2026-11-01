@@ -817,6 +817,15 @@ enum Scripts {
     setTimeout(() => { if (fon.isFull) setFull(false); }, 350);
   }, true);
 
+  // Высота шапки YouTube: приложение сдвигает окно страницы вверх на неё, чтобы спрятать под своей верхней панелью
+  // (на iPhone 48, на iPad может быть другой).
+  let lastHeader = -1;
+  setInterval(() => {
+    const h = document.querySelector('header.mobile-topbar-header, ytm-mobile-topbar-renderer');
+    const v = h ? Math.round(h.getBoundingClientRect().height) : 0;
+    if (v > 0 && v !== lastHeader) { lastHeader = v; fon.post({ type: 'header', height: v }); }
+  }, 1500);
+
   // Панель YouTube показана или скрыта — приложение показывает название сверху вместе с ней (просьба владельца
   // после 1.71). Смотрим на кнопку паузы/полного экрана: видна ли она; не нашли — 3,5 с после касания.
   let tapShownUntil = 0, controlsShown = false;
@@ -1415,7 +1424,8 @@ enum Scripts {
   // Вёрстка m.youtube проверена в Chromium с iPhone-UA: ytm-media-item > a.media-item-thumbnail-container
   // (ytm-thumbnail-cover) + .media-item-details (.media-channel — аватар, .media-item-info).
   fon.addStyle(`
-    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) { margin: 0 !important; padding: 0 !important; }
+    /* на iPad строки не тянутся на весь экран — читаемая ширина по центру */
+    html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) { margin: 0 auto !important; padding: 0 !important; max-width: 760px; }
     html.fon-list :is(ytm-video-with-context-renderer, ytm-compact-radio-renderer, ytm-compact-playlist-renderer) ytm-media-item {
       display: flex !important; flex-direction: row !important; align-items: center !important;
       gap: 12px; padding: 6px 4px 6px 12px !important; margin: 0 !important; }

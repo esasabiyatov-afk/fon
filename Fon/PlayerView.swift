@@ -20,8 +20,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onTrackEnding: (() -> Void)?
 
     static let miniHeight: CGFloat = 64
-    /// Высота шапки m.youtube (логотип, поиск) на странице видео.
-    static let pageHeaderHeight: CGFloat = 48
+
     static let accent = UIColor(red: 1, green: 0.2, blue: 0.3, alpha: 1)
 
     private(set) var mode: Mode = .expanded
@@ -64,6 +63,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// Полный экран: сверху кнопка выхода и название — показываются вместе с панелью YouTube (просьба владельца после 1.71).
     private let fullBar = FullscreenBar()
     private var controlsShown = false
+    /// Высота шапки m.youtube (логотип, поиск) на странице видео: 48 pt, дальше уточняет сама страница (`{type:'header'}`).
+    private var pageHeaderHeight: CGFloat = 48
     private var currentTrack: Track?
     private var shownPaused: Bool?
     private var likeShown: Bool?
@@ -642,9 +643,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             topTitleLabel.frame = CGRect(x: safeAreaInsets.left + 56, y: top, width: max(0, w - safeAreaInsets.left - safeAreaInsets.right - 56 - 152), height: 44)
             // Шапку YouTube (логотип, поиск, ⋮; 48 pt) прячем под нашей верхней панелью: страница сдвинута вверх на её высоту.
             // Убирать шапку стилями нельзя — от её высоты считаются прилипающие блоки страницы (вышел зазор над чипами).
-            webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY - Self.pageHeaderHeight,
+            webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY - pageHeaderHeight,
                                    width: w - safeAreaInsets.left - safeAreaInsets.right,
-                                   height: bounds.height - topBar.frame.maxY + Self.pageHeaderHeight)
+                                   height: bounds.height - topBar.frame.maxY + pageHeaderHeight)
         }
     }
 
@@ -753,6 +754,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             youTubeMenuTop = CGFloat((body["top"] as? NSNumber)?.doubleValue ?? -1)
         case "fullscreen":
             setFullscreen(body["on"] as? Bool == true, vertical: body["vertical"] as? Bool == true)
+        case "header":
+            let height = CGFloat((body["height"] as? NSNumber)?.doubleValue ?? 48)
+            if height > 0, height < 100, height != pageHeaderHeight {
+                pageHeaderHeight = height
+                setNeedsLayout()
+            }
         case "controls":
             controlsShown = body["shown"] as? Bool == true
             updateFullBar()

@@ -101,6 +101,17 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
+    private var lastWide: Bool?
+
+    /// Поворот или смена ширины окна (iPad): число плиток считается по ширине — пересобираем разделы.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let wide = view.bounds.width > 600
+        guard lastWide != nil, lastWide != wide else { lastWide = wide; return }
+        lastWide = wide
+        reload()
+    }
+
     func scrollToTop() {
         collectionView?.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: true)
     }
@@ -356,7 +367,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 section.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 24, trailing: 12)
             case .large, .small, .round:
                 // Карточки 16:9; исполнители — круглые аватары, как у каналов YouTube.
-                let side: CGFloat = style == .large ? 240 : (style == .round ? 120 : 190)
+                let scale: CGFloat = wide ? 1.3 : 1 // на iPad карточки крупнее
+                let side: CGFloat = (style == .large ? 240 : (style == .round ? 120 : 190)) * scale
                 let artHeight = style == .round ? side : (side * 9 / 16).rounded()
                 let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .fractionalHeight(1)))
                 let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .absolute(side), heightDimension: .absolute(artHeight + 46)), subitems: [item])
@@ -379,7 +391,9 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(64)), subitems: [item])
                 section = NSCollectionLayoutSection(group: group)
                 section.interGroupSpacing = 4
-                section.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 16, bottom: 24, trailing: 16)
+                // На iPad строки не растягиваем на весь экран — читаемая ширина по центру.
+                let sideInset = max(16, (environment.container.effectiveContentSize.width - 760) / 2)
+                section.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: sideInset, bottom: 24, trailing: sideInset)
             case .message:
                 let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .estimated(80))
                 section = NSCollectionLayoutSection(group: .horizontal(layoutSize: size, subitems: [NSCollectionLayoutItem(layoutSize: size)]))
