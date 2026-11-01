@@ -28,6 +28,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var videoSubscriptionsNav: UINavigationController?
     /// Окна вкладок, которые iOS выгрузила из памяти, пока они были скрыты: грузим заново, только когда их откроют.
     private var terminatedViews = Set<ObjectIdentifier>()
+    /// Страница, которая была в скрытом окне до того, как мы освободили его память (`didReceiveMemoryWarning`).
+    private var parkedURLs: [ObjectIdentifier: URL] = [:]
     private var searchVC: SearchViewController?
     /// Поиск — не вкладка на панели, а отдельное место в той же области (открывается лупой YouTube
     /// или лупой на подборках); панель и мини-плеер остаются, вернуться — любой вкладкой.
@@ -503,8 +505,9 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             let webView = browseView(for: index)
             browseViews.forEach { $0.value.isHidden = $0.key != index }
             if terminatedViews.remove(ObjectIdentifier(webView)) != nil {
-                // Пока окно было скрыто, iOS выгрузила его — грузим сейчас, когда его открыли.
-                if let url = webView.url { webView.load(URLRequest(url: url)) } else { load(path: root, in: webView) }
+                // Пока окно было скрыто, iOS выгрузила его (или мы освободили память) — грузим сейчас, когда его открыли.
+                let parked = parkedURLs.removeValue(forKey: ObjectIdentifier(webView))
+                if let url = parked ?? webView.url, url.scheme != "about" { webView.load(URLRequest(url: url)) } else { load(path: root, in: webView) }
                 browseRoots[index] = root
             } else if browseRoots[index] != root {
                 load(path: root, in: webView)
@@ -672,6 +675,19 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             webView.load(URLRequest(url: url))
         }
         return nil
+    }
+
+    /// Памяти мало — освобождаем скрытые вкладки, чтобы iOS не выгрузила открытую: иначе лента посреди прокрутки
+    /// загружалась заново с начала (жалоба владельца после 1.78). Скрытые загрузятся снова, когда их откроют.
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        for webView in browseViews.values where webView.isHidden {
+            let id = ObjectIdentifier(webView)
+            guard !terminatedViews.contains(id) else { continue }
+            if let url = webView.url, url.scheme != "about" { parkedURLs[id] = url }
+            terminatedViews.insert(id)
+            webView.loadHTMLString("", baseURL: nil)
+        }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
