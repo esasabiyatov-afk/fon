@@ -142,8 +142,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             guard let self else { return }
             self.musicView.systemPlayer = false
             self.webView.load(URLRequest(url: url))
-            // Диагностика (владелец: на iPad системный плеер не заводился): причина — окном с кнопкой «Скопировать».
-            self.showFallbackReason(reason ?? "трек не заиграл за 30 с")
+            // Неожиданная причина — окном с кнопкой «Скопировать»; «только SABR» (iPad) и простой таймаут — тихо.
+            if let reason { self.showFallbackReason(reason) }
         }
 
         // Шапка развёрнутого плеера
@@ -208,7 +208,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         topTitleLabel.text = nil
         progress = 0
         if let id = currentVideoID { updateMiniArtwork(id) }
-        if Settings.nativeAudio && musicMode && NativeAudio.canPlay(url) {
+        if Settings.nativeAudio && musicMode && NativeAudio.canPlay(url) && !NativeAudio.shared.sabrOnly {
             // Системный плеер: веб-страница молчит (иначе два звука), очередь «Играет из» — своя.
             webView.load(URLRequest(url: URL(string: "about:blank")!))
             musicView.systemPlayer = true
@@ -297,7 +297,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             NativeAudio.shared.deactivate()
             musicView.systemPlayer = false
             webView.load(URLRequest(url: url))
-        } else if musicMode, Settings.nativeAudio, !NativeAudio.shared.active, let id = currentVideoID,
+        } else if musicMode, Settings.nativeAudio, !NativeAudio.shared.active, !NativeAudio.shared.sabrOnly, let id = currentVideoID,
                   var components = URLComponents(string: "https://m.youtube.com/watch") {
             // Обратно в режим музыки — тот же трек снова в системный плеер, с того же места
             // (владелец: «после переключения на ютуб и обратно системный плеер пропадает»).

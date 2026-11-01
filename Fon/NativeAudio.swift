@@ -290,6 +290,11 @@ final class NativeAudio: NSObject {
     private var token = UUID()
     private var playedOnce = false
     private var failuresInRow = 0
+    /// YouTube отдаёт этому устройству видео только своим протоколом (SABR, без ссылок — так на iPad владельца, 1.77):
+    /// 6 часов сразу играем обычным плеером, без попыток и без окна; потом пробуем снова.
+    var sabrOnly: Bool {
+        (UserDefaults.standard.object(forKey: "sabrOnlyUntil") as? Date ?? .distantPast) > Date()
+    }
     private var extending = false
     private var statusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
@@ -530,7 +535,12 @@ final class NativeAudio: NSObject {
             queueChanged()
         }
         candidates += result.streams
-        if result.streams.isEmpty, let reason = result.reason { lastReason = reason }
+        if result.streams.isEmpty, result.noLinks {
+            UserDefaults.standard.set(Date().addingTimeInterval(6 * 3600), forKey: "sabrOnlyUntil")
+            lastReason = nil // ожидаемо — переходим тихо
+        } else if result.streams.isEmpty, let reason = result.reason {
+            lastReason = reason
+        }
     }
 
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
