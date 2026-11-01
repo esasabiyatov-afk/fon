@@ -19,7 +19,19 @@ enum YouTubeSession {
 
     static func refresh(completion: (() -> Void)? = nil) {
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { all in
-            let youtube = all.filter { $0.domain.hasSuffix("youtube.com") }
+            // Как браузер для www.youtube.com: общие cookies `.youtube.com` и самого www — без чужих поддоменов
+            // (m., music.), иначе одно имя (PREF, VISITOR_INFO1_LIVE…) шло несколько раз с разными значениями.
+            // Свежие — первыми; из одноимённых берём одну.
+            let now = Date()
+            var seen = Set<String>()
+            let youtube = all.filter { cookie in
+                let domain = cookie.domain.lowercased()
+                let matches = domain == "www.youtube.com" || domain == ".youtube.com" || domain == "youtube.com"
+                    || domain == ".www.youtube.com"
+                return matches && (cookie.expiresDate.map { $0 > now } ?? true)
+            }
+            .sorted { ($0.domain == ".youtube.com" ? 0 : 1) < ($1.domain == ".youtube.com" ? 0 : 1) }
+            .filter { seen.insert($0.name).inserted }
             lock.lock()
             cookies = youtube
             lock.unlock()
