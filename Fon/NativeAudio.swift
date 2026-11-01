@@ -404,6 +404,14 @@ final class NativeAudio: NSObject {
         queueChanged()
     }
 
+    /// Переставить трек очереди (перетаскивание в «Далее»).
+    func moveUpcoming(from: Int, to: Int) {
+        let i = index + 1 + from, j = index + 1 + to
+        guard queue.indices.contains(i), queue.indices.contains(j) else { return }
+        queue.insert(queue.remove(at: i), at: j)
+        queueChanged()
+    }
+
     /// Поставить трек в очередь: `offset` 0 — следующим. Если он уже ждёт дальше — переносится сюда.
     func insertUpcoming(_ track: Track, at offset: Int) {
         guard active else { return }

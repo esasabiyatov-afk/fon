@@ -10,10 +10,16 @@ protocol UpNextSource: AnyObject {
     func removeUpcoming(at offset: Int)
     func insertUpcoming(_ track: Track, at offset: Int)
     func playNow(_ track: Track)
+    func canMoveUpcoming(at offset: Int) -> Bool
+    /// Сколько первых строк очереди можно переставлять между собой.
+    var moveLimit: Int { get }
+    func moveUpcoming(from: Int, to: Int)
 }
 
 extension NativeAudio: UpNextSource {
     func canRemoveUpcoming(at offset: Int) -> Bool { true }
+    func canMoveUpcoming(at offset: Int) -> Bool { true }
+    var moveLimit: Int { upcoming.count }
 }
 
 enum UpNext {
@@ -105,6 +111,18 @@ final class WebQueue: UpNextSource {
     func removeUpcoming(at offset: Int) {
         guard inserted.indices.contains(offset) else { return }
         inserted.remove(at: offset)
+        syncPage()
+        notify()
+    }
+
+    /// Переставлять можно только свои добавленные (список YouTube ведёт сам YouTube).
+    func canMoveUpcoming(at offset: Int) -> Bool { offset < inserted.count }
+    var moveLimit: Int { inserted.count }
+
+    func moveUpcoming(from: Int, to: Int) {
+        guard inserted.indices.contains(from) else { return }
+        let track = inserted.remove(at: from)
+        inserted.insert(track, at: min(max(0, to), inserted.count))
         syncPage()
         notify()
     }

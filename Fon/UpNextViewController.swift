@@ -128,7 +128,7 @@ enum TrackVersions {
 /// «Далее» — свайп вверх по музыкальному плееру (или кнопка списка): другие версии трека, очередь системного плеера
 /// и «＋» — найти и добавить своё. У системного плеера — его очередь, у обычного плеера YouTube — `WebQueue`
 /// (свои добавленные + список YouTube на странице); там же слева «Страница» — страница видео YouTube.
-final class UpNextViewController: UITableViewController {
+final class UpNextViewController: UITableViewController, UITableViewDragDelegate, UITableViewDropDelegate {
     private var tracks: [Track] = []
     private var currentID: String?
     /// Только у обычного плеера: показать страницу YouTube (комментарии, описание).
@@ -151,6 +151,10 @@ final class UpNextViewController: UITableViewController {
         }
         tableView.register(VersionsCell.self, forCellReuseIdentifier: "versions")
         tableView.register(QueueTrackCell.self, forCellReuseIdentifier: "track")
+        // Порядок очереди — зажать трек и перетащить вверх/вниз (просьба владельца после 1.83).
+        tableView.dragInteractionEnabled = true
+        tableView.dragDelegate = self
+        tableView.dropDelegate = self
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(reload), name: NativeAudio.queueDidChange, object: nil)
         nc.addObserver(self, selector: #selector(reload), name: TrackVersions.didChange, object: nil)
@@ -158,6 +162,7 @@ final class UpNextViewController: UITableViewController {
     }
 
     @objc private func reload() {
+        guard !moving else { return }
         let audio = UpNext.source
         tracks = audio.upcoming
         currentID = audio.currentTrack?.id
@@ -213,6 +218,48 @@ final class UpNextViewController: UITableViewController {
             done(true)
         }
         return UISwipeActionsConfiguration(actions: [remove])
+    }
+
+    // MARK: - Перетаскивание (порядок очереди)
+
+    private var moving = false
+
+    func tableView(_ tableView: UITableView, itemsForBeginning session: UIDragSession, at indexPath: IndexPath) -> [UIDragItem] {
+        guard indexPath.section == 1, UpNext.source.canMoveUpcoming(at: indexPath.row) else { return [] }
+        let item = UIDragItem(itemProvider: NSItemProvider())
+        item.localObject = tracks[indexPath.row].id
+        return [item]
+    }
+
+    func tableView(_ tableView: UITableView, dropSessionDidUpdate session: UIDropSession,
+                   withDestinationIndexPath destinationIndexPath: IndexPath?) -> UITableViewDropProposal {
+        guard session.localDragSession != nil, let to = destinationIndexPath, to.section == 1 else {
+            return UITableViewDropProposal(operation: .forbidden)
+        }
+        return UITableViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+    }
+
+    func tableView(_ tableView: UITableView, performDropWith coordinator: UITableViewDropCoordinator) {}
+
+    override func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
+        indexPath.section == 1 && UpNext.source.canMoveUpcoming(at: indexPath.row)
+    }
+
+    override func tableView(_ tableView: UITableView, targetIndexPathForMoveFromRowAt source: IndexPath,
+                            toProposedIndexPath proposed: IndexPath) -> IndexPath {
+        guard proposed.section == 1 else { return IndexPath(row: 0, section: 1) }
+        return IndexPath(row: max(0, min(proposed.row, UpNext.source.moveLimit - 1)), section: 1)
+    }
+
+    override func tableView(_ tableView: UITableView, moveRowAt source: IndexPath, to destination: IndexPath) {
+        guard source.section == 1, destination.section == 1, source.row != destination.row else { return }
+        let to = min(destination.row, UpNext.source.moveLimit - 1)
+        let track = tracks.remove(at: source.row)
+        tracks.insert(track, at: to)
+        moving = true
+        UpNext.source.moveUpcoming(from: source.row, to: to)
+        moving = false
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 }
 
