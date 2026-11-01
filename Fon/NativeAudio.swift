@@ -47,6 +47,14 @@ enum YouTubeSession {
         }
     }
 
+    /// Для подсказки об ошибке: сколько cookies YouTube и есть ли вход.
+    static var summary: String {
+        lock.lock()
+        defer { lock.unlock() }
+        let signedIn = cookies.contains { $0.name == "SAPISID" || $0.name == "__Secure-3PAPISID" }
+        return "cookies: \(cookies.count), вход: \(signedIn ? "да" : "нет")"
+    }
+
     static var cookieHeader: String? {
         lock.lock()
         defer { lock.unlock() }

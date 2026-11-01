@@ -142,10 +142,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             guard let self else { return }
             self.musicView.systemPlayer = false
             self.webView.load(URLRequest(url: url))
-            // Почему не вышло — на экране (журнал отладки убран, а на iPad системный плеер не заводился).
-            if let reason {
-                self.showToast("Системный плеер не смог: \(reason). Играет обычный.", at: CGPoint(x: self.bounds.midX, y: self.bounds.midY), duration: 8)
-            }
+            // Диагностика (владелец: на iPad системный плеер не заводился): причина — окном с кнопкой «Скопировать».
+            self.showFallbackReason(reason ?? "трек не заиграл за 30 с")
         }
 
         // Шапка развёрнутого плеера
@@ -335,6 +333,17 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             guard let pair = value as? [String], pair.count == 2, !pair[0].isEmpty else { return }
             self?.onOpenArtist?(pair[0], pair[1])
         }
+    }
+
+    private func showFallbackReason(_ reason: String) {
+        guard var top = window?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        let device = UIDevice.current
+        let details = "\(reason)\n\n\(device.model), \(device.systemName) \(device.systemVersion)\n\(YouTubeSession.summary)"
+        let alert = UIAlertController(title: "Системный плеер не смог включить трек", message: details + "\n\nИграет обычный плеер.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Скопировать", style: .default) { _ in UIPasteboard.general.string = details })
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        top.present(alert, animated: true)
     }
 
     /// «Далее» — снизу листом поверх плеера.
