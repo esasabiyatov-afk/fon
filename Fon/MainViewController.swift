@@ -74,6 +74,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        OfflineStore.shared.start() // музыка без интернета: качает сама по Wi-Fi
 
         browseContainer.backgroundColor = .black
         browseContainer.translatesAutoresizingMaskIntoConstraints = false

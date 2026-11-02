@@ -26,6 +26,7 @@ final class LibraryViewController: UITableViewController {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
         nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(reload), name: OfflineStore.didChange, object: nil)
     }
 
     @objc private func reload() { tableView.reloadData() }
@@ -38,7 +39,7 @@ final class LibraryViewController: UITableViewController {
         CloudLikes.shared.refresh { [weak self] in self?.refreshControl?.endRefreshing() }
     }
 
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 2 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 3 }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         let cloud = CloudLikes.shared
@@ -58,10 +59,14 @@ final class LibraryViewController: UITableViewController {
             content.text = "Понравившиеся"
             content.secondaryText = cloud.loaded || !cloud.tracks.isEmpty ? LibraryViewController.tracksCount(cloud.tracks.count) : "Загрузка…"
             content.image = UIImage(systemName: "heart.fill")
-        } else {
+        } else if indexPath.row == 1 {
             content.text = "Недавно слушали"
             content.secondaryText = LibraryViewController.tracksCount(Library.shared.history.count)
             content.image = UIImage(systemName: "clock.arrow.circlepath")
+        } else {
+            content.text = "Скачанные"
+            content.secondaryText = LibraryViewController.offlineStatus()
+            content.image = UIImage(systemName: "arrow.down.circle.fill")
         }
         cell.contentConfiguration = content
         return cell
@@ -69,9 +74,23 @@ final class LibraryViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let list = TrackListViewController(kind: indexPath.row == 0 ? .liked : .history)
+        let list = TrackListViewController(kind: [.liked, .history, .downloaded][indexPath.row])
         list.onPlay = onPlay
         navigationController?.pushViewController(list, animated: true)
+    }
+
+    /// «120 треков · 450 МБ из 2 ГБ · качается…»
+    static func offlineStatus() -> String {
+        let store = OfflineStore.shared
+        var parts = [tracksCount(store.tracks.count), OfflineStore.sizeText(store.totalSize) + " из " + OfflineStore.sizeText(OfflineStore.limit)]
+        if !store.online {
+            parts.append("нет сети — играют скачанные")
+        } else if store.downloading != nil {
+            parts.append("качается, в очереди \(store.waitingCount)")
+        } else if store.waitsForWiFi {
+            parts.append("ждёт Wi-Fi")
+        }
+        return parts.joined(separator: " · ")
     }
 
     static func tracksCount(_ n: Int) -> String {
@@ -87,7 +106,7 @@ final class LibraryViewController: UITableViewController {
 /// Список треков: «Понравившиеся» (облако), «Недавно слушали» (на телефоне) или музыка исполнителя
 /// (видео его канала, только музыкальные — нажатие на исполнителя в плеере).
 final class TrackListViewController: UITableViewController {
-    enum Kind: Equatable { case liked, history, artist(channelID: String, name: String) }
+    enum Kind: Equatable { case liked, history, downloaded, artist(channelID: String, name: String) }
 
     var onPlay: PlayHandler?
     private let kind: Kind
@@ -107,6 +126,7 @@ final class TrackListViewController: UITableViewController {
         switch kind {
         case .liked: title = "Понравившиеся"
         case .history: title = "Недавно слушали"
+        case .downloaded: title = "Скачанные"
         case .artist(_, let name): title = name.replacingOccurrences(of: " - Topic", with: "")
         }
         tableView.backgroundColor = .black
@@ -114,7 +134,9 @@ final class TrackListViewController: UITableViewController {
         tableView.separatorInset.left = 76
         tableView.register(TrackCell.self, forCellReuseIdentifier: "track")
         tableView.tableHeaderView = makeHeader()
-        if kind != .history {
+        if kind == .downloaded {
+            // Без кнопок и обновления: качается само.
+        } else if kind != .history {
             refreshControl = UIRefreshControl()
             refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         } else {
@@ -123,6 +145,7 @@ final class TrackListViewController: UITableViewController {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil) // ♡ у треков
         if kind == .history { nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil) }
+        if kind == .downloaded { nc.addObserver(self, selector: #selector(reload), name: OfflineStore.didChange, object: nil) }
         reload()
         loadArtist()
     }
@@ -155,8 +178,10 @@ final class TrackListViewController: UITableViewController {
         switch kind {
         case .liked: tracks = CloudLikes.shared.tracks
         case .history: tracks = Library.shared.history
+        case .downloaded: tracks = OfflineStore.shared.tracks
         case .artist: tracks = artistTracks ?? []
         }
+        if kind == .downloaded { tableView.tableFooterView = offlineFooter() }
         tableView.reloadData()
         if tracks.isEmpty {
             let label = UILabel()
@@ -165,6 +190,8 @@ final class TrackListViewController: UITableViewController {
             } else if kind == .liked {
                 label.text = CloudLikes.shared.lastError
                     ?? (CloudLikes.shared.loaded ? "Нажмите ♡ в плеере —\nтрек сохранится в ваш плейлист\nYouTube «Fon — музыка»" : "Загрузка…")
+            } else if kind == .downloaded {
+                label.text = "Здесь появятся треки для прослушивания без интернета.\nПриложение скачивает их само по Wi-Fi:\nпонравившиеся, часто слушаемые, миксы\nи немного рекомендаций (до 2 ГБ)."
             } else {
                 label.text = "Здесь появятся треки,\nкоторые вы слушали в режиме музыки"
             }
@@ -176,6 +203,17 @@ final class TrackListViewController: UITableViewController {
             tableView.backgroundView = nil
         }
         tableView.tableHeaderView?.isHidden = tracks.isEmpty
+    }
+
+    /// Внизу «Скачанных» — сколько места и что сейчас качается.
+    private func offlineFooter() -> UIView {
+        let label = UILabel(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 64))
+        label.text = LibraryViewController.offlineStatus() + "\nСмахните трек, чтобы удалить: сам он больше не скачается."
+        label.numberOfLines = 0
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = .secondaryLabel
+        label.textAlignment = .center
+        return label
     }
 
     @objc private func pullToRefresh() {
@@ -217,6 +255,12 @@ final class TrackListViewController: UITableViewController {
 
     private var sourceName: String { title ?? "Медиатека" }
 
+    /// Нажатый трек и следующие — одной очередью (исполнитель, скачанные — без сети миксов нет).
+    private var playsAsQueue: Bool {
+        if case .artist = kind { return true }
+        return kind == .downloaded
+    }
+
     private func playAll(shuffle: Bool) {
         guard let first = tracks.first else { return }
         let ids = tracks.map(\.id)
@@ -247,7 +291,7 @@ final class TrackListViewController: UITableViewController {
         let track = tracks[indexPath.row]
         if kind == .liked, let url = CloudLikes.shared.playURL(startingAt: track.id) {
             onPlay?(url, sourceName, tracks.map(\.id))
-        } else if case .artist = kind {
+        } else if playsAsQueue {
             // Нажатый трек и следующие за ним — одной очередью.
             let queue = Array(tracks[indexPath.row...].map(\.id).prefix(50))
             if let url = YouTubeLinks.queue(queue) { onPlay?(url, sourceName, queue) }
@@ -262,7 +306,9 @@ final class TrackListViewController: UITableViewController {
         let title = kind == .liked ? "Убрать" : "Удалить"
         let action = UIContextualAction(style: .destructive, title: title) { [weak self] _, _, done in
             guard let self else { return done(false) }
-            if self.kind == .liked {
+            if self.kind == .downloaded {
+                OfflineStore.shared.remove(track.id) // и больше не качать сам
+            } else if self.kind == .liked {
                 CloudLikes.shared.setLiked(track, false)
             } else {
                 Library.shared.removeFromHistory(track.id)

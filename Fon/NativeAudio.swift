@@ -455,14 +455,17 @@ final class NativeAudio: NSObject {
         loop = false
         pendingStart = value("t").flatMap { Double($0.replacingOccurrences(of: "s", with: "")) }.flatMap { $0 > 0 ? $0 : nil }
         if url.path == "/watch_videos", let list = value("video_ids") {
-            queue = list.split(separator: ",").map { Track(id: String($0), title: "", artist: "") }
+            // Названия — из скачанных (без сети иначе их не узнать), понравившихся и истории.
+            let known = Dictionary((OfflineStore.shared.tracks + CloudLikes.shared.tracks + Library.shared.history).map { ($0.id, $0) },
+                                   uniquingKeysWith: { first, _ in first })
+            queue = list.split(separator: ",").map { known[String($0)] ?? Track(id: String($0), title: "", artist: "") }
             index = 0
             playlistID = nil
         } else if let id = value("v") {
             if let ids, let at = ids.firstIndex(of: id) {
                 // Свой список (понравившиеся, история): играем его с нажатого трека.
                 // Названия — из понравившихся и истории, чтобы в «Далее» были видны.
-                let known = Dictionary((CloudLikes.shared.tracks + Library.shared.history).map { ($0.id, $0) },
+                let known = Dictionary((CloudLikes.shared.tracks + Library.shared.history + OfflineStore.shared.tracks).map { ($0.id, $0) },
                                        uniquingKeysWith: { first, _ in first })
                 queue = ids.map { known[$0] ?? Track(id: $0, title: "", artist: "") }
                 index = at
@@ -526,6 +529,18 @@ final class NativeAudio: NSObject {
         publish(loading: true)
         queueChanged()
         beginBackgroundTask()
+        // Скачан (офлайн) — с телефона: сразу и без сети.
+        if let file = OfflineStore.shared.file(for: track.id) {
+            if track.title.isEmpty, let saved = OfflineStore.shared.track(for: track.id), queue.indices.contains(index) {
+                queue[index] = saved
+                publish(loading: true)
+                queueChanged()
+            }
+            candidates = [AudioStream(url: file, headers: [:], client: "Скачано")]
+            triedDirect = true
+            tryNextCandidate()
+            return
+        }
         // Поток следующего трека найден заранее — сразу его; иначе прямой путь (без окна), потом окно.
         if let ready = prefetched.removeValue(forKey: track.id) {
             use(ready, for: track)
@@ -603,6 +618,8 @@ final class NativeAudio: NSObject {
     /// Поток трека (вариант 3 владельца): ссылка со страницы запросом приложения + «решатель» yt-dlp — без окна.
     private func tryDirect() {
         guard !triedDirect, let track = currentTrack else { return trackFailed() }
+        // Нет сети, а трек не скачан — играем скачанное (следующее по очереди или вперемешку).
+        if !OfflineStore.shared.online, playOfflineInstead() { return }
         triedDirect = true
         let current = token
         Task { [weak self] in
@@ -718,8 +735,30 @@ final class NativeAudio: NSObject {
         publish()
     }
 
+    /// Без сети: следующий скачанный трек очереди, а нет такого — все скачанные вперемешку («о, это моя любимая»).
+    @discardableResult
+    private func playOfflineInstead() -> Bool {
+        let store = OfflineStore.shared
+        if let i = queue.indices.first(where: { $0 > index && store.file(for: queue[$0].id) != nil }) {
+            index = i
+            playCurrent()
+            return true
+        }
+        let pool = Array(store.tracks.filter { $0.id != currentTrack?.id }.shuffled().prefix(50))
+        guard !pool.isEmpty else { return false }
+        let start = queue.count
+        queue += pool
+        index = start
+        playlistID = nil
+        playCurrent()
+        return true
+    }
+
     func next() {
         guard active else { return }
+        if !OfflineStore.shared.online, index + 1 >= queue.count || OfflineStore.shared.file(for: queue[index + 1].id) == nil {
+            if playOfflineInstead() { return }
+        }
         if index + 1 < queue.count {
             index += 1
             playCurrent()

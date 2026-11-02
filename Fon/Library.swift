@@ -45,6 +45,7 @@ final class Library {
     }
 
     func recordPlay(_ track: Track) {
+        OfflineStore.shared.notePlay(track.id) // «часто слушаю» — для офлайна
         var list = history.filter { $0.id != track.id }
         list.insert(track, at: 0)
         store.history = Array(list.prefix(Self.historyLimit))
