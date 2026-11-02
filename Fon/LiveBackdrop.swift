@@ -276,7 +276,8 @@ final class LiveBackdrop: UIView {
 
 /// Подложка под названием и кнопками плеера «под стекло» (владелец после 1.87: «низ более стеклянным»):
 /// тонкое размытие, сверху блик, лёгкий оттенок цвета фона и светлая кромка — ярче сверху-слева, как у стекла.
-/// Обычное размытие UIKit (не системное стекло iOS 26 — его сборка была нестабильной).
+/// На iOS 26 (сборка Xcode 26) — **настоящее системное стекло** `UIGlassEffect` (владелец после 1.87: «прям как стекло
+/// iOS 26»): блик, кромку и преломление рисует система, оттенок — `tintColor`. Иначе — размытие с бликом и кромкой.
 final class GlassPanel: UIView {
     private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let tint = CALayer()
@@ -285,10 +286,22 @@ final class GlassPanel: UIView {
     private let rimMask = CAShapeLayer()
     var cornerRadius: CGFloat = 30 { didSet { setNeedsLayout() } }
 
+    /// Системное стекло iOS 26 вместо своего.
+    private var native = false
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         layer.cornerCurve = .continuous
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            native = true
+            blur.effect = UIGlassEffect()
+            blur.layer.cornerCurve = .continuous
+            addSubview(blur)
+            return
+        }
+        #endif
         clipsToBounds = true
         addSubview(blur)
         tint.backgroundColor = UIColor(white: 1, alpha: 0.04).cgColor
@@ -313,8 +326,12 @@ final class GlassPanel: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        layer.cornerRadius = cornerRadius
         blur.frame = bounds
+        if native {
+            blur.layer.cornerRadius = cornerRadius // форму стекла система берёт из скругления
+            return
+        }
+        layer.cornerRadius = cornerRadius
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         tint.frame = bounds
@@ -327,6 +344,14 @@ final class GlassPanel: UIView {
 
     /// Лёгкий оттенок цвета фона — стекло «вбирает» цвет под ним.
     func setTint(_ color: UIColor?) {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *), native {
+            let glass = UIGlassEffect()
+            glass.tintColor = color?.withAlphaComponent(0.18)
+            UIView.animate(withDuration: 1.2) { self.blur.effect = glass }
+            return
+        }
+        #endif
         CATransaction.begin()
         CATransaction.setAnimationDuration(1.2)
         tint.backgroundColor = (color?.withAlphaComponent(0.12) ?? UIColor(white: 1, alpha: 0.04)).cgColor
