@@ -105,8 +105,11 @@ final class ArtworkLoader {
         case .player: (names, maxWidth) = (["maxresdefault", "sddefault", "hqdefault"], 900)
         }
         // «-16x9» в ключе: в кэше на диске от прежних версий лежат квадратные обложки под старыми ключами.
-        cached("\(id)-\(size)-16x9", color: size != .small, completion: completion) { [weak self] done in
-            self?.fetch(id, names: names[...], maxWidth: maxWidth, done: done)
+        // Плеер — обложка в своей форме (вертикальная, квадратная, 16:9: без чёрных полей вокруг кадра; просьба владельца
+        // после 1.83 — «оригинал»), списки и карточки — ровные 16:9.
+        let original = size == .player
+        cached("\(id)-\(size)-\(original ? "orig" : "16x9")", color: size != .small, completion: completion) { [weak self] done in
+            self?.fetch(id, names: names[...], maxWidth: maxWidth, original: original, done: done)
         }
     }
 
@@ -184,7 +187,7 @@ final class ArtworkLoader {
     }
 
     /// Сбой сети (ответа нет вовсе) — повторяем тот же размер ещё дважды, а не сдаёмся с пустой обложкой.
-    private func fetch(_ id: String, names: ArraySlice<String>, maxWidth: CGFloat, attempt: Int = 0,
+    private func fetch(_ id: String, names: ArraySlice<String>, maxWidth: CGFloat, original: Bool = false, attempt: Int = 0,
                        done: @escaping (UIImage?) -> Void) {
         guard let name = names.first, let url = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg") else {
             done(nil)
@@ -193,13 +196,13 @@ final class ArtworkLoader {
         URLSession.shared.dataTask(with: url) { data, response, _ in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             if ok, let data, let image = UIImage(data: data), image.size.width > 150 {
-                done(ArtworkLoader.wideArtwork(image, maxWidth: maxWidth))
+                done(original ? ArtworkLoader.trimmedArtwork(image, maxWidth: maxWidth) : ArtworkLoader.wideArtwork(image, maxWidth: maxWidth))
             } else if response == nil, attempt < 2 {
                 DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
-                    self.fetch(id, names: names, maxWidth: maxWidth, attempt: attempt + 1, done: done)
+                    self.fetch(id, names: names, maxWidth: maxWidth, original: original, attempt: attempt + 1, done: done)
                 }
             } else {
-                self.fetch(id, names: names.dropFirst(), maxWidth: maxWidth, done: done)
+                self.fetch(id, names: names.dropFirst(), maxWidth: maxWidth, original: original, done: done)
             }
         }.resume()
     }
@@ -220,6 +223,49 @@ final class ArtworkLoader {
         let bh = bw * CGFloat(band.height) / CGFloat(band.width)
         return UIGraphicsImageRenderer(size: CGSize(width: bw, height: bh), format: format).image { _ in
             UIImage(cgImage: band).draw(in: CGRect(x: 0, y: 0, width: bw, height: bh))
+        }
+    }
+
+    /// Обложка в форме самого видео: превью YouTube — 16:9 или 4:3, а кадр вертикального/квадратного видео внутри
+    /// окружён чёрными полями. Обрезаем тёмные поля со всех сторон (строка/столбец без единой светлой точки).
+    static func trimmedArtwork(_ image: UIImage, maxWidth: CGFloat) -> UIImage? {
+        guard let cg = image.cgImage else { return image }
+        let w = cg.width, h = cg.height
+        let sw = 96, sh = max(1, Int((Double(h) / Double(w) * 96).rounded()))
+        var pixels = [UInt8](repeating: 0, count: sw * sh * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+            return true
+        }
+        guard drawn else { return wideArtwork(image, maxWidth: maxWidth) }
+        func bright(_ x: Int, _ y: Int) -> Bool {
+            let i = (y * sw + x) * 4
+            return max(pixels[i], pixels[i + 1], pixels[i + 2]) > 40
+        }
+        let rowHas = (0..<sh).map { y in (0..<sw).contains { bright($0, y) } }
+        let colHas = (0..<sw).map { x in (0..<sh).contains { bright(x, $0) } }
+        guard let top = rowHas.firstIndex(of: true), let bottom = rowHas.lastIndex(of: true),
+              let left = colHas.firstIndex(of: true), let right = colHas.lastIndex(of: true) else {
+            return wideArtwork(image, maxWidth: maxWidth)
+        }
+        // Строки буфера идут сверху вниз (CGContext без переворота рисует изображение так же, как оно хранится).
+        let sx = CGFloat(w) / CGFloat(sw), sy = CGFloat(h) / CGFloat(sh)
+        var rect = CGRect(x: CGFloat(left) * sx, y: CGFloat(top) * sy,
+                          width: CGFloat(right - left + 1) * sx, height: CGFloat(bottom - top + 1) * sy).integral
+        rect = rect.intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        // Почти всё тёмное или странная форма — лучше обычная 16:9.
+        let aspect = rect.width / max(1, rect.height)
+        guard rect.width * rect.height > CGFloat(w * h) * 0.2, aspect >= 0.45, aspect <= 2.2,
+              let crop = cg.cropping(to: rect) else { return wideArtwork(image, maxWidth: maxWidth) }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let bw = min(CGFloat(crop.width), maxWidth)
+        let bh = bw * CGFloat(crop.height) / CGFloat(crop.width)
+        return UIGraphicsImageRenderer(size: CGSize(width: bw, height: bh), format: format).image { _ in
+            UIImage(cgImage: crop).draw(in: CGRect(x: 0, y: 0, width: bw, height: bh))
         }
     }
 

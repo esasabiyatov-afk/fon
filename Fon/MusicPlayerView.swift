@@ -52,6 +52,9 @@ final class MusicPlayerView: UIView {
     private var inBackground = false
     /// Ширина к высоте у текущей обложки (кадр 16:9; квадрат — только у картинки по ссылке).
     private var artworkAspect: CGFloat = 16.0 / 9
+    /// Форма обложки и видео — своя у каждого (вертикальное, квадратное, 16:9; просьба владельца после 1.83: «оригинал»).
+    private var imageAspect: CGFloat = 16.0 / 9
+    private var videoAspect: CGFloat?
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
     private let likeButton = UIButton(type: .system)
@@ -122,7 +125,7 @@ final class MusicPlayerView: UIView {
         videoView.layer.cornerRadius = 10
         videoView.isUserInteractionEnabled = false
         videoView.alpha = 0
-        videoLayer.videoGravity = .resizeAspectFill // как обложка: кадр 16:9 или квадрат альбома из середины
+        videoLayer.videoGravity = .resizeAspectFill // рамка — по форме кадра (applyAspect), так что без обрезки
         videoView.layer.addSublayer(videoLayer)
         artworkContainer.addSubview(videoView)
         // Нажатие на обложку или видео — переключает одно на другое (просьба владельца после 1.71).
@@ -254,6 +257,8 @@ final class MusicPlayerView: UIView {
         let isNew = track?.id != id
         track = Track(id: id, title: title, artist: artist)
         if isNew { loadArtwork(id) }
+        // Форма кадра нового трека становится известна не сразу — сверяем при каждом обновлении.
+        if videoView.alpha == 1 { applyAspect(showingVideo: true) }
         if titleLabel.text != title { titleLabel.text = title }
         if artistLabel.text != artist { artistLabel.text = artist }
         self.time = time
@@ -297,6 +302,7 @@ final class MusicPlayerView: UIView {
 
     private func updateVideoVisibility() {
         let show = videoLayer.player != nil && videoLayer.isReadyForDisplay
+        applyAspect(showingVideo: show)
         guard (videoView.alpha == 1) != show else { return }
         UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.videoView.alpha = show ? 1 : 0
@@ -309,8 +315,8 @@ final class MusicPlayerView: UIView {
         ArtworkLoader.shared.load(id, size: .player) { [weak self] image, color in
             guard let self, self.track == nil || self.track?.id == id else { return }
             if let image {
-                // Кадр видео 16:9 — без чёрных полей.
-                let aspect = image.size.width > 0 ? min(2, max(1, image.size.width / image.size.height)) : 1
+                // Обложка в своей форме — без чёрных полей.
+                let aspect = image.size.height > 0 ? min(2.2, max(0.45, image.size.width / image.size.height)) : 16.0 / 9
                 UIView.transition(with: self.artworkView, duration: 0.3, options: .transitionCrossDissolve) {
                     self.artworkView.contentMode = .scaleAspectFill
                     self.artworkView.image = image
@@ -318,15 +324,26 @@ final class MusicPlayerView: UIView {
                 UIView.transition(with: self.backdrop, duration: 0.6, options: .transitionCrossDissolve) {
                     self.backdrop.image = image
                 }
-                if aspect != self.artworkAspect {
-                    self.artworkAspect = aspect
-                    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-                        self.setNeedsLayout()
-                        self.layoutIfNeeded()
-                    }
-                }
+                self.imageAspect = aspect
+                self.applyAspect(showingVideo: self.videoView.alpha == 1)
             }
             if let color { self.setTint(color) }
+        }
+    }
+
+    /// Рамка обложки — по форме того, что сейчас видно: видео (размер кадра у системного плеера) или картинки.
+    private func applyAspect(showingVideo: Bool) {
+        if showingVideo, let size = videoLayer.player?.currentItem?.presentationSize, size.width > 0, size.height > 0 {
+            videoAspect = min(2.2, max(0.45, size.width / size.height))
+        } else if !showingVideo {
+            videoAspect = nil
+        }
+        let aspect = (showingVideo ? videoAspect : nil) ?? imageAspect
+        guard abs(aspect - artworkAspect) > 0.01 else { return }
+        artworkAspect = aspect
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.setNeedsLayout()
+            self.layoutIfNeeded()
         }
     }
 
