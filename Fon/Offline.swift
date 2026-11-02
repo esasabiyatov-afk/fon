@@ -94,6 +94,8 @@ final class OfflineStore {
     var totalSize: Int64 { index.entries.values.reduce(0) { $0 + $1.size } }
     var waitingCount: Int { pending.count + (downloading == nil ? 0 : 1) }
     var waitsForWiFi: Bool { online && expensive && !pending.isEmpty }
+    /// Wi-Fi (не мобильная сеть и не экономия трафика) — для автовоспроизведения в ленте.
+    var onWiFi: Bool { online && !expensive }
 
     func file(for id: String) -> URL? {
         guard index.entries[id] != nil else { return nil }

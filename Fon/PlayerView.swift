@@ -223,13 +223,18 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func stop() {
+        Self.coversContent = false
         NativeAudio.shared.deactivate()
         runJS("window.__fon && __fon.cmd('pause')")
         webView.load(URLRequest(url: URL(string: "about:blank")!))
         currentVideoID = nil
     }
 
+    /// Развёрнутый плеер закрывает ленту (автовоспроизведение в ленте в это время не играет).
+    static private(set) var coversContent = false
+
     func setMode(_ newMode: Mode) {
+        Self.coversContent = newMode == .expanded
         if newMode == .mini {
             if isFullscreen { exitFullscreen() }
             showingPage = false // при следующем открытии — снова нативный плеер

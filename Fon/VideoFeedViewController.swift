@@ -1,4 +1,5 @@
 import UIKit
+import AVFoundation
 
 /// Режим «Видео»: «Главная» и «Подписки» — свои плавные ленты, как в приложении YouTube (просьба владельца после 1.78:
 /// «всё плавно и не грузит снова и снова»). Данные — внутренний API YouTube из скрытого окна (`__fonCloud.videoFeed`),
@@ -35,6 +36,10 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
     private var loading = false
     private var message: String?
     private var collectionView: UICollectionView!
+    /// Автовоспроизведение в ленте (как в приложении YouTube): верхняя целиком видимая карточка играет без звука.
+    private let preview = InlinePreview()
+    private var previewTimer: Timer?
+    private var visibilityTimer: Timer?
 
     init(browseID: String, title: String) {
         self.browseID = browseID
@@ -61,6 +66,100 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         collectionView.refreshControl = refresh
         view.addSubview(collectionView)
         load(reset: true)
+
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(appBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        nc.addObserver(self, selector: #selector(appActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+        // Ленту закрыли другой вкладкой или плеером (они не вызывают viewWillDisappear) — превью останавливаем; вернулись — снова.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.preview.isActive {
+                if !self.canPreview { self.preview.stop() }
+            } else if self.canPreview, !self.collectionView.isDragging, !self.collectionView.isDecelerating {
+                self.updatePreview() // вернулись к ленте (свернули плеер, открыли вкладку)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        visibilityTimer = timer
+    }
+
+    deinit { visibilityTimer?.invalidate() }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        schedulePreview()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        preview.stop()
+    }
+
+    @objc private func appBackground() { preview.stop() }
+    @objc private func appActive() { schedulePreview() }
+
+    // MARK: - Автовоспроизведение
+
+    /// Лента на экране: окно есть, ни она, ни её вкладка не спрятаны, плеер не развёрнут, Wi-Fi.
+    private var canPreview: Bool {
+        guard isViewLoaded, view.window != nil, UIApplication.shared.applicationState == .active,
+              !PlayerView.coversContent, OfflineStore.shared.onWiFi else { return false }
+        var current: UIView? = view
+        while let v = current {
+            if v.isHidden || v.alpha < 0.01 { return false }
+            current = v.superview
+        }
+        return true
+    }
+
+    private func schedulePreview(after delay: TimeInterval = 0.5) {
+        previewTimer?.invalidate()
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in self?.updatePreview() }
+        RunLoop.main.add(timer, forMode: .common)
+        previewTimer = timer
+    }
+
+    /// Верхняя карточка, у которой превью видно целиком, — играет; остальные — нет.
+    private func updatePreview() {
+        guard canPreview, !collectionView.isDragging, !collectionView.isDecelerating else {
+            if !canPreview { preview.stop() }
+            return
+        }
+        let visible = collectionView.bounds.inset(by: collectionView.adjustedContentInset)
+        var best: (cell: VideoCell, index: Int, y: CGFloat, x: CGFloat)?
+        for case let cell as VideoCell in collectionView.visibleCells {
+            guard let path = collectionView.indexPath(for: cell), videos.indices.contains(path.item) else { continue }
+            let frame = cell.previewHost.convert(cell.previewHost.bounds, to: collectionView)
+            guard visible.insetBy(dx: -1, dy: -1).contains(frame) else { continue }
+            if best == nil || frame.minY < best!.y - 1 || (abs(frame.minY - best!.y) <= 1 && frame.minX < best!.x) {
+                best = (cell, path.item, frame.minY, frame.minX)
+            }
+        }
+        if let best {
+            preview.play(videos[best.index].id, in: best.cell.previewHost)
+        } else {
+            preview.stop()
+        }
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // Карточка с превью ушла из виду больше чем наполовину — стоп.
+        guard preview.isActive, let host = preview.host else { return }
+        let frame = host.convert(host.bounds, to: collectionView)
+        let visible = collectionView.bounds.inset(by: collectionView.adjustedContentInset)
+        if frame.intersection(visible).height < frame.height / 2 { preview.stop() }
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { schedulePreview() }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        schedulePreview()
+    }
+
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        schedulePreview()
     }
 
     func scrollToTop() {
@@ -111,8 +210,10 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
                 let added = (before..<self.videos.count).map { IndexPath(item: $0, section: 0) }
                 if !added.isEmpty { UIView.performWithoutAnimation { self.collectionView.insertItems(at: added) } }
             } else {
+                self.preview.stop()
                 self.collectionView.reloadData()
             }
+            self.schedulePreview(after: 0.8)
             completion?()
         }
     }
@@ -177,7 +278,12 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         if !videos.isEmpty, indexPath.item >= videos.count - 6 { load(reset: false) }
     }
 
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        if let cell = cell as? VideoCell, preview.host === cell.previewHost { preview.stop() }
+    }
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        preview.stop()
         guard videos.indices.contains(indexPath.item),
               let url = YouTubeLinks.watch(videos[indexPath.item].id) else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -231,6 +337,9 @@ private final class VideoCell: UICollectionViewCell {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Сюда кладётся видео автовоспроизведения (поверх обложки, под длительностью).
+    var previewHost: UIView { thumbnail }
 
     func configure(_ video: VideoFeedViewController.Video, rounded: Bool) {
         self.rounded = rounded
@@ -289,4 +398,101 @@ private final class StatusCell: UICollectionViewCell {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Автовоспроизведение в ленте, как в приложении YouTube (просьба владельца после 1.86): видео карточки играет
+/// без звука прямо на месте обложки, по кругу. Поток — как у системного плеера (`DirectStream`: файл 360p),
+/// просмотр YouTube не засчитывается (статистика не отправляется). Только по Wi-Fi; на iPad (только SABR) — не играет.
+final class InlinePreview {
+    private let player = AVPlayer()
+    private let layer = AVPlayerLayer()
+    private var token = UUID()
+    private var readyObservation: NSKeyValueObservation?
+    private var endObserver: NSObjectProtocol?
+    private(set) weak var host: UIView?
+    private(set) var currentID: String?
+    /// Найденные ссылки (живут несколько часов) — повторно карточка заиграет сразу.
+    private static var links: [String: (stream: AudioStream, found: Date)] = [:]
+
+    var isActive: Bool { currentID != nil }
+
+    init() {
+        player.isMuted = true
+        player.preventsDisplaySleepDuringVideoPlayback = false
+        player.actionAtItemEnd = .none
+        layer.player = player
+        layer.videoGravity = .resizeAspectFill
+        layer.opacity = 0
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
+            guard let self, (note.object as? AVPlayerItem) === self.player.currentItem else { return }
+            self.player.seek(to: .zero)
+            self.player.play()
+        }
+    }
+
+    deinit {
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+    }
+
+    func play(_ id: String, in view: UIView) {
+        if currentID == id, host === view { return }
+        stop()
+        currentID = id
+        host = view
+        let current = UUID()
+        token = current
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = view.bounds
+        layer.cornerRadius = view.layer.cornerRadius
+        layer.masksToBounds = true
+        view.layer.addSublayer(layer)
+        CATransaction.commit()
+        if let saved = Self.links[id], Date().timeIntervalSince(saved.found) < 3 * 3600 {
+            start(saved.stream, token: current)
+            return
+        }
+        Task { [weak self] in
+            let found = await DirectStream.find(id)
+            let stream = found.streams.first { $0.client != "Прямо звук" }
+            await MainActor.run {
+                guard let self, self.token == current, let stream else { return }
+                Self.links[id] = (stream, Date())
+                self.start(stream, token: current)
+            }
+        }
+    }
+
+    private func start(_ stream: AudioStream, token current: UUID) {
+        let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 8
+        player.replaceCurrentItem(with: item)
+        player.play()
+        readyObservation = layer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
+            DispatchQueue.main.async {
+                guard let self, self.token == current, layer.isReadyForDisplay else { return }
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0
+                fade.toValue = 1
+                fade.duration = 0.35
+                layer.add(fade, forKey: "fade")
+                layer.opacity = 1
+            }
+        }
+    }
+
+    func stop() {
+        token = UUID()
+        currentID = nil
+        host = nil
+        readyObservation = nil
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.opacity = 0
+        layer.removeFromSuperlayer()
+        CATransaction.commit()
+    }
 }
