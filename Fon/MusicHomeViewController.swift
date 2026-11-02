@@ -90,7 +90,9 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         navigationController?.setNavigationBarHidden(kind != .feed, animated: animated)
         reload()
         switch kind {
-        case .home: MusicFeed.shared.loadHome()
+        case .home:
+            MusicFeed.shared.loadHome()
+            MusicFeed.shared.loadFeed() // лента YouTube — сразу ниже своих подборок
         case .subscriptions: MusicFeed.shared.loadSubscriptions()
         case .feed: MusicFeed.shared.loadFeed()
         }
@@ -121,6 +123,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         switch kind {
         case .home:
             CloudLikes.shared.refresh()
+            MusicFeed.shared.loadFeed(force: true)
             MusicFeed.shared.loadHome(force: true, completion: done)
         case .subscriptions:
             MusicFeed.shared.loadSubscriptions(force: true, completion: done)
@@ -184,9 +187,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             }
         }
 
-        result.append(Section(title: "Ещё", style: .quick, items: [
-            Item(title: "Лента YouTube: музыка", symbol: "play.rectangle.on.rectangle") { [weak self] in self?.onOpenFeed?() }
-        ]))
+        // Сначала свои подборки, ниже — сразу лента YouTube (просьба владельца после 1.83; раньше — по карточке «Ещё»).
+        result += feedSections(onHome: true)
         return result
     }
 
@@ -229,28 +231,31 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     }
 
     /// «Лента YouTube: музыка» — плитки, как на главной, а ниже компактный список, как в поиске.
-    private func feedSections() -> [Section] {
+    /// `onHome` — те же разделы внизу «Главной», с пометкой «YouTube» в заголовках.
+    private func feedSections(onHome: Bool = false) -> [Section] {
         let feed = MusicFeed.shared
         let mixes = feed.feedMixes, videos = feed.feedVideos
         guard !mixes.isEmpty || !videos.isEmpty else {
             let text: String
             if feed.isLoadingFeed || feed.feedError == nil {
-                text = "Загружаем ленту…"
+                text = "Загружаем ленту YouTube…"
             } else {
                 text = (feed.feedError ?? "") + "\nПотяните вниз, чтобы повторить."
             }
-            return [Section(title: "Лента YouTube", style: .message, items: [Item(title: text)])]
+            return [Section(title: onHome ? "" : "Лента YouTube", style: .message, items: [Item(title: text)])]
         }
         var result: [Section] = []
         let tileCount = view.bounds.width > 600 ? 6 : 4
         if !videos.isEmpty {
-            result.append(Section(title: "Для вас", style: .quick, items: videos.prefix(tileCount).map { musicItem($0, source: "Лента YouTube") }))
+            result.append(Section(title: onHome ? "Лента YouTube" : "Для вас", style: .quick,
+                                  items: videos.prefix(tileCount).map { musicItem($0, source: "Лента YouTube") }))
         }
         if !mixes.isEmpty {
-            result.append(Section(title: "Миксы для вас", style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
+            result.append(Section(title: onHome ? "Миксы YouTube" : "Миксы для вас", style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
         }
         if videos.count > tileCount {
-            result.append(Section(title: "Рекомендации", style: .list, items: videos.dropFirst(tileCount).map { musicItem($0, source: "Лента YouTube") }))
+            result.append(Section(title: onHome ? "Рекомендации YouTube" : "Рекомендации", style: .list,
+                                  items: videos.dropFirst(tileCount).map { musicItem($0, source: "Лента YouTube") }))
         }
         return result
     }
