@@ -234,6 +234,7 @@ final class GlassPanel: UIView {
     private let tint = CALayer()
     private let sheen = CAGradientLayer()
     private let rim = CAGradientLayer()
+    private let streak = CAGradientLayer()
     private let rimMask = CAShapeLayer()
     var cornerRadius: CGFloat = 30 { didSet { setNeedsLayout() } }
 
@@ -256,21 +257,30 @@ final class GlassPanel: UIView {
         clipsToBounds = true
         // Без размытия: под подложкой и так размытый фон, а живое размытие поверх движущегося фона пересчитывается
         // каждый кадр — ползунок и анимации начинали дёргаться (владелец после 1.88: «раньше было плавно»).
-        layer.backgroundColor = UIColor(white: 0.06, alpha: 0.42).cgColor
+        layer.backgroundColor = UIColor(white: 0.04, alpha: 0.16).cgColor // прозрачнее: фон виден насквозь
         tint.backgroundColor = UIColor(white: 1, alpha: 0.04).cgColor
         layer.addSublayer(tint)
-        sheen.colors = [UIColor(white: 1, alpha: 0.16).cgColor, UIColor(white: 1, alpha: 0.05).cgColor,
-                        UIColor(white: 1, alpha: 0.0).cgColor, UIColor(white: 1, alpha: 0.04).cgColor]
-        sheen.locations = [0, 0.18, 0.6, 1]
+        // Глянец (владелец после 1.88: «больше глянцевости и прозрачности»): яркий блик по верху,
+        // косая полоса отражения и лёгкий отсвет снизу. Всё — неподвижные слои, на плавность не влияют.
+        sheen.colors = [UIColor(white: 1, alpha: 0.30).cgColor, UIColor(white: 1, alpha: 0.10).cgColor,
+                        UIColor(white: 1, alpha: 0.0).cgColor, UIColor(white: 1, alpha: 0.0).cgColor,
+                        UIColor(white: 1, alpha: 0.07).cgColor]
+        sheen.locations = [0, 0.12, 0.35, 0.8, 1]
         layer.addSublayer(sheen)
-        rim.colors = [UIColor(white: 1, alpha: 0.55).cgColor, UIColor(white: 1, alpha: 0.08).cgColor,
-                      UIColor(white: 1, alpha: 0.05).cgColor, UIColor(white: 1, alpha: 0.28).cgColor]
+        streak.colors = [UIColor(white: 1, alpha: 0).cgColor, UIColor(white: 1, alpha: 0.13).cgColor,
+                         UIColor(white: 1, alpha: 0.02).cgColor, UIColor(white: 1, alpha: 0).cgColor]
+        streak.locations = [0.2, 0.32, 0.42, 0.55]
+        streak.startPoint = CGPoint(x: 0, y: 0)
+        streak.endPoint = CGPoint(x: 1, y: 0.75)
+        layer.addSublayer(streak)
+        rim.colors = [UIColor(white: 1, alpha: 0.85).cgColor, UIColor(white: 1, alpha: 0.18).cgColor,
+                      UIColor(white: 1, alpha: 0.08).cgColor, UIColor(white: 1, alpha: 0.45).cgColor]
         rim.locations = [0, 0.35, 0.65, 1]
         rim.startPoint = CGPoint(x: 0, y: 0)
         rim.endPoint = CGPoint(x: 1, y: 1)
         rimMask.fillColor = UIColor.clear.cgColor
         rimMask.strokeColor = UIColor.white.cgColor
-        rimMask.lineWidth = 1.2
+        rimMask.lineWidth = 1.4
         rim.mask = rimMask
         layer.addSublayer(rim)
     }
@@ -289,6 +299,7 @@ final class GlassPanel: UIView {
         CATransaction.setDisableActions(true)
         tint.frame = bounds
         sheen.frame = bounds
+        streak.frame = bounds
         rim.frame = bounds
         rimMask.frame = bounds
         rimMask.path = UIBezierPath(roundedRect: bounds.insetBy(dx: 0.6, dy: 0.6), cornerRadius: cornerRadius).cgPath
@@ -307,7 +318,7 @@ final class GlassPanel: UIView {
         #endif
         CATransaction.begin()
         CATransaction.setAnimationDuration(1.2)
-        tint.backgroundColor = (color?.withAlphaComponent(0.12) ?? UIColor(white: 1, alpha: 0.04)).cgColor
+        tint.backgroundColor = (color?.withAlphaComponent(0.10) ?? UIColor(white: 1, alpha: 0.04)).cgColor
         CATransaction.commit()
     }
 }
