@@ -497,7 +497,7 @@ enum Scripts {
   // --- 2b. Перевод комментариев, как в приложении YouTube (просьба владельца после 1.83): под комментарием не на
   // русском — «Перевести на русский»; перевод — Google (тот же, что у YouTube), нажатие ещё раз — оригинал.
   fon.addStyle(`
-    .fon-translate { display: inline-block; margin: 6px 0 2px; font-size: 13px; font-weight: 500; color: #aaa;
+    .fon-translate { display: block; margin: 10px 0 4px; font-size: 14px; font-weight: 500; color: #aaa;
       cursor: pointer; -webkit-user-select: none; user-select: none; }
   `);
   const COMMENT = 'ytm-comment-renderer, ytm-comment-view-model, ytm-comment-reply-renderer';
@@ -556,7 +556,7 @@ enum Scripts {
         }
         originalHTML = el.innerHTML;
         el.textContent = translated;
-        button.textContent = 'Показать оригинал';
+        button.textContent = 'Показать оригинал (переведено Google)';
       }, true);
       el.insertAdjacentElement('afterend', button);
     }
