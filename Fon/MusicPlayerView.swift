@@ -190,6 +190,7 @@ final class MusicPlayerView: UIView {
         slider.setThumbImage(thumb, for: .normal)
         slider.minimumTrackTintColor = .white
         slider.maximumTrackTintColor = UIColor(white: 1, alpha: 0.25)
+        slider.addTarget(self, action: #selector(sliderBegan), for: .touchDown)
         slider.addTarget(self, action: #selector(sliderChanged), for: .valueChanged)
         slider.addTarget(self, action: #selector(sliderEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         addSubview(slider)
@@ -417,7 +418,6 @@ final class MusicPlayerView: UIView {
 
     /// Ползунок двигается плавно между сообщениями страницы (они приходят раз в секунду).
     private func tick() {
-        if scrubbing, !slider.isTracking { scrubbing = false } // палец отпустили, а событие не пришло
         guard !isHidden, window != nil, !scrubbing, duration > 0 else { return }
         let elapsed = paused ? 0 : CACurrentMediaTime() - stamp
         let t = min(duration, time + elapsed)
@@ -631,11 +631,15 @@ final class MusicPlayerView: UIView {
         onVolume?(Double(volumeSlider.value))
     }
 
-    /// Только когда ползунок тянет палец: с SDK iOS 26 `valueChanged` приходит и когда значение ставит программа
-    /// (раньше это включало «перетаскивание» навсегда — время и ползунок замирали на 0:00, жалоба после 1.84).
-    @objc private func sliderChanged() {
-        guard slider.isTracking else { return }
+    /// Перетаскивание — от касания (`touchDown`) до отпускания. Не по `isTracking`: на iOS 26 он у ползунка бывает
+    /// false посреди перетаскивания, и раз в 0,25 с ползунок отпрыгивал к месту игры (запись экрана после 1.89).
+    /// `valueChanged` без касания (на SDK iOS 26 его шлёт и программная установка значения) — не перетаскивание.
+    @objc private func sliderBegan() {
         scrubbing = true
+    }
+
+    @objc private func sliderChanged() {
+        guard scrubbing else { return }
         showTimes(Double(slider.value))
     }
 
