@@ -81,6 +81,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         }
         RunLoop.main.add(timer, forMode: .common)
         visibilityTimer = timer
+        preview.onFailed = { [weak self] in self?.schedulePreview(after: 0.3) }
     }
 
     deinit { visibilityTimer?.invalidate() }
@@ -103,7 +104,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
     /// Лента на экране: окно есть, ни она, ни её вкладка не спрятаны, плеер не развёрнут, Wi-Fi.
     private var canPreview: Bool {
         guard isViewLoaded, view.window != nil, UIApplication.shared.applicationState == .active,
-              !PlayerView.coversContent, OfflineStore.shared.onWiFi else { return false }
+              !PlayerView.coversContent, OfflineStore.shared.online else { return false }
         var current: UIView? = view
         while let v = current {
             if v.isHidden || v.alpha < 0.01 { return false }
@@ -128,7 +129,8 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
         let visible = collectionView.bounds.inset(by: collectionView.adjustedContentInset)
         var best: (cell: VideoCell, index: Int, y: CGFloat, x: CGFloat)?
         for case let cell as VideoCell in collectionView.visibleCells {
-            guard let path = collectionView.indexPath(for: cell), videos.indices.contains(path.item) else { continue }
+            guard let path = collectionView.indexPath(for: cell), videos.indices.contains(path.item),
+                  !InlinePreview.failed.contains(videos[path.item].id) else { continue }
             let frame = cell.previewHost.convert(cell.previewHost.bounds, to: collectionView)
             guard visible.insetBy(dx: -1, dy: -1).contains(frame) else { continue }
             if best == nil || frame.minY < best!.y - 1 || (abs(frame.minY - best!.y) <= 1 && frame.minX < best!.x) {
@@ -413,6 +415,10 @@ final class InlinePreview {
     private(set) var currentID: String?
     /// Найденные ссылки (живут несколько часов) — повторно карточка заиграет сразу.
     private static var links: [String: (stream: AudioStream, found: Date)] = [:]
+    /// Видео без подходящего потока — больше не пробуем, играет следующая карточка.
+    static var failed = Set<String>()
+    /// Не получилось — лента выбирает другую карточку.
+    var onFailed: (() -> Void)?
 
     var isActive: Bool { currentID != nil }
 
@@ -456,7 +462,13 @@ final class InlinePreview {
             let found = await DirectStream.find(id)
             let stream = found.streams.first { $0.client != "Прямо звук" }
             await MainActor.run {
-                guard let self, self.token == current, let stream else { return }
+                guard let self, self.token == current else { return }
+                guard let stream else {
+                    Self.failed.insert(id)
+                    self.stop()
+                    self.onFailed?()
+                    return
+                }
                 Self.links[id] = (stream: stream, found: Date())
                 self.start(stream, token: current)
             }
