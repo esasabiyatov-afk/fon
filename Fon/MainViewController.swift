@@ -40,6 +40,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var browseBottomInset: CGFloat = 0
 
     private lazy var tabBar = TabBarView(items: tabs.map { (title: $0.title, icon: $0.icon) })
+    /// iPhone на iOS 26 — системная панель (`UITabBarController`, стекло iOS 26) вместо своей `tabBar`.
+    private var systemTabs: SystemTabs?
+    /// Мини-плеер режима музыки в системном месте над панелью (iOS 26).
+    private let miniAccessory = MiniAccessoryView()
     /// iPad в режиме музыки — боковая панель, как в Apple Music; иначе нижняя панель вкладок.
     private lazy var sidebar = SidebarView(items: tabs.map { (title: $0.title, icon: $0.icon) }, modeIndex: modeTabIndex)
     private var bottomBarConstraints: [NSLayoutConstraint] = []
@@ -91,6 +95,25 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         sidebar.isHidden = true
         view.addSubview(sidebar)
 
+        systemTabs = SystemTabsFactory.make(items: tabs.map { (title: $0.title, icon: $0.icon) })
+        if let systemTabs {
+            tabBar.isHidden = true
+            systemTabs.onSelect = { [weak self] index in self?.tabSelected(index) }
+            systemTabs.onSearch = { [weak self] in self?.presentSearch(prefill: nil) }
+            systemTabs.onLayout = { [weak self] in self?.view.setNeedsLayout() }
+            addChild(systemTabs.controller)
+            systemTabs.controller.view.frame = view.bounds
+            systemTabs.controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.insertSubview(systemTabs.controller.view, at: 0)
+            systemTabs.controller.didMove(toParent: self)
+            miniAccessory.onExpand = { [weak self] in self?.setPlayerState(.expanded) }
+            miniAccessory.onClose = { [weak self] in self?.playerView.closeFromMini() }
+            miniAccessory.onCommand = { [weak self] name in self?.playerView.command(name) }
+            playerView.onMiniInfo = { [weak self] id, title, artist, paused in
+                self?.miniAccessory.update(id: id, title: title, artist: artist, paused: paused)
+            }
+        }
+
         bottomBarConstraints = [
             browseContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             // Слева и справа — тоже в безопасной области: в альбомной ориентации там «чёлка».
@@ -119,7 +142,13 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             tabBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -TabBarView.contentHeight)
         ]
-        NSLayoutConstraint.activate(bottomBarConstraints)
+        if systemTabs == nil {
+            NSLayoutConstraint.activate(bottomBarConstraints)
+        } else {
+            // Содержимое переезжает в экран выбранной системной вкладки (`attach`), рамка — в `layoutBrowseChildren`.
+            NSLayoutConstraint.activate(bottomBarConstraints.filter { $0.firstItem === tabBar })
+            systemTabs?.attach(browseContainer)
+        }
         updateModeTabs()
 
         // Плеер
@@ -163,7 +192,13 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
     /// Верх стеклянной панели (или низ экрана с боковой панелью) — над ним мини-плеер и подсказки.
     private var barTop: CGFloat {
-        sidebarActive || tabBar.isHidden ? view.bounds.height - view.safeAreaInsets.bottom : tabBar.frame.minY + tabBar.capsuleTop
+        if let systemTabs { return view.convert(CGPoint(x: 0, y: systemTabs.contentBottom), from: nil).y }
+        return sidebarActive || tabBar.isHidden ? view.bounds.height - view.safeAreaInsets.bottom : tabBar.frame.minY + tabBar.capsuleTop
+    }
+
+    /// Системный мини-плеер iOS 26 — в режиме музыки, пока плеер открыт (мини или развёрнут).
+    private var usesMiniAccessory: Bool {
+        systemTabs != nil && Settings.musicMode && playerState != .hidden
     }
 
     /// Страницы YouTube (и поиск) — до верха панели: у m.youtube есть свои меню снизу, под стеклом их не было бы видно.
@@ -171,11 +206,18 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private var webFrame: CGRect {
         let bounds = browseContainer.bounds
         guard !sidebarActive else { return bounds }
-        let bottom = barTop - 6 - browseContainer.frame.minY
+        let bottom = barTop - 6 - browseContainer.convert(CGPoint.zero, to: view).y
         return CGRect(x: 0, y: 0, width: bounds.width, height: max(0, min(bounds.height, bottom)))
     }
 
     private func layoutBrowseChildren() {
+        // Системные вкладки: содержимое — в экране вкладки, от верхней безопасной зоны до низа (под стеклом).
+        if systemTabs != nil, let host = browseContainer.superview, host !== view {
+            let safe = host.safeAreaInsets
+            let frame = CGRect(x: safe.left, y: safe.top, width: host.bounds.width - safe.left - safe.right,
+                               height: host.bounds.height - safe.top)
+            if browseContainer.frame != frame { browseContainer.frame = frame }
+        }
         let frame = webFrame
         for child in browseContainer.subviews where child is WKWebView || child === searchVC?.view {
             if child.frame != frame { child.frame = frame }
@@ -185,7 +227,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     /// Отступ снизу своих экранов: мини-плеер (`browseBottomInset`) + стеклянная панель над безопасной зоной.
     private var navBottomInset: CGFloat {
         guard !sidebarActive else { return browseBottomInset }
-        return browseBottomInset + max(0, view.bounds.height - barTop + 8 - view.safeAreaInsets.bottom)
+        // Своя безопасная зона содержимого (у системных вкладок она уже учитывает панель) — добавляем только недостающее.
+        return browseBottomInset + max(0, view.bounds.height - barTop + 8 - browseContainer.safeAreaInsets.bottom)
     }
 
     /// Нижняя панель ↔ боковая (iPad в режиме музыки; поворот, Split View, смена режима).
@@ -308,8 +351,22 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         switch playerState {
         case .hidden:
             playerView.isHidden = true
+            playerView.alpha = 1
+            systemTabs?.setAccessory(nil)
+            setBrowseBottomInset(0)
+        case .mini where usesMiniAccessory:
+            // iOS 26: мини-плеер — системный (над панелью); сам плеер невидим на его месте (играет дальше).
+            systemTabs?.setAccessory(miniAccessory)
+            playerView.isHidden = false
+            playerView.transform = .identity
+            let h = PlayerView.miniHeight
+            playerView.frame = CGRect(x: 16, y: barTop, width: max(0, bounds.width - 32), height: h) // разворачивается с места мини-плеера
+            playerView.layer.cornerRadius = h / 2
+            playerView.alpha = 0
             setBrowseBottomInset(0)
         case .mini:
+            systemTabs?.setAccessory(nil)
+            playerView.alpha = 1
             playerView.isHidden = false
             playerView.transform = .identity // мог остаться сдвиг от перетаскивания
             playerView.frame = miniPlayerFrame() // в альбомной ориентации не под «чёлкой»
@@ -317,7 +374,9 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             // Окно видео плавает над лентой, как в приложении YouTube, — отступ снизу не нужен.
             setBrowseBottomInset(sidebarActive ? PlayerView.miniHeight + 16 : (Settings.musicMode ? PlayerView.miniHeight + 12 : 0))
         case .expanded:
+            systemTabs?.setAccessory(usesMiniAccessory ? miniAccessory : nil)
             playerView.isHidden = false
+            playerView.alpha = 1
             playerView.frame = bounds
             playerView.layer.cornerRadius = 0
             setBrowseBottomInset(PlayerView.miniHeight)
@@ -501,6 +560,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         currentTab = index
         tabBar.select(index)
         sidebar.select(index)
+        systemTabs?.select(index)
+        if let systemTabs {
+            systemTabs.attach(browseContainer)
+            view.setNeedsLayout()
+        }
         let tabContent = content(for: index)
         libraryNav?.view.isHidden = true
         homeNav?.view.isHidden = true
@@ -672,6 +736,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         tabBar.setItem(libraryTabIndex, title: music ? "Медиатека" : "Вы", icon: music ? "square.stack.fill" : "person.crop.circle")
         sidebar.setItem(libraryTabIndex, title: "Медиатека", icon: "square.stack.fill")
         tabBar.selectedColor = music ? PlayerView.accent : .white // выбранная вкладка красная, как в Apple Music
+        if let systemTabs {
+            systemTabs.setItem(modeTabIndex, title: music ? "Музыка" : "Видео", icon: music ? "music.note" : "play.rectangle")
+            systemTabs.setItem(libraryTabIndex, title: music ? "Медиатека" : "Вы", icon: music ? "square.stack.fill" : "person.crop.circle")
+            systemTabs.setTint(music ? PlayerView.accent : .white)
+        }
         updateNavigationStyle()
         layoutPlayer()
     }

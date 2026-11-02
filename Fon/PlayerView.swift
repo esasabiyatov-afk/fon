@@ -9,6 +9,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onExpand: (() -> Void)?
     var onCollapse: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Что играет — для системного мини-плеера iOS 26: id, название, исполнитель, пауза.
+    var onMiniInfo: ((String?, String, String, Bool) -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
     /// Исполнитель текущего трека: id канала и его название.
     var onOpenArtist: ((String, String) -> Void)?
@@ -730,6 +732,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     @objc private func togglePlay() { command("toggle") }
 
+    /// Свайп вниз по системному мини-плееру iOS 26 — закрыть, как смахивание своего мини-плеера.
+    func closeFromMini() {
+        stop()
+        onClose?()
+    }
+
     @objc private func closeTapped() {
         // Режим музыки — как в Apple Music: справа ⏭, а закрыть — смахнуть мини-плеер вниз.
         if musicMode {
@@ -793,6 +801,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             musicView.sourceName = "Похожие треки"
         }
         updateMiniArtwork(id)
+        onMiniInfo?(id, shown.title, shown.artist, paused)
         musicView.update(id: id, title: title, artist: artist, paused: paused, time: time, duration: duration, loop: loop)
     }
 

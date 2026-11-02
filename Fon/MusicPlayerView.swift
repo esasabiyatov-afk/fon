@@ -388,6 +388,7 @@ final class MusicPlayerView: UIView {
 
     /// Ползунок двигается плавно между сообщениями страницы (они приходят раз в секунду).
     private func tick() {
+        if scrubbing, !slider.isTracking { scrubbing = false } // палец отпустили, а событие не пришло
         guard !isHidden, window != nil, !scrubbing, duration > 0 else { return }
         let elapsed = paused ? 0 : CACurrentMediaTime() - stamp
         let t = min(duration, time + elapsed)
@@ -601,12 +602,16 @@ final class MusicPlayerView: UIView {
         onVolume?(Double(volumeSlider.value))
     }
 
+    /// Только когда ползунок тянет палец: с SDK iOS 26 `valueChanged` приходит и когда значение ставит программа
+    /// (раньше это включало «перетаскивание» навсегда — время и ползунок замирали на 0:00, жалоба после 1.84).
     @objc private func sliderChanged() {
+        guard slider.isTracking else { return }
         scrubbing = true
         showTimes(Double(slider.value))
     }
 
     @objc private func sliderEnded() {
+        guard scrubbing else { return }
         let t = Double(slider.value)
         time = t
         stamp = CACurrentMediaTime()
