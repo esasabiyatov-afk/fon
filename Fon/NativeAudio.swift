@@ -619,8 +619,10 @@ final class NativeAudio: NSObject {
         publish(loading: true)
         queueChanged()
         beginBackgroundTask()
-        // Скачан (офлайн) — с телефона: сразу и без сети.
-        if let file = OfflineStore.shared.file(for: track.id) {
+        // Скачан (офлайн) — с телефона, но только без сети или когда видео на обложке выключено: в скачанном
+        // файле только звук, и с 1.84 у скачанных треков пропало видео (жалоба владельца после 1.86).
+        // С сетью файл — запасной вариант, если поток не заиграет (`use`).
+        if let file = OfflineStore.shared.file(for: track.id), !OfflineStore.shared.online || !Settings.videoArtwork {
             if track.title.isEmpty, let saved = OfflineStore.shared.track(for: track.id), queue.indices.contains(index) {
                 queue[index] = saved
                 publish(loading: true)
@@ -651,6 +653,9 @@ final class NativeAudio: NSObject {
             queueChanged()
         }
         candidates += result.streams
+        if let file = OfflineStore.shared.file(for: track.id) {
+            candidates.append(AudioStream(url: file, headers: [:], client: "Скачано")) // поток не заиграл — скачанный файл
+        }
         if result.streams.isEmpty, result.noLinks {
             UserDefaults.standard.set(Date().addingTimeInterval(6 * 3600), forKey: "sabrOnlyUntil")
             lastReason = nil // ожидаемо — переходим тихо
