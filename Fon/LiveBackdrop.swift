@@ -1,12 +1,12 @@
 import UIKit
-import AVFoundation
 import CoreImage
 
 /// «Живой» фон музыкального плеера (просьба владельца после 1.86 по картинкам: фон «сливается», «живой»,
-/// подстраивается под видео или обложку): сильно размытая обложка медленно вращается двумя слоями навстречу,
-/// поверх плывут большие мягкие пятна её цветов, снизу затемнение для текста. Пока на месте обложки видео
-/// системного плеера — раз в 2,5 с берётся его кадр, и цвета с картинкой фона плавно перетекают под него.
-/// В фоне приложения анимация стоит (`setRunning`).
+/// подстраивается под обложку): сильно размытая обложка медленно вращается двумя слоями навстречу,
+/// поверх плывут большие мягкие пятна её цветов, снизу затемнение для текста. В фоне приложения анимация стоит.
+/// **Плеер не трогает** (владелец после 1.87: «визуальное не должно влиять на плеер»): в 1.87 фон брал кадры видео
+/// через `AVPlayerItemVideoOutput` на треке — из-за этого звук «запинался» при сворачивании и отскакивал назад
+/// при нажатии на обложку; теперь только картинка обложки.
 final class LiveBackdrop: UIView {
     private let base = CALayer()
     private let imageA = CALayer()
@@ -15,17 +15,8 @@ final class LiveBackdrop: UIView {
     private let shade = CAGradientLayer()
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
-    // Кадры видео (системный плеер).
-    private var videoOutput: AVPlayerItemVideoOutput?
-    private weak var outputItem: AVPlayerItem?
-    private var sampleTimer: Timer?
-    weak var videoPlayer: AVPlayer?
     /// Новые цвета фона (для ореола обложки).
     var onColors: (([UIColor]) -> Void)?
-    /// Видео сейчас на месте обложки — фон берёт цвета из его кадров.
-    var followsVideo = false {
-        didSet { followsVideo ? startSampling() : stopSampling() }
-    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -65,8 +56,6 @@ final class LiveBackdrop: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    deinit { sampleTimer?.invalidate() }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -150,7 +139,6 @@ final class LiveBackdrop: UIView {
             layer.speed = 0
             layer.timeOffset = paused
         }
-        if running && followsVideo { startSampling() } else if !running { stopSampling() }
     }
 
     // MARK: - Цвета и картинка
@@ -234,50 +222,6 @@ final class LiveBackdrop: UIView {
         var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
         color.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
         return UIColor(hue: hue, saturation: min(1, sat), brightness: 0.18, alpha: 1)
-    }
-
-    // MARK: - Кадры видео
-
-    private func startSampling() {
-        guard sampleTimer == nil, followsVideo else { return }
-        let timer = Timer(timeInterval: 2.5, repeats: true) { [weak self] _ in self?.sampleFrame() }
-        RunLoop.main.add(timer, forMode: .common)
-        sampleTimer = timer
-        sampleFrame()
-    }
-
-    /// Перестать брать кадры и **снять выход кадров с трека**: с ним iOS при сворачивании считала, что идёт видео,
-    /// и на миг ставила системный плеер на паузу (владелец после 1.87: «при выходе и заходе стоп-пауза»).
-    private func stopSampling() {
-        sampleTimer?.invalidate()
-        sampleTimer = nil
-        if let output = videoOutput, let item = outputItem, item.outputs.contains(where: { $0 === output }) {
-            item.remove(output)
-        }
-        videoOutput = nil
-        outputItem = nil
-    }
-
-    private func sampleFrame() {
-        guard let player = videoPlayer, let item = player.currentItem, window != nil, superview?.isHidden == false,
-              UIApplication.shared.applicationState == .active else { return }
-        if outputItem !== item {
-            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-            item.add(output)
-            videoOutput = output
-            outputItem = item
-        }
-        guard let output = videoOutput else { return }
-        let time = output.itemTime(forHostTime: CACurrentMediaTime())
-        guard output.hasNewPixelBuffer(forItemTime: time),
-              let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
-        let frame = CIImage(cvPixelBuffer: buffer)
-        DispatchQueue.global(qos: .utility).async {
-            guard let cg = Self.ciContext.createCGImage(frame, from: frame.extent),
-                  let small = Self.blurred(UIImage(cgImage: cg)) else { return }
-            let colors = Self.palette(small)
-            DispatchQueue.main.async { [weak self] in self?.apply(small, colors: colors) }
-        }
     }
 }
 

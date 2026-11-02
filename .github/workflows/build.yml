@@ -24,15 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Xcode 26 (SDK iOS 26): системное стекло и плавные переходы iOS 26 (владелец после 1.87: «прям как стекло iOS 26»).
-      # В 1.84–1.85 сборка Xcode 26 вышла нестабильной из-за своих стеклянных переделок вкладок — их больше нет;
-      # стекло только у подложки плеера (`GlassPanel`). Нет Xcode 26 на машине — Xcode по умолчанию (размытие вместо стекла).
-      - name: Select Xcode 26
-        run: |
-          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
-          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
-          xcodebuild -version
-
+      # Xcode по умолчанию на машине (16.4, SDK iOS 18) — стабильно. Xcode 26 (стекло iOS 26) был в 1.84–1.85;
+      # после 1.87 владелец: «сделай стабильный плеер» — пока без него (`GlassPanel` рисует своё стекло).
       - name: Install XcodeGen
         run: brew install xcodegen
 
