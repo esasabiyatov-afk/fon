@@ -40,6 +40,8 @@ final class MusicPlayerView: UIView {
     /// Фон как в Apple Music: размытая обложка (пока её нет — градиент под цвет).
     /// «Живой» фон: размытая обложка вращается, пятна её цветов плывут; при видео — цвета из кадров (`LiveBackdrop`).
     private let live = LiveBackdrop()
+    /// Подложка под названием и кнопками — полупрозрачное размытие (как стеклянные карточки на референсах владельца).
+    private let panelGlass = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     /// AirPlay — в нижнем ряду, как в Apple Music.
     private let routeButton = AVRoutePickerView()
     private let collapseButton = UIButton(type: .system)
@@ -92,6 +94,16 @@ final class MusicPlayerView: UIView {
         gradient.locations = [0, 0.9]
         layer.addSublayer(gradient)
         addSubview(live)
+        panelGlass.isUserInteractionEnabled = false
+        panelGlass.clipsToBounds = true
+        panelGlass.layer.cornerRadius = 28
+        panelGlass.layer.cornerCurve = .continuous
+        panelGlass.layer.borderWidth = 0.5
+        panelGlass.layer.borderColor = UIColor(white: 1, alpha: 0.14).cgColor
+        panelGlass.contentView.backgroundColor = UIColor(white: 1, alpha: 0.03)
+        addSubview(panelGlass)
+        // Ореол обложки — цвета фона (меняется вместе с ним, в том числе по кадрам видео).
+        live.onColors = { [weak self] colors in self?.setGlow(colors.first) }
 
         // Дизайн Apple Music (просьба владельца после 1.77): «язычок» сверху, обложка (у нас — видео 16:9),
         // название слева и ♡, ползунок, крупные ⏮ ▶ ⏭ без подложки, громкость, внизу — повтор, режим видео, AirPlay, очередь.
@@ -355,6 +367,18 @@ final class MusicPlayerView: UIView {
             self.setNeedsLayout()
             self.layoutIfNeeded()
         }
+    }
+
+    /// Светящийся ореол вокруг обложки/видео цветом картинки (вместо чёрной тени).
+    private func setGlow(_ color: UIColor?) {
+        let animation = CABasicAnimation(keyPath: "shadowColor")
+        animation.fromValue = artworkContainer.layer.shadowColor
+        animation.duration = 1.2
+        artworkContainer.layer.add(animation, forKey: "glow")
+        artworkContainer.layer.shadowColor = (color ?? .black).cgColor
+        artworkContainer.layer.shadowOpacity = color == nil ? 0.5 : 0.8
+        artworkContainer.layer.shadowRadius = color == nil ? 24 : 42
+        artworkContainer.layer.shadowOffset = color == nil ? CGSize(width: 0, height: 12) : .zero
     }
 
     /// Фон под цвет обложки, как в Spotify: сверху её цвет, книзу — чёрный.
@@ -670,6 +694,7 @@ final class MusicPlayerView: UIView {
     }
 
     private func layoutPanel(x: CGFloat, y: CGFloat, width: CGFloat) {
+        panelGlass.frame = CGRect(x: x - 16, y: y - 14, width: width + 32, height: panelHeight + 18)
         titleLabel.frame = CGRect(x: x, y: y, width: width - 52, height: 28)
         artistLabel.frame = CGRect(x: x, y: y + 31, width: width - 52, height: 21)
         likeButton.frame = CGRect(x: x + width - 44, y: y + 4, width: 44, height: 44)

@@ -316,9 +316,24 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         if !mixes.isEmpty {
             result.append(Section(title: onHome ? "Миксы YouTube" : "Миксы для вас", style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
         }
-        if videos.count > tileCount {
-            result.append(Section(title: onHome ? "Рекомендации YouTube" : "Рекомендации", style: .list,
-                                  items: videos.dropFirst(tileCount).map { musicItem($0, source: "Лента YouTube") }))
+        let rest = Array(videos.dropFirst(tileCount))
+        if onHome {
+            // На «Главной» не один длинный список (владелец после 1.86: «скучно — свайпы, большие обложки, смешай»):
+            // по очереди карусель больших карточек и короткий список.
+            let titles = ["Рекомендации YouTube", "Ещё для вас", "Вам может понравиться", "Послушайте ещё", "Ещё рекомендации"]
+            var start = 0, part = 0
+            while start < rest.count {
+                let carousel = part % 2 == 0
+                let size = carousel ? 8 : 5
+                let chunk = rest[start..<min(rest.count, start + size)]
+                let title = titles[min(part, titles.count - 1)]
+                result.append(Section(title: title, style: carousel ? .large : .list,
+                                      items: chunk.map { musicItem($0, source: "Лента YouTube") }))
+                start += size
+                part += 1
+            }
+        } else if !rest.isEmpty {
+            result.append(Section(title: "Рекомендации", style: .list, items: rest.map { musicItem($0, source: "Лента YouTube") }))
         }
         return result
     }

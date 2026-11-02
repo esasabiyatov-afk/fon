@@ -20,6 +20,8 @@ final class LiveBackdrop: UIView {
     private weak var outputItem: AVPlayerItem?
     private var sampleTimer: Timer?
     weak var videoPlayer: AVPlayer?
+    /// Новые цвета фона (для ореола обложки).
+    var onColors: (([UIColor]) -> Void)?
     /// Видео сейчас на месте обложки — фон берёт цвета из его кадров.
     var followsVideo = false {
         didSet { followsVideo ? startSampling() : stopSampling() }
@@ -168,6 +170,7 @@ final class LiveBackdrop: UIView {
         imageA.contents = blurred
         imageB.contents = blurred
         guard !colors.isEmpty else { return }
+        onColors?(colors)
         CATransaction.begin()
         CATransaction.setAnimationDuration(1.5)
         for (i, blob) in blobs.enumerated() {
