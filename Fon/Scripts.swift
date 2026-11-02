@@ -116,31 +116,97 @@ enum Scripts {
   // для VoiceOver (aria-label) — дописываем её в строку с просмотрами.
   const DATE_RE = /(\d+\s*[а-яё]+\.?\s+назад|\d+\s*[a-z]+\s+ago|(?:Трансляция|Премьера|Streamed|Premiered)[^,•·]*)/i;
   const CARDS = 'ytm-video-with-context-renderer, ytm-compact-video-renderer, ytm-video-card-renderer, ytm-rich-item-renderer, yt-lockup-view-model, ytm-lockup-view-model';
+  // Даты нет и в подписи (рекомендации под видео — скриншот владельца после 1.83): спрашиваем YouTube сами, без входа
+  // (cookies не шлём — ничего не попадает в историю): `next` текущего видео (клиент WEB — там у похожих видео есть
+  // «N лет назад») сразу для всего списка, а для остальных видимых карточек — `next` каждой (проверено из облака).
+  const dateCache = new Map(); // id → «2 года назад» ('' — YouTube не сказал)
+  const asking = new Set();
+  let askedNextFor = null, nextDone = true;
+  const webVersion = () => {
+    const d = new Date(Date.now() - 2 * 86400000);
+    return '2.' + d.getUTCFullYear() + String(d.getUTCMonth() + 1).padStart(2, '0') + String(d.getUTCDate()).padStart(2, '0') + '.00.00';
+  };
+  const ask = async (endpoint, body) => {
+    const r = await fetch('/youtubei/v1/' + endpoint + '?prettyPrint=false', {
+      method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ context: { client: { clientName: 'WEB', clientVersion: webVersion(), hl: 'ru', gl: 'KG' } } }, body))
+    });
+    return r.json();
+  };
+  const walk = (obj, key, out) => {
+    if (obj && typeof obj === 'object') for (const k in obj) { if (k === key) out.push(obj[k]); walk(obj[k], key, out); }
+    return out;
+  };
+  const runsText = (t) => (t ? (t.simpleText || t.content || (t.runs || []).map((r) => r.text).join('')) : '');
+  // Ответ `next`: даты похожих видео и самого видео.
+  const fromNext = (r, id) => {
+    for (const l of walk(r, 'lockupViewModel', [])) {
+      if (!l || !l.contentId || dateCache.get(l.contentId)) continue;
+      const texts = walk(l, 'content', []).filter((x) => typeof x === 'string');
+      const m = texts.join(' • ').match(DATE_RE);
+      if (m) dateCache.set(l.contentId, m[1]);
+    }
+    for (const name of ['compactVideoRenderer', 'videoRenderer', 'videoWithContextRenderer']) {
+      for (const x of walk(r, name, [])) {
+        const d = x && x.videoId && runsText(x.publishedTimeText);
+        if (d && !dateCache.get(x.videoId)) dateCache.set(x.videoId, d);
+      }
+    }
+    if (id) dateCache.set(id, runsText(walk(r, 'relativeDateText', [])[0]) || dateCache.get(id) || '');
+  };
+  const askNext = async (v) => {
+    nextDone = false;
+    try { fromNext(await ask('next', { videoId: v }), null); } catch (e) {}
+    nextDone = true;
+  };
+  // Карточка, которой нет в списке, — `next` её самой (там «N лет назад» у видео и заодно у его похожих).
+  const askPlayer = async (id) => {
+    asking.add(id);
+    try { fromNext(await ask('next', { videoId: id }), id); } catch (e) { dateCache.set(id, ''); }
+    asking.delete(id);
+  };
+  const cardID = (card) => {
+    const a = card.querySelector('a[href*="watch?v="]');
+    if (!a) return null;
+    try { return new URL(a.getAttribute('href'), location.href).searchParams.get('v'); } catch (e) { return null; }
+  };
+  const putDate = (card, date) => {
+    // Строка с просмотрами — самый глубокий элемент, где они есть.
+    let line = null;
+    for (const el of card.querySelectorAll('span, div, p')) {
+      if (/просмотр|зрител|views|watching/i.test(el.textContent || '') && !el.querySelector('span, div, p')) line = el;
+    }
+    if (!line) return false;
+    const span = document.createElement('span');
+    span.dataset.fonDate = '1';
+    span.textContent = ' • ' + date;
+    line.appendChild(span);
+    card.dataset.fonDate = '1';
+    return true;
+  };
   const addDates = () => {
+    const v = (() => { try { return new URL(location.href).searchParams.get('v'); } catch (e) { return null; } })();
+    if (v && v !== askedNextFor) { askedNextFor = v; askNext(v); }
+    const vh = window.innerHeight || 800;
     for (const card of document.querySelectorAll(CARDS)) {
       if (card.dataset.fonDate || card.querySelector('[data-fon-date]')) continue;
-      const own = card.textContent || '';
-      if (DATE_RE.test(own)) { card.dataset.fonDate = '1'; continue; }
-      const tries = +(card.dataset.fonTries || 0);
-      if (tries > 3) continue;
-      card.dataset.fonTries = tries + 1;
+      if (DATE_RE.test(card.textContent || '')) { card.dataset.fonDate = '1'; continue; }
       let date = '';
       for (const el of [card, ...card.querySelectorAll('[aria-label]')]) {
         const m = (el.getAttribute && el.getAttribute('aria-label') || '').match(DATE_RE);
         if (m) { date = m[1]; break; }
       }
-      if (!date) continue;
-      // Строка с просмотрами — самый глубокий элемент, где они есть.
-      let line = null;
-      for (const el of card.querySelectorAll('span, div, p')) {
-        if (/просмотр|зрител|views|watching/i.test(el.textContent || '') && !el.querySelector('span, div, p')) line = el;
+      const id = date ? null : cardID(card);
+      if (!date && id && dateCache.has(id)) {
+        date = dateCache.get(id);
+        if (!date) { card.dataset.fonDate = '1'; continue; } // YouTube не сказал — больше не спрашиваем
       }
-      if (!line) continue;
-      const span = document.createElement('span');
-      span.dataset.fonDate = '1';
-      span.textContent = ' • ' + date;
-      line.appendChild(span);
-      card.dataset.fonDate = '1';
+      if (date) { putDate(card, date); continue; }
+      // Видимые (и чуть ниже) карточки без даты — по одной, не больше двух запросов сразу.
+      if (id && !asking.has(id) && asking.size < 2 && nextDone) {
+        const r = card.getBoundingClientRect();
+        if (r.bottom > -vh && r.top < vh * 2) askPlayer(id);
+      }
     }
   };
 
