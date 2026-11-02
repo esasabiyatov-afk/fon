@@ -82,6 +82,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
 
         // Вкладки
         tabBar.onSelect = { [weak self] index in self?.tabSelected(index) }
+        tabBar.onSearch = { [weak self] in self?.presentSearch(prefill: nil) }
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tabBar)
         sidebar.onSelect = { [weak self] index in self?.tabSelected(index) }
@@ -95,7 +96,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             // Слева и справа — тоже в безопасной области: в альбомной ориентации там «чёлка».
             browseContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             browseContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            browseContainer.bottomAnchor.constraint(equalTo: tabBar.topAnchor),
+            // Лента — до низа экрана: прокручивается под стеклянной панелью (iOS 26).
+            browseContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -154,7 +156,36 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if wantsSidebar != sidebarActive { updateNavigationStyle() }
+        tabBar.layoutIfNeeded() // верх капсулы нужен ниже
+        layoutBrowseChildren()
         layoutPlayer()
+    }
+
+    /// Верх стеклянной панели (или низ экрана с боковой панелью) — над ним мини-плеер и подсказки.
+    private var barTop: CGFloat {
+        sidebarActive || tabBar.isHidden ? view.bounds.height - view.safeAreaInsets.bottom : tabBar.frame.minY + tabBar.capsuleTop
+    }
+
+    /// Страницы YouTube (и поиск) — до верха панели: у m.youtube есть свои меню снизу, под стеклом их не было бы видно.
+    /// Свои экраны (подборки, медиатека) — до низа, под стеклом; отступ снизу у них — `navBottomInset`.
+    private var webFrame: CGRect {
+        let bounds = browseContainer.bounds
+        guard !sidebarActive else { return bounds }
+        let bottom = barTop - 6 - browseContainer.frame.minY
+        return CGRect(x: 0, y: 0, width: bounds.width, height: max(0, min(bounds.height, bottom)))
+    }
+
+    private func layoutBrowseChildren() {
+        let frame = webFrame
+        for child in browseContainer.subviews where child is WKWebView || child === searchVC?.view {
+            if child.frame != frame { child.frame = frame }
+        }
+    }
+
+    /// Отступ снизу своих экранов: мини-плеер (`browseBottomInset`) + стеклянная панель над безопасной зоной.
+    private var navBottomInset: CGFloat {
+        guard !sidebarActive else { return browseBottomInset }
+        return browseBottomInset + max(0, view.bounds.height - barTop + 8 - view.safeAreaInsets.bottom)
     }
 
     /// Нижняя панель ↔ боковая (iPad в режиме музыки; поворот, Split View, смена режима).
@@ -183,19 +214,19 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             // Режим видео — маленькое окно с видео в правом нижнем углу, как в приложении YouTube.
             let width = min(traitCollection.userInterfaceIdiom == .pad ? 340 : 210, bounds.width * 0.55)
             let height = (width * 9 / 16).rounded()
-            return CGRect(x: bounds.width - safe.right - width - 10, y: tabBar.frame.minY - height - 10, width: width, height: height)
+            return CGRect(x: bounds.width - safe.right - width - 10, y: barTop - height - 10, width: width, height: height)
         }
         if Settings.musicMode {
             // Режим музыки — плавающая карточка над вкладками, как в Apple Music.
-            let x = safe.left + 8
-            return CGRect(x: x, y: tabBar.frame.minY - h - 6, width: max(0, bounds.width - x - safe.right - 8), height: h)
+            let x = safe.left + 16
+            return CGRect(x: x, y: barTop - h - 8, width: max(0, bounds.width - x - safe.right - 16), height: h)
         }
-        return CGRect(x: safe.left, y: tabBar.frame.minY - h, width: bounds.width - safe.left - safe.right, height: h)
+        return CGRect(x: safe.left, y: barTop - h, width: bounds.width - safe.left - safe.right, height: h)
     }
 
     /// Нижний край области разделов — над ним подсказки.
     private var contentBottom: CGFloat {
-        sidebarActive ? view.bounds.height - view.safeAreaInsets.bottom : tabBar.frame.minY
+        barTop
     }
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -282,7 +313,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             playerView.isHidden = false
             playerView.transform = .identity // мог остаться сдвиг от перетаскивания
             playerView.frame = miniPlayerFrame() // в альбомной ориентации не под «чёлкой»
-            playerView.layer.cornerRadius = sidebarActive || Settings.musicMode ? 14 : 10
+            playerView.layer.cornerRadius = Settings.musicMode ? playerView.frame.height / 2 : (sidebarActive ? 14 : 10) // музыка — капсула (iOS 26)
             // Окно видео плавает над лентой, как в приложении YouTube, — отступ снизу не нужен.
             setBrowseBottomInset(sidebarActive ? PlayerView.miniHeight + 16 : (Settings.musicMode ? PlayerView.miniHeight + 12 : 0))
         case .expanded:
@@ -309,12 +340,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private func setBrowseBottomInset(_ inset: CGFloat) {
         browseBottomInset = inset
         browseViews.values.forEach { applyBottomInset(to: $0) }
-        libraryNav?.additionalSafeAreaInsets.bottom = inset
-        homeNav?.additionalSafeAreaInsets.bottom = inset
-        historyNav?.additionalSafeAreaInsets.bottom = inset
-        subscriptionsNav?.additionalSafeAreaInsets.bottom = inset
-        videoHomeNav?.additionalSafeAreaInsets.bottom = inset
-        videoSubscriptionsNav?.additionalSafeAreaInsets.bottom = inset
+        let navInset = navBottomInset
+        for nav in [libraryNav, homeNav, historyNav, subscriptionsNav, videoHomeNav, videoSubscriptionsNav] {
+            if let nav, nav.additionalSafeAreaInsets.bottom != navInset { nav.additionalSafeAreaInsets.bottom = navInset }
+        }
     }
 
     private func applyBottomInset(to webView: WKWebView) {
@@ -333,7 +362,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.frame = browseContainer.bounds
+        webView.frame = webFrame
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.isHidden = true
         browseContainer.insertSubview(webView, at: 0)
@@ -368,7 +397,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         let search = SearchViewController()
         search.onSearch = { [weak self] query in self?.search(query) }
         addChild(search)
-        search.view.frame = browseContainer.bounds
+        search.view.frame = webFrame
         search.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         browseContainer.addSubview(search.view)
         search.didMove(toParent: self)
@@ -449,7 +478,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         nav.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         browseContainer.addSubview(nav.view)
         nav.didMove(toParent: self)
-        nav.additionalSafeAreaInsets.bottom = browseBottomInset
+        nav.additionalSafeAreaInsets.bottom = navBottomInset
         return nav
     }
 

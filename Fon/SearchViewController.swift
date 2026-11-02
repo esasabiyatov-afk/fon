@@ -1,7 +1,8 @@
 import UIKit
 
-/// Вкладка «Поиск» как в приложении YouTube: поле сверху, результаты (страница YouTube) прямо под ним,
-/// нижние вкладки и мини-плеер остаются на месте. «Недавние» и подсказки — только пока печатаете.
+/// «Поиск»: результаты (страница YouTube) на весь раздел, поле — внизу на стекле, как в iOS 26 (просьба владельца
+/// по скриншоту Apple Music): над клавиатурой, а без неё — над панелью вкладок; справа ✕ — закрыть ввод.
+/// Нижние вкладки и мини-плеер остаются на месте. «Недавние» и подсказки — только пока печатаете.
 final class SearchViewController: UIViewController, UISearchBarDelegate, UITableViewDataSource, UITableViewDelegate {
     /// Запрос отправлен — приложение грузит результаты в окно результатов.
     var onSearch: ((String) -> Void)?
@@ -9,6 +10,11 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     static let barHeight: CGFloat = 56
 
     private let searchBar = UISearchBar()
+    private let fieldGlass = Glass.make(cornerRadius: 25)
+    private let closeGlass = Glass.make(cornerRadius: 25, interactive: true)
+    private var fieldTrailing: NSLayoutConstraint!
+    private var closeTrailing: NSLayoutConstraint!
+    private var fieldToClose: NSLayoutConstraint!
     private let tableView = UITableView(frame: .zero, style: .plain)
     private weak var resultsView: UIView?
     private(set) var hasResults = false
@@ -35,7 +41,22 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         searchBar.delegate = self
         searchBar.returnKeyType = .search
         searchBar.tintColor = PlayerView.accent
-        view.addSubview(searchBar)
+        searchBar.backgroundImage = UIImage()
+        searchBar.searchTextField.backgroundColor = .clear
+        searchBar.searchTextField.font = .systemFont(ofSize: 17)
+        searchBar.translatesAutoresizingMaskIntoConstraints = false
+        fieldGlass.translatesAutoresizingMaskIntoConstraints = false
+        fieldGlass.contentView.addSubview(searchBar)
+
+        let close = UIButton(type: .system)
+        close.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
+        close.tintColor = .white
+        close.accessibilityLabel = "Закрыть"
+        close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        close.translatesAutoresizingMaskIntoConstraints = false
+        closeGlass.translatesAutoresizingMaskIntoConstraints = false
+        closeGlass.contentView.addSubview(close)
+        closeGlass.isHidden = true
 
         tableView.backgroundColor = .black
         tableView.dataSource = self
@@ -45,16 +66,68 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         tableView.rowHeight = 50
         tableView.separatorStyle = .none
         view.addSubview(tableView)
+        view.addSubview(fieldGlass)
+        view.addSubview(closeGlass)
+
+        // Поле — над клавиатурой; без клавиатуры направляющая клавиатуры = низ раздела (он кончается над панелью вкладок).
+        let safe = view.safeAreaLayoutGuide
+        fieldTrailing = fieldGlass.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16)
+        closeTrailing = closeGlass.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16)
+        fieldToClose = fieldGlass.trailingAnchor.constraint(equalTo: closeGlass.leadingAnchor, constant: -10)
+        NSLayoutConstraint.activate([
+            fieldGlass.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 16),
+            fieldTrailing,
+            closeTrailing,
+            fieldGlass.heightAnchor.constraint(equalToConstant: Self.barHeight - 6),
+            fieldGlass.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -10),
+            searchBar.leadingAnchor.constraint(equalTo: fieldGlass.contentView.leadingAnchor, constant: 4),
+            searchBar.trailingAnchor.constraint(equalTo: fieldGlass.contentView.trailingAnchor, constant: -4),
+            searchBar.centerYAnchor.constraint(equalTo: fieldGlass.contentView.centerYAnchor),
+            closeGlass.widthAnchor.constraint(equalToConstant: Self.barHeight - 6),
+            closeGlass.heightAnchor.constraint(equalToConstant: Self.barHeight - 6),
+            closeGlass.centerYAnchor.constraint(equalTo: fieldGlass.centerYAnchor),
+            close.topAnchor.constraint(equalTo: closeGlass.contentView.topAnchor),
+            close.bottomAnchor.constraint(equalTo: closeGlass.contentView.bottomAnchor),
+            close.leadingAnchor.constraint(equalTo: closeGlass.contentView.leadingAnchor),
+            close.trailingAnchor.constraint(equalTo: closeGlass.contentView.trailingAnchor)
+        ])
         updateEmptyHint()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let w = view.bounds.width
-        let below = CGRect(x: 0, y: Self.barHeight, width: w, height: max(0, view.bounds.height - Self.barHeight))
-        searchBar.frame = CGRect(x: 4, y: 0, width: w - 8, height: Self.barHeight)
-        tableView.frame = below
-        resultsView?.frame = below
+        let fieldTop = fieldGlass.frame.minY
+        // Результаты — до поля; «Недавние» и подсказки — на весь раздел, с отступом под поле.
+        resultsView?.frame = CGRect(x: 0, y: 0, width: w, height: max(0, fieldTop - 8))
+        tableView.frame = view.bounds
+        let inset = max(0, view.bounds.height - fieldTop + 8)
+        if tableView.contentInset.bottom != inset {
+            tableView.contentInset.bottom = inset
+            tableView.verticalScrollIndicatorInsets.bottom = inset
+        }
+    }
+
+    /// ✕ рядом с полем — пока идёт ввод.
+    private func setEditingLayout(_ editing: Bool) {
+        guard closeGlass.isHidden == editing else { return }
+        if editing {
+            fieldTrailing.isActive = false
+            fieldToClose.isActive = true
+        } else {
+            fieldToClose.isActive = false
+            fieldTrailing.isActive = true
+        }
+        closeGlass.isHidden = !editing
+        closeGlass.alpha = editing ? 0 : 1
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            self.closeGlass.alpha = editing ? 1 : 0
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    @objc private func closeTapped() {
+        searchBarCancelButtonClicked(searchBar)
     }
 
     func updatePlaceholder() {
@@ -125,12 +198,12 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     }
 
     func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
-        searchBar.setShowsCancelButton(true, animated: true)
+        setEditingLayout(true)
         showList(true)
     }
 
     func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
-        searchBar.setShowsCancelButton(false, animated: true)
+        setEditingLayout(false)
     }
 
     /// «Отмена» — убрать клавиатуру и вернуться к результатам (если они есть).
