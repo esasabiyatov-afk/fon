@@ -83,6 +83,7 @@ final class MusicPlayerView: UIView {
     private var time: Double = 0
     private var stamp = CACurrentMediaTime()
     private var scrubbing = false
+    private var scrubTouched = Date.distantPast
     private var ticker: Timer?
     private let panelHeight: CGFloat = 304
 
@@ -418,6 +419,8 @@ final class MusicPlayerView: UIView {
 
     /// Ползунок двигается плавно между сообщениями страницы (они приходят раз в секунду).
     private func tick() {
+        // Отпускание не пришло (касание отменила система) — через 4 с без движения ползунок снова идёт сам.
+        if scrubbing, Date().timeIntervalSince(scrubTouched) > 4 { scrubbing = false }
         guard !isHidden, window != nil, !scrubbing, duration > 0 else { return }
         let elapsed = paused ? 0 : CACurrentMediaTime() - stamp
         let t = min(duration, time + elapsed)
@@ -636,10 +639,12 @@ final class MusicPlayerView: UIView {
     /// `valueChanged` без касания (на SDK iOS 26 его шлёт и программная установка значения) — не перетаскивание.
     @objc private func sliderBegan() {
         scrubbing = true
+        scrubTouched = Date()
     }
 
     @objc private func sliderChanged() {
         guard scrubbing else { return }
+        scrubTouched = Date()
         showTimes(Double(slider.value))
     }
 
