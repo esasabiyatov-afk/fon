@@ -29,12 +29,17 @@ final class MusicPlayerView: UIView {
     }
     /// Системный плеер всё равно качает файл 360p — его картинка показывается вместо обложки (просьба владельца),
     /// в том же месте и размере; пока кадра нет (поиск, только звук) — обложка.
-    var videoPlayer: AVPlayer? { didSet { attachVideo() } }
+    var videoPlayer: AVPlayer? {
+        didSet {
+            live.videoPlayer = videoPlayer
+            attachVideo()
+        }
+    }
 
     private let gradient = CAGradientLayer()
     /// Фон как в Apple Music: размытая обложка (пока её нет — градиент под цвет).
-    private let backdrop = UIImageView()
-    private let backdropBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+    /// «Живой» фон: размытая обложка вращается, пятна её цветов плывут; при видео — цвета из кадров (`LiveBackdrop`).
+    private let live = LiveBackdrop()
     /// AirPlay — в нижнем ряду, как в Apple Music.
     private let routeButton = AVRoutePickerView()
     private let collapseButton = UIButton(type: .system)
@@ -86,10 +91,7 @@ final class MusicPlayerView: UIView {
         gradient.colors = [UIColor(white: 0.22, alpha: 1).cgColor, UIColor.black.cgColor]
         gradient.locations = [0, 0.9]
         layer.addSublayer(gradient)
-        backdrop.contentMode = .scaleAspectFill
-        backdrop.clipsToBounds = true
-        addSubview(backdrop)
-        addSubview(backdropBlur)
+        addSubview(live)
 
         // Дизайн Apple Music (просьба владельца после 1.77): «язычок» сверху, обложка (у нас — видео 16:9),
         // название слева и ♡, ползунок, крупные ⏮ ▶ ⏭ без подложки, громкость, внизу — повтор, режим видео, AirPlay, очередь.
@@ -312,6 +314,7 @@ final class MusicPlayerView: UIView {
     private func updateVideoVisibility() {
         let show = videoLayer.player != nil && videoLayer.isReadyForDisplay
         applyAspect(showingVideo: show)
+        if live.followsVideo != show { live.followsVideo = show } // фон — по кадрам видео
         guard (videoView.alpha == 1) != show else { return }
         UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.videoView.alpha = show ? 1 : 0
@@ -330,9 +333,7 @@ final class MusicPlayerView: UIView {
                     self.artworkView.contentMode = .scaleAspectFill
                     self.artworkView.image = image
                 }
-                UIView.transition(with: self.backdrop, duration: 0.6, options: .transitionCrossDissolve) {
-                    self.backdrop.image = image
-                }
+                self.live.setImage(image)
                 self.imageAspect = aspect
                 self.applyAspect(showingVideo: self.videoView.alpha == 1)
             }
@@ -629,8 +630,7 @@ final class MusicPlayerView: UIView {
         CATransaction.setDisableActions(true)
         gradient.frame = bounds
         CATransaction.commit()
-        backdrop.frame = bounds
-        backdropBlur.frame = bounds
+        live.frame = bounds
 
         let side: CGFloat = w > 600 ? 40 : 24
         let top = safe.top
