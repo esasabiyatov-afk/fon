@@ -16,6 +16,9 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private enum TabContent { case web(String), library, musicHome, musicSubscriptions, videoHome, videoSubscriptions, history, search, none }
 
     private let browseContainer = UIView()
+    /// Живой неоновый фон за всеми своими экранами (владелец после 1.90: «и на главные экраны, везде — тёмный фон
+    /// выглядит не целостно»); цвета — обложка текущего трека. Страницы YouTube остаются своими (непрозрачные).
+    private let ambient = LiveBackdrop()
     private var browseViews: [Int: WKWebView] = [:]
     private var browseRoots: [Int: String] = [:] // какой корневой путь загружен во вкладке
     private var urlObservations: [Int: NSKeyValueObservation] = [:]
@@ -76,7 +79,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         view.backgroundColor = .black
         OfflineStore.shared.start() // музыка без интернета: качает сама по Wi-Fi
 
-        browseContainer.backgroundColor = .black
+        ambient.frame = view.bounds
+        ambient.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        ambient.dim = 0.45 // под лентами — приглушённее, чтобы текст читался
+        ambient.setDefault()
+        view.insertSubview(ambient, at: 0)
+        browseContainer.backgroundColor = .clear
         browseContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(browseContainer)
 
@@ -126,6 +134,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         playerView.onExpand = { [weak self] in self?.setPlayerState(.expanded, velocity: self?.playerView.takeReleaseVelocity() ?? 0) }
         playerView.onCollapse = { [weak self] in self?.setPlayerState(.mini, velocity: self?.playerView.takeReleaseVelocity() ?? 0) }
         playerView.onClose = { [weak self] in self?.setPlayerState(.hidden) }
+        playerView.onTrackChanged = { [weak self] id in
+            ArtworkLoader.shared.load(id, size: .large) { image, _ in
+                if let image { self?.ambient.setImage(image) }
+            }
+        }
         playerView.onOpenInBrowse = { [weak self] url in
             self?.webViewForLoading().load(URLRequest(url: url))
             self?.setPlayerState(.mini)
@@ -258,6 +271,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case .expanded: playerView.setMode(.expanded)
         }
         // Развёрнутый плеер закрывает вкладки, а мини-полоска никогда не должна закрывать их иконки.
+        ambient.isHidden = state == .expanded // под развёрнутым плеером фон не рисуем
         if state == .expanded {
             view.bringSubviewToFront(playerView)
         } else {
@@ -443,7 +457,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         nav.navigationBar.prefersLargeTitles = true
         nav.navigationBar.tintColor = PlayerView.accent
         nav.overrideUserInterfaceStyle = .dark
-        nav.view.backgroundColor = .black
+        nav.view.backgroundColor = .clear
         addChild(nav)
         nav.view.frame = browseContainer.bounds
         nav.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

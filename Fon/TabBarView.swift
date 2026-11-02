@@ -18,7 +18,7 @@ final class TabBarView: UIView {
 
     init(items: [(title: String, icon: String)]) {
         super.init(frame: .zero)
-        backgroundColor = UIColor(white: 0.06, alpha: 1)
+        backgroundColor = UIColor(white: 0.04, alpha: 0.78) // сквозь панель чуть виден живой фон
 
         let line = UIView()
         line.backgroundColor = UIColor(white: 1, alpha: 0.08)

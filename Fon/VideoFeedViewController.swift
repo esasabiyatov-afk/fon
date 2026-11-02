@@ -51,10 +51,10 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        collectionView.backgroundColor = .black
+        collectionView.backgroundColor = .clear
         collectionView.dataSource = self
         collectionView.prefetchDataSource = self
         collectionView.delegate = self

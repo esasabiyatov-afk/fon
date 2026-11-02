@@ -23,7 +23,7 @@ final class SidebarView: UIView {
         icons = items.map(\.icon)
         self.modeIndex = modeIndex
         super.init(frame: .zero)
-        backgroundColor = UIColor(white: 0.07, alpha: 1)
+        backgroundColor = UIColor(white: 0.04, alpha: 0.6)
 
         titleLabel.text = "Fon"
         titleLabel.font = .systemFont(ofSize: 30, weight: .heavy)

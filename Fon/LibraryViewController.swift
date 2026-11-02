@@ -16,7 +16,7 @@ final class LibraryViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        tableView.backgroundColor = .black
+        tableView.backgroundColor = .clear
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         refreshControl = UIRefreshControl()
         refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
@@ -53,7 +53,7 @@ final class LibraryViewController: UITableViewController {
         content.secondaryTextProperties.color = .secondaryLabel
         content.imageProperties.tintColor = PlayerView.accent
         cell.accessoryType = .disclosureIndicator
-        cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+        cell.backgroundColor = UIColor(white: 1, alpha: 0.08) // полупрозрачно — виден живой фон
         if indexPath.row == 0 {
             let cloud = CloudLikes.shared
             content.text = "Понравившиеся"
@@ -129,7 +129,7 @@ final class TrackListViewController: UITableViewController {
         case .downloaded: title = "Скачанные"
         case .artist(_, let name): title = name.replacingOccurrences(of: " - Topic", with: "")
         }
-        tableView.backgroundColor = .black
+        tableView.backgroundColor = .clear
         tableView.rowHeight = 64
         tableView.separatorInset.left = 76
         tableView.register(TrackCell.self, forCellReuseIdentifier: "track")
@@ -330,7 +330,7 @@ final class TrackCell: UITableViewCell {
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
-        backgroundColor = .black
+        backgroundColor = .clear
         let selected = UIView()
         selected.backgroundColor = UIColor(white: 0.15, alpha: 1)
         selectedBackgroundView = selected

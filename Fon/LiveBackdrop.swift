@@ -13,6 +13,9 @@ final class LiveBackdrop: UIView {
     private let imageB = CALayer()
     private var blobs: [CAGradientLayer] = []
     private let shade = CAGradientLayer()
+    /// Дополнительное затемнение — для фона под лентами (содержимое должно читаться).
+    private let dimLayer = CALayer()
+    var dim: Float = 0 { didSet { dimLayer.opacity = dim } }
     /// Неоновые лучи — косые светящиеся полосы, медленно проходят по экрану (владелец: «motion background, neon»).
     private var beams: [CAGradientLayer] = []
     private var currentColors: [UIColor] = []
@@ -58,6 +61,9 @@ final class LiveBackdrop: UIView {
                         UIColor(white: 0, alpha: 0.62).cgColor]
         shade.locations = [0, 0.45, 1]
         layer.addSublayer(shade)
+        dimLayer.backgroundColor = UIColor.black.cgColor
+        dimLayer.opacity = 0
+        layer.addSublayer(dimLayer)
 
         let nc = NotificationCenter.default
         nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -77,6 +83,7 @@ final class LiveBackdrop: UIView {
         let b = bounds
         base.frame = b
         shade.frame = b
+        dimLayer.frame = b
         // Картинка больше экрана: при вращении края не видны.
         let side = max(b.width, b.height) * 1.6
         for image in [imageA, imageB] {
@@ -254,6 +261,25 @@ final class LiveBackdrop: UIView {
     }
 
     // MARK: - Цвета и картинка
+
+    /// Неон по умолчанию (ничего не играет): фиолетовый, синий, малиновый, бирюзовый.
+    func setDefault() {
+        let size = CGSize(width: 64, height: 64)
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            UIColor(red: 0.08, green: 0.04, blue: 0.16, alpha: 1).setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            let spots: [(UIColor, CGRect)] = [
+                (UIColor(red: 0.55, green: 0.2, blue: 1, alpha: 1), CGRect(x: -10, y: -10, width: 44, height: 44)),
+                (UIColor(red: 0.1, green: 0.45, blue: 1, alpha: 1), CGRect(x: 30, y: 0, width: 40, height: 40)),
+                (UIColor(red: 1, green: 0.2, blue: 0.6, alpha: 1), CGRect(x: 0, y: 34, width: 36, height: 36)),
+                (UIColor(red: 0.1, green: 0.9, blue: 0.85, alpha: 1), CGRect(x: 36, y: 36, width: 32, height: 32))]
+            for (color, rect) in spots {
+                color.setFill()
+                UIBezierPath(ovalIn: rect).fill()
+            }
+        }
+        setImage(image)
+    }
 
     /// Новая обложка: размытая картинка и цвета пятен — плавно.
     func setImage(_ image: UIImage?) {

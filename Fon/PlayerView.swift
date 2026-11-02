@@ -9,6 +9,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onExpand: (() -> Void)?
     var onCollapse: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Сменился трек — фон приложения подстраивается под его обложку.
+    var onTrackChanged: ((String) -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
     /// Исполнитель текущего трека: id канала и его название.
     var onOpenArtist: ((String, String) -> Void)?
@@ -714,6 +716,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func updateMiniArtwork(_ id: String) {
         guard id != miniArtworkID else { return }
         miniArtworkID = id
+        onTrackChanged?(id)
         ArtworkLoader.shared.load(id, size: .small) { [weak self] image, _ in
             guard self?.miniArtworkID == id else { return }
             self?.miniArtwork.image = image
