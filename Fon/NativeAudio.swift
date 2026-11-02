@@ -194,13 +194,20 @@ enum YouTubeStreams {
 
     /// Просмотры и возраст видео (`next` без входа — `videoPrimaryInfoRenderer`; проверено из облака).
     static func videoInfo(_ id: String) async -> (views: Int?, ageDays: Int?)? {
+        guard let info = await videoDetails(id) else { return nil }
+        return (info.views, info.ageDays)
+    }
+
+    /// Название, канал, просмотры и возраст видео — один запрос `next` без входа (история не трогается).
+    static func videoDetails(_ id: String) async -> (title: String, channel: String, views: Int?, ageDays: Int?)? {
         let cfg = config ?? fallbackConfig
         let body: [String: Any] = ["context": cfg.context, "videoId": id]
         guard let json = await post("next", body: body, config: cfg, signedIn: false),
               let primary = findAll(json, key: "videoPrimaryInfoRenderer").first as? [String: Any] else { return nil }
         let counter = (primary["viewCount"] as? [String: Any])?["videoViewCountRenderer"] as? [String: Any]
         let views = (counter?["originalViewCount"] as? String).flatMap { Int($0) } ?? Discover.number(text(counter?["viewCount"]))
-        return (views, Discover.ageDays(text(primary["relativeDateText"])))
+        let owner = findAll(json, key: "videoOwnerRenderer").first as? [String: Any]
+        return (text(primary["title"]), text(owner?["title"]), views, Discover.ageDays(text(primary["relativeDateText"])))
     }
 
     private static func parseQueue(_ json: [String: Any]) -> [Track] {
@@ -476,6 +483,39 @@ final class NativeAudio: NSObject {
 
     private func queueChanged() {
         NotificationCenter.default.post(name: Self.queueDidChange, object: nil)
+        fillTitles()
+    }
+
+    private var namingIDs = Set<String>()
+
+    /// Треки очереди без названия (в «Далее» были просто «Трек» — скриншот после 1.84): ближайшие 12 —
+    /// узнать название и исполнителя (`next` без входа, по 4 сразу).
+    private func fillTitles() {
+        let ids = queue.dropFirst(max(0, index)).prefix(13).filter { $0.title.isEmpty && !namingIDs.contains($0.id) }.map(\.id)
+        guard !ids.isEmpty else { return }
+        namingIDs.formUnion(ids)
+        Task { [weak self] in
+            var names: [String: Track] = [:]
+            await withTaskGroup(of: (String, Track?).self) { group in
+                for id in ids {
+                    group.addTask {
+                        guard let info = await YouTubeStreams.videoDetails(id), !info.title.isEmpty else { return (id, nil) }
+                        let clean = TrackTitle.clean(title: info.title, artist: info.channel)
+                        return (id, Track(id: id, title: clean.title, artist: clean.artist))
+                    }
+                }
+                for await (id, track) in group { if let track { names[id] = track } }
+            }
+            let found = names
+            await MainActor.run {
+                guard let self, !found.isEmpty else { return }
+                var changed = false
+                for i in self.queue.indices where self.queue[i].title.isEmpty {
+                    if let named = found[self.queue[i].id] { self.queue[i] = named; changed = true }
+                }
+                if changed { NotificationCenter.default.post(name: Self.queueDidChange, object: nil) }
+            }
+        }
     }
 
     // MARK: - Запуск
