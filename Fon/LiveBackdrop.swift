@@ -56,10 +56,10 @@ final class LiveBackdrop: UIView {
         layer.addSublayer(shade)
 
         let nc = NotificationCenter.default
-        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+        nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.setRunning(false)
         }
-        nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.setRunning(true)
         }
     }
@@ -246,9 +246,16 @@ final class LiveBackdrop: UIView {
         sampleFrame()
     }
 
+    /// Перестать брать кадры и **снять выход кадров с трека**: с ним iOS при сворачивании считала, что идёт видео,
+    /// и на миг ставила системный плеер на паузу (владелец после 1.87: «при выходе и заходе стоп-пауза»).
     private func stopSampling() {
         sampleTimer?.invalidate()
         sampleTimer = nil
+        if let output = videoOutput, let item = outputItem, item.outputs.contains(where: { $0 === output }) {
+            item.remove(output)
+        }
+        videoOutput = nil
+        outputItem = nil
     }
 
     private func sampleFrame() {

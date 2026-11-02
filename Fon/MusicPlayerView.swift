@@ -161,12 +161,13 @@ final class MusicPlayerView: UIView {
         readyObservation = videoLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.updateVideoVisibility() }
         }
-        // В фоне плеер с подключённой картинкой iOS ставит на паузу — на это время картинку отключаем.
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+        // В фоне плеер с подключённой картинкой iOS ставит на паузу — картинку отключаем заранее, ещё до ухода
+        // в фон (`willResignActive`): с `didEnterBackground` iOS успевала на миг остановить звук («стоп-пауза»).
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.inBackground = true
             self?.attachVideo()
         }
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.inBackground = false
             self?.attachVideo()
         }
