@@ -254,7 +254,9 @@ final class GlassPanel: UIView {
         }
         #endif
         clipsToBounds = true
-        addSubview(blur)
+        // Без размытия: под подложкой и так размытый фон, а живое размытие поверх движущегося фона пересчитывается
+        // каждый кадр — ползунок и анимации начинали дёргаться (владелец после 1.88: «раньше было плавно»).
+        layer.backgroundColor = UIColor(white: 0.06, alpha: 0.42).cgColor
         tint.backgroundColor = UIColor(white: 1, alpha: 0.04).cgColor
         layer.addSublayer(tint)
         sheen.colors = [UIColor(white: 1, alpha: 0.16).cgColor, UIColor(white: 1, alpha: 0.05).cgColor,
