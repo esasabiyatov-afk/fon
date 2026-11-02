@@ -58,6 +58,7 @@ enum DirectStream {
             result.author = details["author"] as? String
             result.channelID = details["channelId"] as? String
         }
+        result.storyboard = ((response["storyboards"] as? [String: Any])?["playerStoryboardSpecRenderer"] as? [String: Any])?["spec"] as? String
         let status = (response["playabilityStatus"] as? [String: Any])?["status"] as? String ?? "?"
         let streaming = response["streamingData"] as? [String: Any] ?? [:]
         let formats = streaming["formats"] as? [[String: Any]] ?? []

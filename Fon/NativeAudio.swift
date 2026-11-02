@@ -124,6 +124,8 @@ enum YouTubeStreams {
         var title: String?
         var author: String?
         var channelID: String?
+        /// Миниатюры кадров видео YouTube (`storyboards…spec`) — для живого фона плеера, отдельно от воспроизведения.
+        var storyboard: String?
         /// Почему потока нет (для подсказки при переходе в веб-плеер).
         var reason: String?
         /// У форматов на странице не нашлось ссылок (повтор без cookies посетителя может помочь).
@@ -334,6 +336,10 @@ final class NativeAudio: NSObject {
     func channel(for trackID: String) -> (id: String, name: String)? { channels[trackID] }
     /// Название трека как на YouTube (у очищенного «(Lyrics)» отрезано) — чтобы узнать, что играет не оригинал.
     private var rawTitles: [String: String] = [:]
+    private var storyboards: [String: String] = [:]
+
+    /// Миниатюры кадров видео трека (для фона плеера; к воспроизведению не относятся).
+    func storyboard(for trackID: String) -> String? { storyboards[trackID] }
     func rawTitle(for trackID: String) -> String? { rawTitles[trackID] }
     /// Тот же плеер — для картинки в музыкальном плеере (файл 360p вместо обложки, просьба владельца).
     var output: AVPlayer { player }
@@ -648,6 +654,7 @@ final class NativeAudio: NSObject {
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
         if let title = result.title { rawTitles[track.id] = title }
         if let id = result.channelID { channels[track.id] = (id, result.author ?? track.artist) }
+        if let spec = result.storyboard { storyboards[track.id] = spec }
         if queue.indices.contains(index), queue[index].id == track.id, queue[index].title.isEmpty, let title = result.title {
             let clean = TrackTitle.clean(title: title, artist: result.author ?? "")
             queue[index] = Track(id: track.id, title: clean.title, artist: clean.artist)
@@ -725,6 +732,7 @@ final class NativeAudio: NSObject {
                 let video = found.streams.filter { $0.client != "Прямо звук" }
                 guard !video.isEmpty else { return }
                 if let title = found.title { self.rawTitles[track.id] = title }
+                if let spec = found.storyboard { self.storyboards[track.id] = spec }
                 let file = OfflineStore.shared.file(for: track.id).map { AudioStream(url: $0, headers: [:], client: "Скачано") }
                 self.candidates = video + (file.map { [$0] } ?? [])
                 self.startPaused = self.player.timeControlStatus == .paused

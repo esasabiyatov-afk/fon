@@ -141,6 +141,54 @@ final class LiveBackdrop: UIView {
         }
     }
 
+    // MARK: - Под видео — по миниатюрам кадров (отдельно от плеера)
+
+    private var followKey = ""
+    private var followedAt: Date = .distantPast
+    private var following = false
+    private static var sheets: [URL: CGImage] = [:]
+    private static var sheetOrder: [URL] = []
+
+    /// Видео на месте обложки: фон догоняет текущий кадр по миниатюрам YouTube (те, что при перемотке), не чаще раза
+    /// в 3 с и с опозданием — не страшно (владелец после 1.88: «фон может догонять, это не главное»). Плеер не трогаем:
+    /// картинки качаются отдельно по сети (в 1.87 кадры брались с самого трека — звук запинался).
+    func follow(storyboard spec: String?, time: Double, duration: Double) {
+        guard let spec, duration > 0, !following, Date().timeIntervalSince(followedAt) >= 3,
+              UIApplication.shared.applicationState == .active, let board = Storyboard(spec: spec),
+              let frame = board.frame(at: time, duration: duration) else { return }
+        let key = frame.url.absoluteString + "#\(frame.rect.minX),\(frame.rect.minY)"
+        guard key != followKey else { return }
+        followKey = key
+        followedAt = Date()
+        following = true
+        Task.detached(priority: .utility) { [weak self] in
+            var sheet = await MainActor.run { LiveBackdrop.sheets[frame.url] }
+            if sheet == nil, let (data, _) = try? await URLSession.shared.data(from: frame.url),
+               let image = UIImage(data: data)?.cgImage {
+                sheet = image
+                await MainActor.run {
+                    LiveBackdrop.sheets[frame.url] = image
+                    LiveBackdrop.sheetOrder.append(frame.url)
+                    if LiveBackdrop.sheetOrder.count > 4 { LiveBackdrop.sheets[LiveBackdrop.sheetOrder.removeFirst()] = nil }
+                }
+            }
+            let piece = sheet?.cropping(to: frame.rect)
+            let small = piece.flatMap { LiveBackdrop.blurred(UIImage(cgImage: $0)) }
+            let colors = small.map { LiveBackdrop.palette($0) } ?? []
+            await MainActor.run {
+                guard let self else { return }
+                self.following = false
+                if let small { self.apply(small, colors: colors) }
+            }
+        }
+    }
+
+    /// Видео убрали с обложки — снова по обложке.
+    func stopFollowing() {
+        followKey = ""
+        followedAt = .distantPast
+    }
+
     // MARK: - Цвета и картинка
 
     /// Новая обложка: размытая картинка и цвета пятен — плавно.
@@ -170,7 +218,7 @@ final class LiveBackdrop: UIView {
     }
 
     /// Уменьшенная (64 px) и размытая копия — растянутая на экран, она гладкая и почти ничего не стоит.
-    private static func blurred(_ image: UIImage) -> CGImage? {
+    fileprivate static func blurred(_ image: UIImage) -> CGImage? {
         guard let cg = image.cgImage else { return nil }
         let input = CIImage(cgImage: cg)
         let scale = 64 / max(input.extent.width, input.extent.height)
@@ -181,7 +229,7 @@ final class LiveBackdrop: UIView {
     }
 
     /// 4 заметных цвета картинки: яркие и насыщенные выше, похожие отбрасываются.
-    private static func palette(_ image: CGImage) -> [UIColor] {
+    fileprivate static func palette(_ image: CGImage) -> [UIColor] {
         let w = 12, h = 12
         var pixels = [UInt8](repeating: 0, count: w * h * 4)
         guard let context = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
@@ -320,5 +368,32 @@ final class GlassPanel: UIView {
         CATransaction.setAnimationDuration(1.2)
         tint.backgroundColor = (color?.withAlphaComponent(0.10) ?? UIColor(white: 1, alpha: 0.04)).cgColor
         CATransaction.commit()
+    }
+}
+
+/// Миниатюры кадров видео YouTube (`storyboards.playerStoryboardSpecRenderer.spec`, формат как у yt-dlp):
+/// «база|ширина#высота#кадров#столбцов#строк#…#имя#sigh|…»; уровень 1 — кадры 80×45 листами 10×10.
+private struct Storyboard {
+    let template: String
+    let width: Int, height: Int, count: Int, cols: Int, rows: Int
+
+    init?(spec: String) {
+        let parts = spec.components(separatedBy: "|")
+        guard parts.count >= 2 else { return nil }
+        let index = parts.count > 2 ? 2 : 1 // уровень 1 (80×45), а если его нет — 0
+        let args = parts[index].components(separatedBy: "#")
+        guard args.count == 8, let w = Int(args[0]), let h = Int(args[1]), let n = Int(args[2]),
+              let c = Int(args[3]), let r = Int(args[4]), w > 0, h > 0, n > 0, c > 0, r > 0 else { return nil }
+        template = parts[0].replacingOccurrences(of: "$L", with: String(index - 1))
+            .replacingOccurrences(of: "$N", with: args[6]) + "&sigh=" + args[7]
+        width = w; height = h; count = n; cols = c; rows = r
+    }
+
+    func frame(at time: Double, duration: Double) -> (url: URL, rect: CGRect)? {
+        let i = min(count - 1, max(0, Int(time / duration * Double(count))))
+        let perSheet = cols * rows
+        guard let url = URL(string: template.replacingOccurrences(of: "$M", with: String(i / perSheet))) else { return nil }
+        let pos = i % perSheet
+        return (url, CGRect(x: (pos % cols) * width, y: (pos / cols) * height, width: width, height: height))
     }
 }

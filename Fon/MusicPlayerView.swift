@@ -288,6 +288,10 @@ final class MusicPlayerView: UIView {
             slider.value = 0
             showTimes(0)
         }
+        // Фон догоняет видео по миниатюрам кадров YouTube (не трогая плеер), пока видео на месте обложки.
+        if systemPlayer, videoView.alpha == 1 {
+            live.follow(storyboard: NativeAudio.shared.storyboard(for: id), time: time, duration: duration)
+        }
         if paused != self.paused || loop != looping || isNew {
             let pauseChanged = paused != self.paused
             self.paused = paused
@@ -323,6 +327,11 @@ final class MusicPlayerView: UIView {
         let show = videoLayer.player != nil && videoLayer.isReadyForDisplay
         applyAspect(showingVideo: show)
         guard (videoView.alpha == 1) != show else { return }
+        if !show {
+            // Видео убрали — фон снова по обложке.
+            live.stopFollowing()
+            if artworkView.contentMode == .scaleAspectFill, let image = artworkView.image { live.setImage(image) }
+        }
         UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.videoView.alpha = show ? 1 : 0
         }
