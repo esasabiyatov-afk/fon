@@ -24,14 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Xcode 26 (SDK iOS 26) — иначе на iOS 26 приложение без «жидкого стекла» (режим совместимости).
-      # Нет на машине — собираем Xcode по умолчанию (стекло заменяется размытием, см. Fon/Glass.swift).
-      - name: Select Xcode 26
-        run: |
-          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
-          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
-          xcodebuild -version
-
+      # Xcode по умолчанию на машине (16.4, SDK iOS 18): сборка Xcode 26 (1.84–1.85, «жидкое стекло») вышла
+      # нестабильной — владелец попросил вернуть прежний дизайн (после 1.85).
       - name: Install XcodeGen
         run: brew install xcodegen
 

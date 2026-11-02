@@ -9,8 +9,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     var onExpand: (() -> Void)?
     var onCollapse: (() -> Void)?
     var onClose: (() -> Void)?
-    /// Что играет — для системного мини-плеера iOS 26: id, название, исполнитель, пауза.
-    var onMiniInfo: ((String?, String, String, Bool) -> Void)?
     var onOpenInBrowse: ((URL) -> Void)?
     /// Исполнитель текущего трека: id канала и его название.
     var onOpenArtist: ((String, String) -> Void)?
@@ -51,7 +49,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let miniLikeButton = UIButton(type: .system)
     private let progressView = UIView()
     private let miniArtwork = UIImageView()
-    private let miniGlass = Glass.make(cornerRadius: 32)
     private var miniArtworkID: String?
     private var progress: CGFloat = 0
 
@@ -92,10 +89,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         super.init(frame: frame)
         backgroundColor = UIColor(white: 0.09, alpha: 1)
         clipsToBounds = true
-        // Мини-плеер режима музыки — стеклянная капсула, как в iOS 26 (просьба владельца по скриншоту Apple Music).
-        miniGlass.isHidden = true
-        miniGlass.isUserInteractionEnabled = false
-        addSubview(miniGlass)
 
         webView = WebViewFactory.make(scripts: [Scripts.common, Scripts.player], handler: self)
         webView.navigationDelegate = self
@@ -123,8 +116,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         progressView.backgroundColor = Self.accent
         miniArtwork.contentMode = .scaleAspectFill
         miniArtwork.clipsToBounds = true
-        miniArtwork.layer.cornerRadius = 10
-        miniArtwork.layer.cornerCurve = .continuous
+        miniArtwork.layer.cornerRadius = 6
         miniArtwork.backgroundColor = UIColor(white: 0.18, alpha: 1)
         [miniArtwork, titleLabel, subtitleLabel, miniLikeButton, playPauseButton, closeButton, progressView].forEach { addSubview($0) }
 
@@ -271,9 +263,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         let miniSymbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
         closeButton.setImage(UIImage(systemName: musicMode ? "forward.fill" : "xmark", withConfiguration: miniSymbols), for: .normal)
         closeButton.accessibilityLabel = musicMode ? "Следующий трек" : "Закрыть"
-        // Мини-плеер режима музыки — стеклянная капсула (iOS 26), под ней видно ленту.
-        miniGlass.isHidden = !(isMini && musicMode)
-        backgroundColor = isMini && musicMode ? .clear : UIColor(white: 0.09, alpha: 1)
+        // Мини-плеер режима музыки — карточка чуть светлее фона, как в Apple Music.
+        backgroundColor = isMini && musicMode ? UIColor(white: 0.16, alpha: 1) : UIColor(white: 0.09, alpha: 1)
         miniArtwork.isHidden = !(isMini && musicMode)
         musicView.isHidden = !nativeMusic
         topBar.isHidden = isMini || nativeMusic || isFullscreen
@@ -653,9 +644,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             if musicMode {
                 // Обложка трека (16:9, как видео); маленький веб-плеер прячется под ней и продолжает играть.
                 let side = h - 16
-                miniGlass.frame = bounds
-                miniGlass.layer.cornerRadius = layer.cornerRadius
-                miniArtwork.frame = CGRect(x: 12, y: 8, width: (side * 16 / 9).rounded(), height: side)
+                miniArtwork.frame = CGRect(x: 8, y: 8, width: (side * 16 / 9).rounded(), height: side)
                 webView.frame = miniArtwork.frame
                 leftWidth = miniArtwork.frame.maxX
             } else {
@@ -676,9 +665,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             let textW = max(0, miniLikeButton.frame.minX - textX - 4)
             titleLabel.frame = CGRect(x: textX, y: h / 2 - 19, width: textW, height: 20)
             subtitleLabel.frame = CGRect(x: textX, y: h / 2 + 1, width: textW, height: 18)
-            // Полоска прогресса — внутри капсулы, не по скруглённым краям.
-            progressView.frame = CGRect(x: 24, y: h - 3, width: max(0, w - 48) * progress, height: 2)
-            progressView.layer.cornerRadius = 1
+            progressView.frame = CGRect(x: 0, y: h - 2, width: w * progress, height: 2)
         case .expanded:
             if isFullscreen {
                 // Видео — на весь экран (с полями видео стало мельче — владельцу не понравилось),
@@ -732,12 +719,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     @objc private func togglePlay() { command("toggle") }
 
-    /// Свайп вниз по системному мини-плееру iOS 26 — закрыть, как смахивание своего мини-плеера.
-    func closeFromMini() {
-        stop()
-        onClose?()
-    }
-
     @objc private func closeTapped() {
         // Режим музыки — как в Apple Music: справа ⏭, а закрыть — смахнуть мини-плеер вниз.
         if musicMode {
@@ -782,9 +763,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             webTime = time
             webPaused = paused
         }
-        if mode == .mini {
-            progressView.frame.size.width = musicMode ? max(0, bounds.width - 48) * progress : bounds.width * progress
-        }
+        if mode == .mini { progressView.frame.size.width = bounds.width * progress }
         guard let id else { return }
         currentVideoID = id
         let clean = TrackTitle.clean(title: title, artist: artist)
@@ -801,7 +780,6 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             musicView.sourceName = "Похожие треки"
         }
         updateMiniArtwork(id)
-        onMiniInfo?(id, shown.title, shown.artist, paused)
         musicView.update(id: id, title: title, artist: artist, paused: paused, time: time, duration: duration, loop: loop)
     }
 
