@@ -273,3 +273,63 @@ final class LiveBackdrop: UIView {
         }
     }
 }
+
+/// Подложка под названием и кнопками плеера «под стекло» (владелец после 1.87: «низ более стеклянным»):
+/// тонкое размытие, сверху блик, лёгкий оттенок цвета фона и светлая кромка — ярче сверху-слева, как у стекла.
+/// Обычное размытие UIKit (не системное стекло iOS 26 — его сборка была нестабильной).
+final class GlassPanel: UIView {
+    private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let tint = CALayer()
+    private let sheen = CAGradientLayer()
+    private let rim = CAGradientLayer()
+    private let rimMask = CAShapeLayer()
+    var cornerRadius: CGFloat = 30 { didSet { setNeedsLayout() } }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
+        addSubview(blur)
+        tint.backgroundColor = UIColor(white: 1, alpha: 0.04).cgColor
+        layer.addSublayer(tint)
+        sheen.colors = [UIColor(white: 1, alpha: 0.16).cgColor, UIColor(white: 1, alpha: 0.05).cgColor,
+                        UIColor(white: 1, alpha: 0.0).cgColor, UIColor(white: 1, alpha: 0.04).cgColor]
+        sheen.locations = [0, 0.18, 0.6, 1]
+        layer.addSublayer(sheen)
+        rim.colors = [UIColor(white: 1, alpha: 0.55).cgColor, UIColor(white: 1, alpha: 0.08).cgColor,
+                      UIColor(white: 1, alpha: 0.05).cgColor, UIColor(white: 1, alpha: 0.28).cgColor]
+        rim.locations = [0, 0.35, 0.65, 1]
+        rim.startPoint = CGPoint(x: 0, y: 0)
+        rim.endPoint = CGPoint(x: 1, y: 1)
+        rimMask.fillColor = UIColor.clear.cgColor
+        rimMask.strokeColor = UIColor.white.cgColor
+        rimMask.lineWidth = 1.2
+        rim.mask = rimMask
+        layer.addSublayer(rim)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.cornerRadius = cornerRadius
+        blur.frame = bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tint.frame = bounds
+        sheen.frame = bounds
+        rim.frame = bounds
+        rimMask.frame = bounds
+        rimMask.path = UIBezierPath(roundedRect: bounds.insetBy(dx: 0.6, dy: 0.6), cornerRadius: cornerRadius).cgPath
+        CATransaction.commit()
+    }
+
+    /// Лёгкий оттенок цвета фона — стекло «вбирает» цвет под ним.
+    func setTint(_ color: UIColor?) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(1.2)
+        tint.backgroundColor = (color?.withAlphaComponent(0.12) ?? UIColor(white: 1, alpha: 0.04)).cgColor
+        CATransaction.commit()
+    }
+}

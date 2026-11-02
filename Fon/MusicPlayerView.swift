@@ -41,7 +41,7 @@ final class MusicPlayerView: UIView {
     /// «Живой» фон: размытая обложка вращается, пятна её цветов плывут; при видео — цвета из кадров (`LiveBackdrop`).
     private let live = LiveBackdrop()
     /// Подложка под названием и кнопками — полупрозрачное размытие (как стеклянные карточки на референсах владельца).
-    private let panelGlass = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let panelGlass = GlassPanel()
     /// AirPlay — в нижнем ряду, как в Apple Music.
     private let routeButton = AVRoutePickerView()
     private let collapseButton = UIButton(type: .system)
@@ -94,16 +94,12 @@ final class MusicPlayerView: UIView {
         gradient.locations = [0, 0.9]
         layer.addSublayer(gradient)
         addSubview(live)
-        panelGlass.isUserInteractionEnabled = false
-        panelGlass.clipsToBounds = true
-        panelGlass.layer.cornerRadius = 28
-        panelGlass.layer.cornerCurve = .continuous
-        panelGlass.layer.borderWidth = 0.5
-        panelGlass.layer.borderColor = UIColor(white: 1, alpha: 0.14).cgColor
-        panelGlass.contentView.backgroundColor = UIColor(white: 1, alpha: 0.03)
         addSubview(panelGlass)
         // Ореол обложки — цвета фона (меняется вместе с ним, в том числе по кадрам видео).
-        live.onColors = { [weak self] colors in self?.setGlow(colors.first) }
+        live.onColors = { [weak self] colors in
+            self?.setGlow(colors.first)
+            self?.panelGlass.setTint(colors.first)
+        }
 
         // Дизайн Apple Music (просьба владельца после 1.77): «язычок» сверху, обложка (у нас — видео 16:9),
         // название слева и ♡, ползунок, крупные ⏮ ▶ ⏭ без подложки, громкость, внизу — повтор, режим видео, AirPlay, очередь.
