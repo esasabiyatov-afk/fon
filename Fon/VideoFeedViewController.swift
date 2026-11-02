@@ -457,7 +457,7 @@ final class InlinePreview {
             let stream = found.streams.first { $0.client != "Прямо звук" }
             await MainActor.run {
                 guard let self, self.token == current, let stream else { return }
-                Self.links[id] = (stream, Date())
+                Self.links[id] = (stream: stream, found: Date())
                 self.start(stream, token: current)
             }
         }
