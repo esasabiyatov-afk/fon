@@ -25,6 +25,35 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         var action: (() -> Void)? = nil
         /// Исполнитель из подписок — по долгому нажатию «Отписаться». Ставится после создания карточки.
         var unsubscribe: (() -> Void)? = nil
+        /// Долгое нажатие — «Скачать трек» / «Скачать микс» (без интернета; просьба владельца после 1.83).
+        var downloadTrack: Track? = nil
+        var downloadMixSeed: String? = nil
+
+        /// Меню долгого нажатия: скачать трек/микс, отписаться.
+        var menuActions: [UIAction] {
+            var actions: [UIAction] = []
+            if let track = downloadTrack {
+                let done = OfflineStore.shared.state(for: track.id) != .missing
+                actions.append(UIAction(title: done ? "Трек уже скачан" : "Скачать трек", image: UIImage(systemName: "arrow.down.circle"),
+                                        attributes: done ? .disabled : []) { _ in
+                    OfflineStore.shared.download([track])
+                    MusicHomeViewController.toast("Скачиваю — появится в «Скачанных»")
+                })
+            }
+            if let seed = downloadMixSeed {
+                actions.append(UIAction(title: "Скачать микс", image: UIImage(systemName: "square.stack")) { _ in
+                    MusicHomeViewController.toast("Скачиваю микс…")
+                    OfflineStore.shared.downloadMix(seed: seed) { count in
+                        MusicHomeViewController.toast(count > 0 ? "Микс: \(count) треков — появятся в «Скачанных»" : "Микс не загрузился")
+                    }
+                })
+            }
+            if let unsubscribe {
+                actions.append(UIAction(title: "Отписаться", image: UIImage(systemName: "person.badge.minus"),
+                                        attributes: .destructive) { _ in unsubscribe() })
+            }
+            return actions
+        }
 
         /// Свой init: замыкание после скобок — всегда `action`. С автоматическим init Swift 5 отдавал его
         /// последнему параметру (`unsubscribe`), и в 1.68–1.69 карточки «Главной» не нажимались.
@@ -206,9 +235,11 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         }
         if !seeds.isEmpty {
             result.append(Section(title: "Миксы для вас", style: .large, items: seeds.map { seed in
-                Item(title: "Микс: \(seed.artist)", subtitle: "\(seed.title) и похожие", artworkID: seed.id) { [weak self] in
+                var item = Item(title: "Микс: \(seed.artist)", subtitle: "\(seed.title) и похожие", artworkID: seed.id) { [weak self] in
                     if let url = YouTubeLinks.mix(seed.id) { self?.onPlay?(url, "Микс: \(seed.artist)", nil) }
                 }
+                item.downloadMixSeed = seed.id
+                return item
             }))
         }
         if !history.isEmpty {
@@ -308,6 +339,20 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     /// Карточка YouTube Music: что включить, выясняется по нажатию (у альбома — первый трек и т. д.).
     private func musicItem(_ music: MusicItem, source: String) -> Item {
+        var item = musicCard(music, source: source)
+        // Трек или микс с первым видео — можно скачать (трек — если это не плейлист/микс, микс — по видео).
+        if let id = music.videoId, !music.artist {
+            let isList = music.playlistId != nil
+            if !isList {
+                let clean = TrackTitle.clean(title: music.title, artist: music.subtitle)
+                item.downloadTrack = Track(id: id, title: clean.title, artist: clean.artist)
+            }
+            item.downloadMixSeed = id
+        }
+        return item
+    }
+
+    private func musicCard(_ music: MusicItem, source: String) -> Item {
         Item(title: music.title, subtitle: music.subtitle,
              artworkID: music.thumb == nil ? music.videoId : nil, artworkURL: music.thumb,
              symbol: music.artist ? "person.fill" : "music.note", round: music.artist) { [weak self] in
@@ -337,9 +382,18 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     /// Трек и похожие на него (Mix YouTube).
     private func mixItem(_ track: Track) -> Item {
-        Item(title: track.title, subtitle: track.artist, artworkID: track.id) { [weak self] in
+        var item = Item(title: track.title, subtitle: track.artist, artworkID: track.id) { [weak self] in
             if let url = YouTubeLinks.mix(track.id) { self?.onPlay?(url, "Микс", nil) }
         }
+        item.downloadTrack = track
+        item.downloadMixSeed = track.id
+        return item
+    }
+
+    /// Подсказка поверх окна (из меню карточки).
+    fileprivate static func toast(_ text: String) {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        window.showToast(text, at: CGPoint(x: window.bounds.midX, y: window.bounds.height - window.safeAreaInsets.bottom - 150))
     }
 
     // MARK: - Раскладка
@@ -526,6 +580,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     /// Быстрый доступ: обложка 16:9 сверху, название под ней (у «Понравившихся» — сердце на цветном фоне).
     private final class QuickCell: UICollectionViewCell {
+        private let menu = CellMenu()
         private let artwork = UIImageView()
         private let titleLabel = UILabel()
         private var artworkKey: String?
@@ -545,6 +600,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         fileprivate func configure(_ item: Item) {
+            menu.attach(to: self, item: item)
             titleLabel.text = item.title
             if item.artworkID != nil || item.artworkURL != nil {
                 artwork.contentMode = .scaleAspectFill
@@ -574,12 +630,11 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     }
 
     /// Карточка: обложка 16:9 (у исполнителя — круглая) и подписи под ней.
-    private final class CardCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
+    private final class CardCell: UICollectionViewCell {
         private let artwork = UIImageView()
-        /// Меню «Отписаться» — только у исполнителей в «Подписках» и только на самой ячейке: в 1.68 меню на всём
+        /// Меню долгого нажатия («Скачать», «Отписаться») — только на самой ячейке: в 1.68 меню на всём
         /// списке совпало с жалобой «на главной ничего не нажимается».
-        private var unsubscribe: (() -> Void)?
-        private var menu: UIContextMenuInteraction?
+        private let menu = CellMenu()
         private let placeholder = UIImageView()
         private let titleLabel = UILabel()
         private let subtitleLabel = UILabel()
@@ -602,25 +657,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
-                                    configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
-            guard let unsubscribe else { return nil }
-            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
-                UIMenu(children: [UIAction(title: "Отписаться", image: UIImage(systemName: "person.badge.minus"),
-                                           attributes: .destructive) { _ in unsubscribe() }])
-            }
-        }
-
         fileprivate func configure(_ item: Item, large: Bool) {
-            unsubscribe = item.unsubscribe
-            if unsubscribe != nil, menu == nil {
-                let interaction = UIContextMenuInteraction(delegate: self)
-                addInteraction(interaction)
-                menu = interaction
-            } else if unsubscribe == nil, let interaction = menu {
-                removeInteraction(interaction)
-                menu = nil
-            }
+            menu.attach(to: self, item: item)
             titleLabel.text = item.title
             subtitleLabel.text = item.subtitle
             round = item.round
@@ -652,6 +690,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
     /// Строка трека: обложка слева, название и исполнитель.
     private final class RowCell: UICollectionViewCell {
+        private let menu = CellMenu()
         private let artwork = UIImageView()
         private let titleLabel = UILabel()
         private let subtitleLabel = UILabel()
@@ -673,6 +712,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         fileprivate func configure(_ item: Item) {
+            menu.attach(to: self, item: item)
             titleLabel.text = item.title
             subtitleLabel.text = item.subtitle
             artwork.image = nil
@@ -695,6 +735,32 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     }
 
     /// Пояснение вместо раздела: загрузка, нет входа, пусто.
+    /// Меню долгого нажатия на карточке — только если у неё есть что предложить (скачать, отписаться).
+    private final class CellMenu: NSObject, UIContextMenuInteractionDelegate {
+        private var actions: () -> [UIAction] = { [] }
+        private var interaction: UIContextMenuInteraction?
+
+        fileprivate func attach(to view: UIView, item: Item) {
+            let has = item.downloadTrack != nil || item.downloadMixSeed != nil || item.unsubscribe != nil
+            actions = { item.menuActions } // состояние «скачан» — на момент открытия меню
+            if has, interaction == nil {
+                let added = UIContextMenuInteraction(delegate: self)
+                view.addInteraction(added)
+                interaction = added
+            } else if !has, let added = interaction {
+                view.removeInteraction(added)
+                interaction = nil
+            }
+        }
+
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            let list = actions()
+            guard !list.isEmpty else { return nil }
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in UIMenu(children: list) }
+        }
+    }
+
     private final class MessageCell: UICollectionViewCell {
         private let label = UILabel()
 

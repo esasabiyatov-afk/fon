@@ -13,8 +13,8 @@ final class OfflineStore {
     static let didChange = Notification.Name("FonOfflineDidChange")
     static let limit: Int64 = 2 * 1024 * 1024 * 1024
 
-    /// Меньше — важнее.
-    enum Source: Int, Codable { case liked = 0, frequent = 1, mix = 2, recommended = 3 }
+    /// Меньше — важнее. `manual` — скачал сам (кнопкой ↓ или «Скачать микс»): важнее всего и качается и не по Wi-Fi.
+    enum Source: Int, Codable { case manual = -1, liked = 0, frequent = 1, mix = 2, recommended = 3 }
 
     struct Entry: Codable {
         var track: Track
@@ -102,6 +102,46 @@ final class OfflineStore {
     }
 
     func track(for id: String) -> Track? { index.entries[id]?.track }
+
+    enum State { case missing, waiting, downloaded }
+
+    func state(for id: String) -> State {
+        if file(for: id) != nil { return .downloaded }
+        if downloading?.id == id || pending.contains(where: { $0.track.id == id }) { return .waiting }
+        return .missing
+    }
+
+    /// Скачать самому (кнопка ↓ в плеере, «Скачать трек/микс» на карточках) — первыми в очереди, можно и не по Wi-Fi.
+    func download(_ tracks: [Track]) {
+        var fresh: [(track: Track, source: Source)] = []
+        for track in tracks where !track.id.isEmpty {
+            index.blocked.removeAll { $0 == track.id }
+            failed[track.id] = nil
+            if var entry = index.entries[track.id] {
+                entry.source = .manual
+                index.entries[track.id] = entry
+            } else if downloading?.id != track.id, !fresh.contains(where: { $0.track.id == track.id }) {
+                fresh.append((track: track, source: .manual))
+            }
+        }
+        pending.removeAll { item in fresh.contains { $0.track.id == item.track.id } }
+        pending.insert(contentsOf: fresh, at: 0)
+        save()
+        notify()
+        startNext()
+    }
+
+    /// Микс по треку (`RD<id>`, до 25 треков) — целиком.
+    func downloadMix(seed: String, completion: ((Int) -> Void)? = nil) {
+        Task { [weak self] in
+            let mix = await YouTubeStreams.queue(videoID: seed, playlistID: "RD" + seed)
+            let list = Array(mix.prefix(25))
+            await MainActor.run {
+                self?.download(list)
+                completion?(list.count)
+            }
+        }
+    }
 
     /// Трек отыграл 20 с (история «Недавно слушали») — для «часто слушаю».
     func notePlay(_ id: String) {
@@ -197,7 +237,10 @@ final class OfflineStore {
             try? FileManager.default.removeItem(at: fileURL(id))
             index.entries[id] = nil
         }
-        pending = queue.sorted { $0.source.rawValue < $1.source.rawValue }
+        // Свои (скачать самому) — остаются первыми.
+        let manual = pending.filter { $0.source == .manual }
+        let manualIDs = Set(manual.map(\.track.id))
+        pending = manual + queue.filter { !manualIDs.contains($0.track.id) }.sorted { $0.source.rawValue < $1.source.rawValue }
         save()
         notify()
         startNext()
@@ -206,11 +249,12 @@ final class OfflineStore {
     // MARK: - Скачивание
 
     private func startNext() {
-        guard downloading == nil, online, !expensive else { return }
-        while let next = pending.first {
-            pending.removeFirst()
+        guard downloading == nil, online else { return }
+        // Сами по себе — только по Wi-Fi; то, что владелец скачал сам, — по любой сети.
+        while let at = pending.firstIndex(where: { !expensive || $0.source == .manual }) {
+            let next = pending.remove(at: at)
             if index.entries[next.track.id] != nil { continue }
-            if let at = failed[next.track.id], Date().timeIntervalSince(at) < 24 * 3600 { continue }
+            if let failedAt = failed[next.track.id], Date().timeIntervalSince(failedAt) < 24 * 3600 { continue }
             guard makeRoom(for: next.source) else {
                 pending.removeAll { $0.source.rawValue >= next.source.rawValue } // менее важным места тем более нет
                 continue

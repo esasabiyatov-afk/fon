@@ -42,6 +42,8 @@ final class MusicPlayerView: UIView {
     private let sourceLabel = UILabel()
     private let queueButton = UIButton(type: .system)
     private let videoButton = UIButton(type: .system)
+    /// ↓ — скачать трек для прослушивания без интернета; зажать — весь микс по нему (просьба владельца после 1.83).
+    private let downloadButton = UIButton(type: .system)
     private let artworkContainer = UIView()
     private let artworkSwipe = UIPanGestureRecognizer()
     private let upSwipe = UIPanGestureRecognizer()
@@ -98,6 +100,13 @@ final class MusicPlayerView: UIView {
         setup(videoButton, "play.rectangle", 18, #selector(videoTapped))
         queueButton.accessibilityLabel = "Очередь и похожие"
         videoButton.accessibilityLabel = "Режим видео"
+        setup(downloadButton, "arrow.down.circle", 18, #selector(downloadTapped))
+        downloadButton.menu = UIMenu(children: [
+            UIAction(title: "Скачать трек", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in self?.downloadTapped() },
+            UIAction(title: "Скачать микс по этому треку", image: UIImage(systemName: "square.stack")) { [weak self] _ in self?.downloadMix() }
+        ])
+        downloadButton.showsMenuAsPrimaryAction = false // нажатие — трек, долгое нажатие — меню
+        NotificationCenter.default.addObserver(self, selector: #selector(updateDownload), name: OfflineStore.didChange, object: nil)
 
         headerLabel.text = "ИГРАЕТ ИЗ"
         headerLabel.font = .systemFont(ofSize: 10, weight: .semibold)
@@ -256,7 +265,7 @@ final class MusicPlayerView: UIView {
         let (title, artist) = TrackTitle.clean(title: rawTitle, artist: rawArtist)
         let isNew = track?.id != id
         track = Track(id: id, title: title, artist: artist)
-        if isNew { loadArtwork(id) }
+        if isNew { loadArtwork(id); updateDownload() }
         // Форма кадра нового трека становится известна не сразу — сверяем при каждом обновлении.
         if videoView.alpha == 1 { applyAspect(showingVideo: true) }
         if titleLabel.text != title { titleLabel.text = title }
@@ -414,6 +423,45 @@ final class MusicPlayerView: UIView {
     // MARK: - Кнопки
 
     @objc private func collapseTapped() { onCollapse?() }
+
+    @objc private func downloadTapped() {
+        guard let track else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        switch OfflineStore.shared.state(for: track.id) {
+        case .downloaded: toast("Уже скачан — есть в «Скачанных»")
+        case .waiting: toast("Уже качается")
+        case .missing:
+            OfflineStore.shared.download([track])
+            toast("Скачиваю — появится в «Скачанных»")
+        }
+    }
+
+    private func downloadMix() {
+        guard let track else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        toast("Скачиваю микс…")
+        OfflineStore.shared.downloadMix(seed: track.id) { [weak self] count in
+            self?.toast(count > 0 ? "Микс: \(count) треков — появятся в «Скачанных»" : "Микс не загрузился")
+        }
+    }
+
+    private func toast(_ text: String) {
+        showToast(text, at: CGPoint(x: bounds.midX, y: bounds.height - safeAreaInsets.bottom - 120))
+    }
+
+    /// ↓ — не скачан, ⋯↓ — качается, ↓ закрашенная красная — скачан.
+    @objc private func updateDownload() {
+        let state = track.map { OfflineStore.shared.state(for: $0.id) } ?? OfflineStore.State.missing
+        let symbol: String
+        switch state {
+        case .missing: symbol = "arrow.down.circle"
+        case .waiting: symbol = "arrow.down.circle.dotted"
+        case .downloaded: symbol = "arrow.down.circle.fill"
+        }
+        setSymbol(downloadButton, symbol, 18)
+        downloadButton.tintColor = state == .downloaded ? PlayerView.accent : .white
+        downloadButton.accessibilityLabel = state == .downloaded ? "Скачан" : "Скачать"
+    }
     @objc private func queueTapped() { onShowUpNext?() } // «Далее» — и у обычного плеера YouTube (там же «Страница»)
 
     @objc private func handleUpSwipe(_ pan: UIPanGestureRecognizer) {
@@ -636,11 +684,12 @@ final class MusicPlayerView: UIView {
         volumeLow.frame = CGRect(x: x, y: vy, width: 20, height: 30)
         volumeHigh.frame = CGRect(x: x + width - 24, y: vy, width: 24, height: 30)
         volumeSlider.frame = CGRect(x: x + 28, y: vy, width: max(0, width - 60), height: 30)
-        // Нижний ряд, как в Apple Music: повтор · режим видео · AirPlay · очередь («Далее»).
+        // Нижний ряд, как в Apple Music: повтор · режим видео · скачать · AirPlay · очередь («Далее»).
         let by = y + 282
-        for (index, item) in [loopButton, videoButton, routeButton, queueButton].enumerated() {
+        let row: [UIView] = [loopButton, videoButton, downloadButton, routeButton, queueButton]
+        for (index, item) in row.enumerated() {
             item.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
-            item.center = CGPoint(x: x + width * (CGFloat(index) * 2 + 1) / 8, y: by)
+            item.center = CGPoint(x: x + width * (CGFloat(index) * 2 + 1) / CGFloat(row.count * 2), y: by)
         }
     }
 }
