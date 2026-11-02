@@ -13,6 +13,9 @@ final class LiveBackdrop: UIView {
     private let imageB = CALayer()
     private var blobs: [CAGradientLayer] = []
     private let shade = CAGradientLayer()
+    /// Неоновые лучи — косые светящиеся полосы, медленно проходят по экрану (владелец: «motion background, neon»).
+    private var beams: [CAGradientLayer] = []
+    private var currentColors: [UIColor] = []
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     /// Новые цвета фона (для ореола обложки).
@@ -26,23 +29,33 @@ final class LiveBackdrop: UIView {
         layer.addSublayer(base)
         for image in [imageA, imageB] {
             image.contentsGravity = .resizeAspectFill
-            image.opacity = 0.75
+            image.opacity = 0.55
             layer.addSublayer(image)
         }
-        imageB.opacity = 0.45
-        for _ in 0..<4 {
+        imageB.opacity = 0.3
+        for _ in 0..<5 {
             let blob = CAGradientLayer()
             blob.type = .radial
             blob.startPoint = CGPoint(x: 0.5, y: 0.5)
             blob.endPoint = CGPoint(x: 1, y: 1)
             blob.colors = [UIColor.clear.cgColor, UIColor.clear.cgColor]
-            blob.opacity = 0.8
+            blob.opacity = 0.85
             layer.addSublayer(blob)
             blobs.append(blob)
         }
+        for _ in 0..<2 {
+            let beam = CAGradientLayer()
+            beam.startPoint = CGPoint(x: 0, y: 0.5)
+            beam.endPoint = CGPoint(x: 1, y: 0.5)
+            beam.colors = [UIColor.clear.cgColor, UIColor.clear.cgColor, UIColor.clear.cgColor]
+            beam.locations = [0, 0.5, 1]
+            beam.opacity = 0.55
+            layer.addSublayer(beam)
+            beams.append(beam)
+        }
         // Затемнение: текст и кнопки читаются при любой обложке.
-        shade.colors = [UIColor(white: 0, alpha: 0.25).cgColor, UIColor(white: 0, alpha: 0.35).cgColor,
-                        UIColor(white: 0, alpha: 0.7).cgColor]
+        shade.colors = [UIColor(white: 0, alpha: 0.12).cgColor, UIColor(white: 0, alpha: 0.22).cgColor,
+                        UIColor(white: 0, alpha: 0.62).cgColor]
         shade.locations = [0, 0.45, 1]
         layer.addSublayer(shade)
 
@@ -70,11 +83,17 @@ final class LiveBackdrop: UIView {
             image.bounds = CGRect(x: 0, y: 0, width: side, height: side)
             image.position = CGPoint(x: b.midX, y: b.midY * 0.8)
         }
-        let blobSide = max(b.width, b.height) * 0.9
-        let spots: [CGPoint] = [CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.85, y: 0.35), CGPoint(x: 0.3, y: 0.7), CGPoint(x: 0.8, y: 0.85)]
+        let blobSide = max(b.width, b.height) * 0.75
+        let spots: [CGPoint] = [CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.85, y: 0.35), CGPoint(x: 0.3, y: 0.7),
+                                CGPoint(x: 0.8, y: 0.85), CGPoint(x: 0.5, y: 0.45)]
         for (blob, spot) in zip(blobs, spots) {
             blob.bounds = CGRect(x: 0, y: 0, width: blobSide, height: blobSide)
             blob.position = CGPoint(x: b.width * spot.x, y: b.height * spot.y)
+        }
+        for (i, beam) in beams.enumerated() {
+            beam.bounds = CGRect(x: 0, y: 0, width: b.width * 0.45, height: max(b.width, b.height) * 1.8)
+            beam.position = CGPoint(x: b.width * (i == 0 ? 0.2 : 0.8), y: b.midY)
+            beam.setAffineTransform(CGAffineTransform(rotationAngle: i == 0 ? 0.45 : -0.6))
         }
         CATransaction.commit()
         if imageA.animation(forKey: "spin") == nil { startAnimations() }
@@ -103,24 +122,69 @@ final class LiveBackdrop: UIView {
         for (i, blob) in blobs.enumerated() {
             let drift = CAKeyframeAnimation(keyPath: "position")
             let start = blob.position
-            let dx = w * 0.3, dy = h * 0.18
+            let dx = w * 0.38, dy = h * 0.24
             let sign: CGFloat = i % 2 == 0 ? 1 : -1
             drift.values = [start,
                             CGPoint(x: start.x + dx * sign, y: start.y + dy),
                             CGPoint(x: start.x - dx * 0.5 * sign, y: start.y + dy * 1.6),
                             CGPoint(x: start.x - dx * sign, y: start.y - dy * 0.5),
                             start].map { NSValue(cgPoint: $0) }
-            drift.duration = 18 + Double(i) * 5
+            drift.duration = 11 + Double(i) * 3
             drift.calculationMode = .cubic
             drift.repeatCount = .infinity
             blob.add(drift, forKey: "drift")
             let pulse = CABasicAnimation(keyPath: "transform.scale")
-            pulse.fromValue = 0.85
-            pulse.toValue = 1.25
-            pulse.duration = 9 + Double(i) * 2
+            pulse.fromValue = 0.75
+            pulse.toValue = 1.35
+            pulse.duration = 5 + Double(i) * 1.5
             pulse.autoreverses = true
             pulse.repeatCount = .infinity
             blob.add(pulse, forKey: "pulse")
+        }
+        // Лучи медленно проходят поперёк экрана туда-обратно.
+        for (i, beam) in beams.enumerated() {
+            let sweep = CABasicAnimation(keyPath: "position.x")
+            sweep.fromValue = i == 0 ? -w * 0.3 : w * 1.3
+            sweep.toValue = i == 0 ? w * 1.3 : -w * 0.3
+            sweep.duration = i == 0 ? 9 : 13
+            sweep.autoreverses = true
+            sweep.repeatCount = .infinity
+            sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            beam.add(sweep, forKey: "sweep")
+            let glow = CABasicAnimation(keyPath: "opacity")
+            glow.fromValue = 0.2
+            glow.toValue = 0.7
+            glow.duration = 3.5 + Double(i)
+            glow.autoreverses = true
+            glow.repeatCount = .infinity
+            beam.add(glow, forKey: "glow")
+        }
+        animateColors()
+    }
+
+    /// Неон «переливается»: каждое пятно и луч по кругу перетекают по цветам трека.
+    private func animateColors() {
+        let colors = currentColors
+        guard colors.count > 1 else { return }
+        for (i, blob) in blobs.enumerated() {
+            let cycle = CAKeyframeAnimation(keyPath: "colors")
+            cycle.values = (0...colors.count).map { k -> [CGColor] in
+                let c = colors[(i + k) % colors.count]
+                return [c.cgColor, c.withAlphaComponent(0).cgColor]
+            }
+            cycle.duration = 10 + Double(i) * 2
+            cycle.repeatCount = .infinity
+            blob.add(cycle, forKey: "cycle")
+        }
+        for (i, beam) in beams.enumerated() {
+            let cycle = CAKeyframeAnimation(keyPath: "colors")
+            cycle.values = (0...colors.count).map { k -> [CGColor] in
+                let c = colors[(i * 2 + k) % colors.count]
+                return [c.withAlphaComponent(0).cgColor, c.cgColor, c.withAlphaComponent(0).cgColor]
+            }
+            cycle.duration = 14 + Double(i) * 4
+            cycle.repeatCount = .infinity
+            beam.add(cycle, forKey: "cycle")
         }
     }
 
@@ -178,7 +242,7 @@ final class LiveBackdrop: UIView {
             await MainActor.run {
                 guard let self else { return }
                 self.following = false
-                if let small { self.apply(small, colors: colors) }
+                if let small { self.apply(small, colors: colors, cycle: false) }
             }
         }
     }
@@ -197,7 +261,7 @@ final class LiveBackdrop: UIView {
         apply(small, colors: Self.palette(small))
     }
 
-    private func apply(_ blurred: CGImage, colors: [UIColor]) {
+    private func apply(_ blurred: CGImage, colors: [UIColor], cycle: Bool = true) {
         let fade = CATransition()
         fade.duration = 1.2
         fade.type = .fade
@@ -213,8 +277,20 @@ final class LiveBackdrop: UIView {
             let color = colors[i % colors.count]
             blob.colors = [color.cgColor, color.withAlphaComponent(0).cgColor]
         }
+        for (i, beam) in beams.enumerated() {
+            let color = colors[(i * 2) % colors.count]
+            beam.colors = [color.withAlphaComponent(0).cgColor, color.cgColor, color.withAlphaComponent(0).cgColor]
+        }
         base.backgroundColor = Self.darkened(colors[0]).cgColor
         CATransaction.commit()
+        if cycle {
+            // Обложка: неон переливается по её цветам.
+            currentColors = colors
+            if bounds.width > 0 { animateColors() }
+        } else {
+            // Видео: цвета задаёт сам кадр (меняется раз в 3 с) — без перелива, иначе он сбивался бы каждый раз.
+            (blobs + beams).forEach { $0.removeAnimation(forKey: "cycle") }
+        }
     }
 
     /// Уменьшенная (64 px) и размытая копия — растянутая на экран, она гладкая и почти ничего не стоит.
@@ -263,7 +339,8 @@ final class LiveBackdrop: UIView {
     private static func vivid(_ color: UIColor) -> UIColor {
         var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
         color.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
-        return UIColor(hue: hue, saturation: min(1, sat * 1.3 + 0.08), brightness: min(0.85, max(0.4, bri)), alpha: 1)
+        // Неон: насыщенно и ярко.
+        return UIColor(hue: hue, saturation: min(1, sat * 1.45 + 0.15), brightness: min(1, max(0.6, bri * 1.25)), alpha: 1)
     }
 
     private static func darkened(_ color: UIColor) -> UIColor {
