@@ -157,6 +157,52 @@ enum YouTubeStreams {
         }
     }
 
+    /// Видео из поиска для подборок «Открытия» (`Discover`): просмотры, возраст, длительность, значок канала.
+    struct FoundVideo {
+        let track: Track
+        let title: String
+        let channel: String
+        let views: Int?
+        let ageDays: Int?
+        let seconds: Int?
+        /// Значок канала: подтверждённый / официальный исполнитель.
+        let verified: Bool
+    }
+
+    /// Поиск для подборок — всегда без входа (не попадает в историю поиска владельца).
+    /// `params`: «Видео за месяц» `EgQIBBAB`, «за год» `EgQIBRAB`, «за месяц по просмотрам» `CAMSBAgEEAE=`.
+    static func searchVideos(_ query: String, params: String) async -> [FoundVideo] {
+        let cfg = config ?? fallbackConfig
+        let body: [String: Any] = ["context": cfg.context, "query": query, "params": params]
+        guard let json = await post("search", body: body, config: cfg, signedIn: false) else { return [] }
+        var seen = Set<String>()
+        return findAll(json, key: "videoRenderer").compactMap { item in
+            guard let video = item as? [String: Any], let id = video["videoId"] as? String, seen.insert(id).inserted else { return nil }
+            let title = text(video["title"])
+            let channel = text(video["ownerText"] ?? video["longBylineText"] ?? video["shortBylineText"])
+            let clean = TrackTitle.clean(title: title, artist: channel)
+            let badges = (video["ownerBadges"] as? [[String: Any]] ?? []).compactMap {
+                ($0["metadataBadgeRenderer"] as? [String: Any])?["style"] as? String
+            }
+            return FoundVideo(track: Track(id: id, title: clean.title, artist: clean.artist), title: title, channel: channel,
+                              views: Discover.number(text(video["viewCountText"])),
+                              ageDays: Discover.ageDays(text(video["publishedTimeText"])),
+                              seconds: Discover.seconds(text(video["lengthText"])),
+                              verified: badges.contains { $0.contains("VERIFIED") })
+        }
+    }
+
+    /// Просмотры и возраст видео (`next` без входа — `videoPrimaryInfoRenderer`; проверено из облака).
+    static func videoInfo(_ id: String) async -> (views: Int?, ageDays: Int?)? {
+        let cfg = config ?? fallbackConfig
+        let body: [String: Any] = ["context": cfg.context, "videoId": id]
+        guard let json = await post("next", body: body, config: cfg, signedIn: false),
+              let primary = findAll(json, key: "videoPrimaryInfoRenderer").first as? [String: Any] else { return nil }
+        let counter = (primary["viewCount"] as? [String: Any])?["videoViewCountRenderer"] as? [String: Any]
+        let views = (counter?["originalViewCount"] as? String).flatMap { Int($0) } ?? Discover.number(text(counter?["viewCount"]))
+        return (views, Discover.ageDays(text(primary["relativeDateText"])))
+    }
+
     private static func parseQueue(_ json: [String: Any]) -> [Track] {
         var seen = Set<String>()
         return findAll(json, key: "playlistPanelVideoRenderer").compactMap { item in
@@ -456,7 +502,7 @@ final class NativeAudio: NSObject {
         pendingStart = value("t").flatMap { Double($0.replacingOccurrences(of: "s", with: "")) }.flatMap { $0 > 0 ? $0 : nil }
         if url.path == "/watch_videos", let list = value("video_ids") {
             // Названия — из скачанных (без сети иначе их не узнать), понравившихся и истории.
-            let known = Dictionary((OfflineStore.shared.tracks + CloudLikes.shared.tracks + Library.shared.history).map { ($0.id, $0) },
+            let known = Dictionary((OfflineStore.shared.tracks + CloudLikes.shared.tracks + Library.shared.history + Discover.shared.allTracks).map { ($0.id, $0) },
                                    uniquingKeysWith: { first, _ in first })
             queue = list.split(separator: ",").map { known[String($0)] ?? Track(id: String($0), title: "", artist: "") }
             index = 0
@@ -493,7 +539,11 @@ final class NativeAudio: NSObject {
                 guard let self, self.active else { return }
                 self.extending = false
                 var known = Set(self.queue.map(\.id))
-                for track in tracks where known.insert(track.id).inserted { self.queue.append(track) }
+                // Микс YouTube — без того, что владелец обычно пропускает (`Taste`); свой плейлист — как есть.
+                let mix = playlistID.hasPrefix("RD")
+                for track in tracks where known.insert(track.id).inserted && !(mix && Taste.shared.isDisliked(track)) {
+                    self.queue.append(track)
+                }
                 // Названия для уже стоящих в очереди треков.
                 for (i, track) in self.queue.enumerated() where track.title.isEmpty {
                     if let named = tracks.first(where: { $0.id == track.id }) { self.queue[i] = named }

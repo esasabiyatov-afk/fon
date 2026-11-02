@@ -110,6 +110,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
         nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil)
         nc.addObserver(self, selector: #selector(reload), name: MusicFeed.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(reload), name: Discover.didChange, object: nil)
         reload()
     }
 
@@ -122,6 +123,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         case .home:
             MusicFeed.shared.loadHome()
             MusicFeed.shared.loadFeed() // лента YouTube — сразу ниже своих подборок
+            Discover.shared.refresh() // «Открытия»: раз в 6 часов
         case .subscriptions: MusicFeed.shared.loadSubscriptions()
         case .feed: MusicFeed.shared.loadFeed()
         }
@@ -153,6 +155,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         case .home:
             CloudLikes.shared.refresh()
             MusicFeed.shared.loadFeed(force: true)
+            Discover.shared.refresh(force: true)
             MusicFeed.shared.loadHome(force: true, completion: done)
         case .subscriptions:
             MusicFeed.shared.loadSubscriptions(force: true, completion: done)
@@ -198,6 +201,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             quick.append(mixItem(track))
         }
         result.append(Section(title: "Главная", style: .quick, items: quick)) // крупный заголовок, как в Apple Music
+        result += discoverSections()
 
         if shelves.isEmpty {
             result += localSections(history: history, likes: likes)
@@ -218,6 +222,34 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
 
         // Сначала свои подборки, ниже — сразу лента YouTube (просьба владельца после 1.83; раньше — по карточке «Ещё»).
         result += feedSections(onHome: true)
+        return result
+    }
+
+    /// «Открытия» (`Discover`): микс дня, новое, ниша, тренды — под быстрым доступом (просьба владельца после 1.83).
+    private func discoverSections() -> [Section] {
+        let shelves = Discover.shared.shelves
+        var result: [Section] = []
+        if let first = shelves.daily.first {
+            let ids = shelves.daily.map(\.id)
+            let item = Item(title: "Открытия дня", subtitle: "\(ids.count) треков · новое, ниша и тренды", artworkID: first.id) { [weak self] in
+                if let url = YouTubeLinks.queue(ids) { self?.onPlay?(url, "Открытия дня", ids) }
+            }
+            result.append(Section(title: "Открытия дня", style: .large, items: [item]))
+        }
+        for (title, tracks) in [("Новое в вашем вкусе", shelves.fresh), ("Ниша", shelves.niche), ("В тренде", shelves.trending)]
+        where !tracks.isEmpty {
+            let ids = tracks.map(\.id)
+            result.append(Section(title: title, style: .small, items: tracks.enumerated().map { index, track in
+                var item = Item(title: track.title, subtitle: track.artist, artworkID: track.id) { [weak self] in
+                    // Нажатый и следующие за ним — одной очередью.
+                    let queue = Array(ids[index...])
+                    if let url = YouTubeLinks.queue(queue) { self?.onPlay?(url, title, queue) }
+                }
+                item.downloadTrack = track
+                item.downloadMixSeed = track.id
+                return item
+            }))
+        }
         return result
     }
 

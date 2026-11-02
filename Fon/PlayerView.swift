@@ -773,6 +773,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         }
         // «Далее» у обычного плеера (режим музыки на iPad): текущий трек и список YouTube.
         if musicMode, !NativeAudio.shared.active, let track = currentTrack { WebQueue.shared.update(track: track, rawTitle: title, url: webView.url) }
+        // Дослушал или пропустил — для «Открытий» и миксов (`Taste`).
+        if musicMode, let track = currentTrack { Taste.shared.progress(track, time: time, duration: duration) }
         if let queue = queueIDs, !queue.contains(id) {
             queueIDs = nil
             musicView.sourceName = "Похожие треки"

@@ -694,20 +694,21 @@ enum Scripts {
       position: absolute !important; top: 0 !important; left: 0 !important;
       width: 100% !important; height: 100% !important; object-fit: contain !important; opacity: 1 !important;
     }
-    /* Субтитры в полном экране — по центру ширины (YouTube считал их место по старому размеру плеера). */
+    /* Субтитры в полном экране — по центру ширины (YouTube считал их место по старому размеру плеера), на 20% мельче (просьба владельца после 1.83). */
     html.fon-full .ytp-caption-window-container {
       position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important;
     }
     html.fon-full .caption-window {
       left: 50% !important; right: auto !important; margin-left: 0 !important;
-      transform: translateX(-50%) !important; width: auto !important; max-width: 90% !important; text-align: center !important;
+      transform: translateX(-50%) scale(0.8) !important; transform-origin: 50% 100% !important;
+      width: auto !important; max-width: 100% !important; text-align: center !important;
     }
     /* Вертикальный полный экран: субтитры сразу под картинкой, а не внизу экрана. */
     /* Ряд «Нравится/Поделиться/Сохранить» и «Другие видео» в полном экране наезжали на время и главу. */
     html.fon-full .fon-hidden-full { display: none !important; }
 
     html.fon-full.fon-cap-below .caption-window {
-      top: var(--fon-cap-top, auto) !important; bottom: auto !important;
+      top: var(--fon-cap-top, auto) !important; bottom: auto !important; transform-origin: 50% 0 !important;
     }
   `);
   // После мини-полоски YouTube может не заметить, что окно снова большое, и оставить видео
