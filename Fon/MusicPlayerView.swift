@@ -234,7 +234,8 @@ final class MusicPlayerView: UIView {
         updateButtons()
         showTimes(0)
 
-        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+        // 20 раз в секунду: ползунок едет непрерывно, а не ступеньками (запись экрана после 1.89 — шаг раз в 0,5 с).
+        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         ticker = t
         NotificationCenter.default.addObserver(self, selector: #selector(updateLike), name: CloudLikes.didChange, object: nil)
@@ -281,9 +282,14 @@ final class MusicPlayerView: UIView {
         if videoView.alpha == 1 { applyAspect(showingVideo: true) }
         if titleLabel.text != title { titleLabel.text = title }
         if artistLabel.text != artist { artistLabel.text = artist }
-        self.time = time
+        // Мелкое расхождение с плеером (<0,4 с) не поправляем рывком назад — ползунок едет ровно; большое — сразу.
+        let now = CACurrentMediaTime()
+        let predicted = self.paused ? self.time : self.time + (now - stamp)
+        if isNew || paused || self.paused || abs(time - predicted) >= 0.4 {
+            self.time = time
+            stamp = now
+        }
         self.duration = duration
-        stamp = CACurrentMediaTime()
         slider.maximumValue = Float(max(duration, 1))
         if duration <= 0 {
             // Новый трек ещё ищется: длины нет — ползунок в начало (иначе он оставался в конце от прошлого трека).
@@ -429,8 +435,9 @@ final class MusicPlayerView: UIView {
     }
 
     private func showTimes(_ t: Double) {
-        elapsedLabel.text = Self.format(t)
-        remainingLabel.text = "-" + Self.format(max(0, duration - t))
+        let elapsed = Self.format(t), remaining = "-" + Self.format(max(0, duration - t))
+        if elapsedLabel.text != elapsed { elapsedLabel.text = elapsed }
+        if remainingLabel.text != remaining { remainingLabel.text = remaining }
     }
 
     static func format(_ seconds: Double) -> String {
