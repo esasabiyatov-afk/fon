@@ -316,6 +316,7 @@ final class MusicPlayerView: UIView {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Settings.videoArtwork.toggle()
         attachVideo()
+        if Settings.videoArtwork { NativeAudio.shared.videoWanted() } // скачанный трек — на поток с видео
     }
 
     private func updateVideoVisibility() {

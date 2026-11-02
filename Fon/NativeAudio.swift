@@ -342,6 +342,8 @@ final class NativeAudio: NSObject {
     private var playlistID: String?
     private var loop = false
     private var candidates: [AudioStream] = []
+    /// Откуда играет текущий трек («Скачано» — файл на телефоне, в нём только звук).
+    private var currentClient = ""
     private var triedDirect = false
     private var token = UUID()
     private var playedOnce = false
@@ -669,6 +671,7 @@ final class NativeAudio: NSObject {
         guard active else { return }
         guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : trackFailed() }
         let stream = candidates.removeFirst()
+        currentClient = stream.client
         // Поток оборвался посреди трека (например, отдельная звуковая дорожка) — следующий с того же места.
         let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : startAt
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
@@ -708,6 +711,26 @@ final class NativeAudio: NSObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         stallTimer = timer
+    }
+
+    /// На обложке включили видео, а играет скачанный файл (в нём только звук; владелец после 1.88: «не играет видео
+    /// по нажатию на сохранённых») — с сетью переходим на поток с видео с того же места, пауза сохраняется.
+    func videoWanted() {
+        guard active, currentClient == "Скачано", OfflineStore.shared.online, let track = currentTrack else { return }
+        let current = token
+        Task { [weak self] in
+            let found = await DirectStream.find(track.id)
+            await MainActor.run {
+                guard let self, self.token == current, self.currentClient == "Скачано" else { return }
+                let video = found.streams.filter { $0.client != "Прямо звук" }
+                guard !video.isEmpty else { return }
+                if let title = found.title { self.rawTitles[track.id] = title }
+                let file = OfflineStore.shared.file(for: track.id).map { AudioStream(url: $0, headers: [:], client: "Скачано") }
+                self.candidates = video + (file.map { [$0] } ?? [])
+                self.startPaused = self.player.timeControlStatus == .paused
+                self.tryNextCandidate() // с того же места: `resumeAt` = текущее время
+            }
+        }
     }
 
     /// Поток трека (вариант 3 владельца): ссылка со страницы запросом приложения + «решатель» yt-dlp — без окна.
