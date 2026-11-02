@@ -494,6 +494,75 @@ enum Scripts {
   };
   document.addEventListener('ended', () => { if (fon.queue.length) setTimeout(takeQueued, 0); }, true);
 
+  // --- 2b. Перевод комментариев, как в приложении YouTube (просьба владельца после 1.83): под комментарием не на
+  // русском — «Перевести на русский»; перевод — Google (тот же, что у YouTube), нажатие ещё раз — оригинал.
+  fon.addStyle(`
+    .fon-translate { display: inline-block; margin: 6px 0 2px; font-size: 13px; font-weight: 500; color: #aaa;
+      cursor: pointer; -webkit-user-select: none; user-select: none; }
+  `);
+  const COMMENT = 'ytm-comment-renderer, ytm-comment-view-model, ytm-comment-reply-renderer';
+  const COMMENT_TEXT = '.comment-text, [class*="CommentRendererText"], [class*="comment-text"], #content-text, .user-text';
+  const commentText = (c) => {
+    const direct = c.querySelector(COMMENT_TEXT);
+    if (direct) return direct;
+    // Запасной путь: самый длинный абзац, не шапка (@автор, дата) и не кнопка.
+    let best = null, len = 0;
+    for (const el of c.querySelectorAll('p, span.yt-core-attributed-string')) {
+      const t = (el.textContent || '').trim();
+      if (t.length <= len || /^@/.test(t) || el.querySelector('p') || el.closest('button, [role="button"], a[href^="/@"], [class*="header"], [class*="Header"]')) continue;
+      best = el;
+      len = t.length;
+    }
+    return best;
+  };
+  const foreign = (t) => {
+    const letters = (t.match(/\p{L}/gu) || []).length;
+    if (letters < 3) return false;
+    return (t.match(/[Ѐ-ӿ]/g) || []).length / letters < 0.5;
+  };
+  const translate = async (text) => {
+    const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=' + encodeURIComponent(text));
+    const data = await r.json();
+    return (data[0] || []).map((x) => x && x[0]).filter(Boolean).join('');
+  };
+  const addTranslateButtons = () => {
+    for (const c of document.querySelectorAll(COMMENT)) {
+      if (c.dataset.fonTr || c.querySelector(COMMENT)) continue; // вложенные — у самого внутреннего
+      const el = commentText(c);
+      if (!el) continue;
+      c.dataset.fonTr = '1';
+      const original = (el.innerText || el.textContent || '').trim();
+      if (!foreign(original)) continue;
+      const button = document.createElement('div');
+      button.className = 'fon-translate';
+      button.textContent = 'Перевести на русский';
+      let originalHTML = null, translated = null, busy = false;
+      button.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (busy) return;
+        if (originalHTML !== null) { // уже переведено — вернуть оригинал
+          el.innerHTML = originalHTML;
+          originalHTML = null;
+          button.textContent = 'Перевести на русский';
+          return;
+        }
+        if (!translated) {
+          busy = true;
+          button.textContent = 'Перевод…';
+          try { translated = await translate(original); } catch (err) { translated = null; }
+          busy = false;
+          if (!translated) { button.textContent = 'Не удалось перевести — ещё раз'; return; }
+        }
+        originalHTML = el.innerHTML;
+        el.textContent = translated;
+        button.textContent = 'Показать оригинал';
+      }, true);
+      el.insertAdjacentElement('afterend', button);
+    }
+  };
+  setInterval(() => { if (!fon.realHidden && document.querySelector(COMMENT)) addTranslateButtons(); }, 1500);
+
   // --- 3. Экран блокировки: «следующий / предыдущий» вместо перемотки на 10 секунд.
   const ms = navigator.mediaSession;
   const ours = {
