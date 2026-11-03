@@ -1,4 +1,6 @@
-# Fon
+<p align="center"><img src="docs/logo.png" width="128" alt="Fon"></p>
+
+<h1 align="center">Fon</h1>
 
 **English** · [Русский](#русский)
 
