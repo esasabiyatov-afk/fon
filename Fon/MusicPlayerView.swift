@@ -453,10 +453,18 @@ final class MusicPlayerView: UIView {
     /// Ползунок двигается плавно между сообщениями страницы (они приходят раз в секунду).
     private func tick() {
         // Отпускание не пришло (касание отменила система) — через 4 с без движения ползунок снова идёт сам.
-        if scrubbing, Date().timeIntervalSince(scrubTouched) > 4 { scrubbing = false }
+        // Палец просто держит ползунок на месте (подсвечен) — это не потерянное отпускание.
+        if scrubbing, !slider.isHighlighted, Date().timeIntervalSince(scrubTouched) > 4 { scrubbing = false }
         guard !isHidden, window != nil, !scrubbing, duration > 0 else { return }
-        let elapsed = paused ? 0 : CACurrentMediaTime() - stamp
-        let t = min(duration, time + elapsed)
+        let t: Double
+        if systemPlayer, NativeAudio.shared.active {
+            // Системный плеер: настоящее время плеера 20 раз в секунду, без угадывания между сообщениями
+            // (угадывание ехало вперёд, пока поток подгружался, и потом отпрыгивало назад). Только чтение — плеер не трогаем.
+            t = min(duration, NativeAudio.shared.displayTime)
+        } else {
+            let elapsed = paused ? 0 : CACurrentMediaTime() - stamp
+            t = min(duration, time + elapsed)
+        }
         slider.value = Float(t)
         showTimes(t)
     }

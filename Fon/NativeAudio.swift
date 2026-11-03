@@ -856,8 +856,32 @@ final class NativeAudio: NSObject {
         player.volume = Float(max(0, min(1, value)))
     }
 
+    private var seekingTo: Double?
+    private var seekStarted = Date.distantPast
+    private var seekID = 0
+
+    /// Время для ползунка: настоящее время плеера, а пока идёт перемотка — место, куда перематываем
+    /// (сразу после `seek` плеер ещё сообщает старое время — ползунок отпрыгивал назад и обратно).
+    var displayTime: Double {
+        if let target = seekingTo, Date().timeIntervalSince(seekStarted) < 4 { return target }
+        let t = player.currentTime().seconds
+        return t.isFinite ? max(0, t) : 0
+    }
+
     func seek(_ seconds: Double) {
-        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+        seekID += 1
+        let id = seekID
+        seekingTo = seconds
+        seekStarted = Date()
+        // Точно в выбранное место: по умолчанию AVPlayer прыгает к ближайшему ключевому кадру видео,
+        // и после отпускания ползунок сдвигался на пару секунд.
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, id == self.seekID else { return }
+                self.seekingTo = nil
+                self.publish()
+            }
+        }
         publish()
     }
 
@@ -993,7 +1017,7 @@ final class NativeAudio: NSObject {
         let waiting = !playedOnceCurrent
         let state = State(id: track.id, title: track.title.isEmpty && (loading || waiting) ? "Загрузка…" : track.title,
                           artist: track.artist, paused: player.timeControlStatus == .paused,
-                          time: max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0),
+                          time: displayTime,
                           duration: duration.isFinite ? duration : 0, loop: loop)
         onState?(state)
         updateNowPlaying(state)
