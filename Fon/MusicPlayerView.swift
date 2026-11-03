@@ -44,6 +44,9 @@ final class MusicPlayerView: UIView {
     /// AirPlay — в нижнем ряду, как в Apple Music.
     private let routeButton = AVRoutePickerView()
     private let collapseButton = UIButton(type: .system)
+    /// Настройщик «Оформление» (фон, подложка, ореол) — сверху справа (просьба владельца после 1.91).
+    private let designButton = UIButton(type: .system)
+    private var glowColor: UIColor?
     private let headerLabel = UILabel()
     private let sourceLabel = UILabel()
     private let queueButton = UIButton(type: .system)
@@ -97,15 +100,21 @@ final class MusicPlayerView: UIView {
         addSubview(panelGlass)
         // Ореол обложки — цвета фона (меняется вместе с ним, в том числе по кадрам видео).
         live.onColors = { [weak self] colors in
+            self?.glowColor = colors.first
             self?.setGlow(colors.first)
             self?.panelGlass.setTint(colors.first)
         }
+        applyDesign()
+        NotificationCenter.default.addObserver(self, selector: #selector(applyDesign), name: Settings.designChanged, object: nil)
 
         // Дизайн Apple Music (просьба владельца после 1.77): «язычок» сверху, обложка (у нас — видео 16:9),
         // название слева и ♡, ползунок, крупные ⏮ ▶ ⏭ без подложки, громкость, внизу — повтор, режим видео, AirPlay, очередь.
         setup(collapseButton, "chevron.compact.down", 26, #selector(collapseTapped))
         collapseButton.tintColor = UIColor(white: 1, alpha: 0.6)
         collapseButton.accessibilityLabel = "Свернуть"
+        setup(designButton, "paintpalette", 16, #selector(designTapped))
+        designButton.tintColor = UIColor(white: 1, alpha: 0.6)
+        designButton.accessibilityLabel = "Оформление"
         setup(queueButton, "list.bullet", 18, #selector(queueTapped))
         setup(videoButton, "play.rectangle", 18, #selector(videoTapped))
         queueButton.accessibilityLabel = "Очередь и похожие"
@@ -381,8 +390,26 @@ final class MusicPlayerView: UIView {
         }
     }
 
-    /// Светящийся ореол вокруг обложки/видео цветом картинки (вместо чёрной тени).
-    private func setGlow(_ color: UIColor?) {
+    /// Настройки оформления: подложка (нет/матовая/глянец) и ореол. На воспроизведение не влияют.
+    @objc private func applyDesign() {
+        let panel = Settings.panelStyle
+        panelGlass.isHidden = panel == .off
+        panelGlass.glossy = panel == .gloss
+        setGlow(glowColor)
+    }
+
+    @objc private func designTapped() {
+        guard var top = window?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        let design = DesignViewController(artwork: artworkView.image)
+        let nav = UINavigationController(rootViewController: design)
+        nav.overrideUserInterfaceStyle = .dark
+        top.present(nav, animated: true)
+    }
+
+    /// Светящийся ореол вокруг обложки/видео цветом картинки (вместо чёрной тени); выключен — обычная тень.
+    private func setGlow(_ glow: UIColor?) {
+        let color = Settings.artworkGlow ? glow : nil
         let animation = CABasicAnimation(keyPath: "shadowColor")
         animation.fromValue = artworkContainer.layer.shadowColor
         animation.duration = 1.2
@@ -680,6 +707,7 @@ final class MusicPlayerView: UIView {
         let top = safe.top
         // Сверху — «язычок» (свернуть) и откуда играет; кнопки очереди и режима видео — в нижнем ряду.
         collapseButton.frame = CGRect(x: w / 2 - 40, y: top, width: 80, height: 30)
+        designButton.frame = CGRect(x: w - safe.right - side - 36, y: top, width: 44, height: 30)
         sourceLabel.frame = CGRect(x: 40, y: top + 28, width: max(0, w - 80), height: 16)
         let contentTop = top + 54
         let contentBottom = h - max(safe.bottom, 16) - 8

@@ -74,6 +74,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         traitCollection.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
     }
 
+    private func updateAmbient() {
+        ambient.isHidden = playerState == .expanded || !Settings.ambientEverywhere
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
@@ -84,6 +88,10 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         ambient.dim = 0.45 // под лентами — приглушённее, чтобы текст читался
         ambient.setDefault()
         view.insertSubview(ambient, at: 0)
+        // Настройщик «Оформление»: живой фон на своих экранах можно выключить — тогда просто чёрный.
+        NotificationCenter.default.addObserver(forName: Settings.designChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.updateAmbient()
+        }
         browseContainer.backgroundColor = .clear
         browseContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(browseContainer)
@@ -271,7 +279,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         case .expanded: playerView.setMode(.expanded)
         }
         // Развёрнутый плеер закрывает вкладки, а мини-полоска никогда не должна закрывать их иконки.
-        ambient.isHidden = state == .expanded // под развёрнутым плеером фон не рисуем
+        updateAmbient() // под развёрнутым плеером фон не рисуем
         if state == .expanded {
             view.bringSubviewToFront(playerView)
         } else {

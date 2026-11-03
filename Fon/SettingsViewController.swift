@@ -23,25 +23,41 @@ final class SettingsViewController: UITableViewController {
         Settings.nativeAudio = nativeSwitch.isOn
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 1 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        "Воспроизведение"
+        section == 0 ? "Воспроизведение" : "Внешний вид"
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        "В режиме музыки звук играет системный плеер iOS напрямую, без веб-страницы YouTube: "
+        guard section == 0 else { return "Фон, подложка под кнопками и ореол обложки. Также — кнопкой 🎨 в плеере." }
+        return "В режиме музыки звук играет системный плеер iOS напрямую, без веб-страницы YouTube: "
             + "стабильнее в фоне и на экране блокировки. "
             + "Только с ним работает ползунок громкости в плеере (музыку можно сделать тише игры). "
             + "Если YouTube не отдаст поток, трек сам включится в обычном плеере. "
             + "Включится со следующего трека, который вы откроете."
     }
 
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard indexPath.section == 1 else { return }
+        navigationController?.pushViewController(DesignViewController(artwork: nil), animated: true)
+    }
+
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
         var content = cell.defaultContentConfiguration()
+        if indexPath.section == 1 {
+            content.text = "Оформление плеера"
+            content.image = UIImage(systemName: "paintpalette")
+            content.imageProperties.tintColor = PlayerView.accent
+            cell.contentConfiguration = content
+            cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+            cell.accessoryType = .disclosureIndicator
+            return cell
+        }
         content.text = "Системный плеер для музыки"
         content.image = UIImage(systemName: "waveform")
         content.imageProperties.tintColor = PlayerView.accent

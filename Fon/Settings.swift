@@ -30,3 +30,66 @@ extension Settings {
         set { UserDefaults.standard.set(newValue, forKey: "nativeAudio") }
     }
 }
+
+/// Оформление плеера и фона (настройщик «Оформление», просьба владельца после 1.91: «дай мне настройщик плеера,
+/// где я могу кастомизировать дизайн»). Меняется сразу (`designChanged`), на воспроизведение не влияет.
+enum BackdropStyle: Int, CaseIterable {
+    /// Мягкий: размытая обложка вращается, пятна её цветов плывут медленно (фон 1.89).
+    case soft
+    /// Неон: яркие контрастные пятна и лучи на глубоком чёрном, перелив цветов.
+    case neon
+    /// Чёрный: почти чёрный фон с едва заметным свечением — тёмное видео «выходит» за рамку.
+    case black
+
+    var title: String {
+        switch self {
+        case .soft: return "Мягкий"
+        case .neon: return "Неон"
+        case .black: return "Чёрный"
+        }
+    }
+}
+
+enum PanelStyle: Int, CaseIterable {
+    case matte, gloss, off
+
+    var title: String {
+        switch self {
+        case .matte: return "Матовое"
+        case .gloss: return "Глянец"
+        case .off: return "Без"
+        }
+    }
+}
+
+extension Settings {
+    static let designChanged = Notification.Name("FonDesignChanged")
+
+    static var backdropStyle: BackdropStyle {
+        get { BackdropStyle(rawValue: UserDefaults.standard.integer(forKey: "backdropStyle")) ?? .soft }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "backdropStyle"); notifyDesign() }
+    }
+
+    /// Подложка под названием и кнопками плеера: нет / матовое стекло / глянец (владелец после 1.91:
+    /// «убери-ка этот глянец или оставь как тему» — по умолчанию матовое, глянец — на выбор).
+    static var panelStyle: PanelStyle {
+        get { PanelStyle(rawValue: UserDefaults.standard.integer(forKey: "panelStyle")) ?? .matte }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "panelStyle"); notifyDesign() }
+    }
+
+    /// Светящийся ореол цвета трека вокруг обложки/видео.
+    static var artworkGlow: Bool {
+        get { UserDefaults.standard.object(forKey: "artworkGlow") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "artworkGlow"); notifyDesign() }
+    }
+
+    /// Живой фон и на остальных своих экранах (главная, медиатека, ленты).
+    static var ambientEverywhere: Bool {
+        get { UserDefaults.standard.object(forKey: "ambientEverywhere") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "ambientEverywhere"); notifyDesign() }
+    }
+
+    private static func notifyDesign() {
+        NotificationCenter.default.post(name: designChanged, object: nil)
+    }
+}
