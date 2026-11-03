@@ -2,52 +2,30 @@
 
 **English** · [Русский](#русский)
 
-I'm not a programmer, just a regular user who wanted a music player of my own. So I built one with AI ([Claude](https://claude.ai/code)),
-for myself. Now it's open source: take it, change it, make your own version.
+I'm not a programmer, just a regular user who wanted my own music player for YouTube. So I made one with AI ([Claude](https://claude.ai/code)). It's open source now — take it, change it, make your own.
 
-An unofficial player for YouTube on iPhone and iPad:
+What it does on iPhone and iPad: plays music in the background, has a music mode and a video mode, a live animated background and a player customizer. English and Russian.
 
-- music keeps playing in the background and on the lock screen;
-- **music mode**: native player with cover art, queue, offline tracks, recommendations;
-- **video mode**: your YouTube feed and subscriptions, mini-player, previews in the feed;
-- live **animated background** (Soft / Neon / Black) and a player customizer;
-- English and Russian interface.
+I didn't remove YouTube ads — there are none in my country :)
 
-I didn't remove YouTube ads — there are none in my country, so I never needed to :)
+**Install:** add `https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json` to [SideStore](https://sidestore.io), or grab `Fon.ipa` from [Releases](../../releases).
 
-**Install:** get [SideStore](https://sidestore.io), add the source
-`https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json`, install Fon. Or download `Fon.ipa` from [Releases](../../releases).
+**Your own version:** fork, enable Actions, change the name and bundle id in `project.yml` and `.github/workflows/build.yml`, push to `main`. You get your own SideStore source. No Mac needed.
 
-**Make your own version:** fork the repo, enable Actions, change the name and bundle id in `project.yml` and
-`.github/workflows/build.yml`, push to `main`. Your fork builds `Fon.ipa` and publishes its own SideStore source.
-No Mac needed. The repo has to be public.
-
-Not affiliated with Google or YouTube. Use at your own risk. MIT license. Questions and ideas: Issues / Discussions.
-How to help: [CONTRIBUTING.md](CONTRIBUTING.md). The code map is in [CLAUDE.md](CLAUDE.md).
+Unofficial, not affiliated with Google or YouTube, use at your own risk. MIT. Ideas and questions — Issues. Want to help — [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
 ## Русский
 
-Я не программист, а обычный пользователь, которому захотелось своё приложение для музыки. Сделал его с помощью ИИ
-([Claude](https://claude.ai/code)) для себя. Теперь код открыт: берите, меняйте, делайте свои версии.
+Я не программист, а обычный пользователь, которому захотелось свой музыкальный плеер для YouTube. Сделал его с ИИ ([Claude](https://claude.ai/code)). Теперь код открыт: берите, меняйте, делайте свои версии.
 
-Неофициальный плеер для YouTube на iPhone и iPad:
+Что умеет на iPhone и iPad: играет музыку в фоне, есть режим музыки и режим видео, живой анимированный фон и настройщик плеера. Русский и английский.
 
-- музыка играет в фоне и на экране блокировки;
-- **режим музыки**: свой плеер с обложкой, очередь, треки без интернета, рекомендации;
-- **режим видео**: лента и подписки YouTube, мини-плеер, предпоказ видео в ленте;
-- живой **анимированный фон** (Мягкий / Неон / Чёрный) и настройщик плеера;
-- интерфейс на русском и английском.
+Рекламу YouTube я не убирал — в моей стране её нет :)
 
-Рекламу YouTube я не убирал — в моей стране её просто нет :)
+**Установка:** добавьте `https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json` в [SideStore](https://sidestore.io) или скачайте `Fon.ipa` из [Releases](../../releases).
 
-**Установка:** поставьте [SideStore](https://sidestore.io), добавьте источник
-`https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json` и установите Fon. Либо скачайте `Fon.ipa` из [Releases](../../releases).
+**Своя версия:** сделайте Fork, включите Actions, поменяйте название и bundle id в `project.yml` и `.github/workflows/build.yml`, сделайте push в `main`. Получите свой источник для SideStore. Mac не нужен.
 
-**Своя версия:** сделайте Fork, включите Actions, поменяйте название и bundle id в `project.yml` и
-`.github/workflows/build.yml`, сделайте push в `main`. Форк сам соберёт `Fon.ipa` и выложит свой источник для SideStore.
-Mac не нужен. Репозиторий должен быть публичным.
-
-Не связано с Google и YouTube. Используйте на свой риск. Лицензия MIT. Вопросы и идеи: Issues / Discussions.
-Как помочь: [CONTRIBUTING.md](CONTRIBUTING.md). Карта кода: [CLAUDE.md](CLAUDE.md).
+Неофициальный, не связан с Google и YouTube, на свой риск. MIT. Идеи и вопросы — в Issues. Хотите помочь — [CONTRIBUTING.md](CONTRIBUTING.md).
