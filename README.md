@@ -1,93 +1,77 @@
-# Fon — YouTube с фоновым звуком для iPhone
+# Fon
 
-Нативное приложение-обёртка над m.youtube.com:
+**Русский** · [English](#english)
 
-- музыка продолжает играть, когда приложение свёрнуто или экран заблокирован;
-- режим музыки (кнопка ♪ в плеере): обложка вместо видео и самое низкое качество — меньше трафика и батареи;
-- в фоне качество видео само падает до минимума;
-- мини-плеер как в приложении YouTube: смотришь ленту и ищешь, а видео продолжает играть;
-- название, обложка и кнопки (пауза, следующий, предыдущий) на экране блокировки и в наушниках;
-- вход в Google-аккаунт сохраняется — твои плейлисты и подписки на месте;
-- после звонка музыка продолжается сама.
+Неофициальный открытый музыкальный плеер для YouTube на iPhone и iPad. Музыка играет в фоне и на экране блокировки,
+есть режим музыки с обложкой вместо видео, своя медиатека, рекомендации, музыка без интернета и настраиваемый
+«живой» фон плеера. Собирается бесплатно в облаке GitHub — Mac не нужен.
 
-Mac не нужен: приложение собирается бесплатно в облаке GitHub, а ставится на айфон с компьютера на Windows.
+> Проект **не связан с Google и YouTube** и не одобрен ими. YouTube и YouTube Music — товарные знаки Google LLC.
+> Приложение — личный проект с открытым кодом, используйте его на свой риск и в рамках правил сервисов, которыми пользуетесь.
 
----
+## Возможности
 
-## Что понадобится
+- Музыка играет при свёрнутом приложении и заблокированном экране, управление с экрана блокировки и наушников.
+- Режим музыки: обложка вместо видео, нативный плеер в стиле Apple Music, «Далее», другие версии трека (slowed / lyrics / sped up).
+- Системный плеер (AVPlayer): стабильно в фоне, своя громкость, мгновенная смена треков.
+- Медиатека: «Понравившиеся» в вашем аккаунте YouTube, история, скачанные треки для прослушивания без интернета.
+- «Открытия»: новое, ниша и тренды в вашем вкусе.
+- Режим видео: свои ленты «Главная» и «Подписки», предпоказ видео в ленте, мини-плеер как в приложении YouTube.
+- **Оформление плеера:** фон Мягкий / Неон / Чёрный, подложка матовая / глянец / без, ореол обложки.
+- iPad: боковая панель и жесты по обложке.
 
-- аккаунт на github.com (бесплатный);
-- компьютер на Windows и кабель для айфона — только для установки и обновления подписи;
-- Apple ID (обычный, бесплатный).
+## Установка (SideStore)
 
----
+1. Поставьте [SideStore](https://sidestore.io) по их инструкции (нужен бесплатный Apple ID).
+2. В SideStore: **Sources → «+»** и вставьте:
+   ```
+   https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json
+   ```
+3. Установите Fon, обновления приходят кнопкой **Update**. Подпись бесплатного Apple ID живёт 7 дней — SideStore продлевает её сам.
 
-## Шаг 1. Собрать приложение на GitHub
+Либо скачайте `Fon.ipa` из [Releases](../../releases) и поставьте любым способом (AltStore, Sideloadly и т. п.).
 
-1. Распакуй архив `Fon.zip` на компьютере.
-2. На github.com нажми **New repository**, назови, например, `fon`, можно сделать приватным, нажми **Create repository**.
-3. На странице репозитория нажми **uploading an existing file** (или **Add file → Upload files**).
-4. Перетащи в окно **всё содержимое** папки `Fon` — включая папку `.github`. Нажми **Commit changes**.
-   - Если папка `.github` не загрузилась: **Add file → Create new file**, в имени напиши `.github/workflows/build.yml`, вставь содержимое этого файла из архива и сохрани.
-5. Открой вкладку **Actions**. Сборка запустится сама и займёт около 5 минут.
-6. Когда появится зелёная галочка, открой сборку и внизу в разделе **Artifacts** скачай **Fon-ipa**. Внутри zip лежит `Fon.ipa`.
+## Сделать свою версию (форк)
 
-Если сборка красная — открой её, скопируй текст ошибки и пришли мне, я поправлю код.
+Лицензия MIT: берите код, меняйте, выпускайте свою версию — это приветствуется.
 
-## Шаг 2. Установить на iPhone (Windows)
+1. Нажмите **Fork** на GitHub.
+2. В своём форке откройте **Actions** и разрешите запуск workflow.
+3. Любой push в `main` собирает `Fon.ipa` и публикует **Release** с `apps.json` — у вашего форка получится **свой источник SideStore**:
+   `https://github.com/<вы>/<репозиторий>/releases/latest/download/apps.json`
+4. Поменяйте название и bundle id (чтобы ваша версия не конфликтовала с оригиналом):
+   `PRODUCT_BUNDLE_IDENTIFIER` и `bundleIdPrefix` в `project.yml`, поля в `.github/workflows/build.yml` (`apps.json`), иконку в `Fon/Assets.xcassets`.
+5. Репозиторий должен быть публичным, чтобы SideStore мог скачать `apps.json` и `.ipa`.
 
-1. Установи **iTunes** и **iCloud** с сайта Apple (именно с apple.com, не из Microsoft Store).
-2. Установи **Sideloadly** с sideloadly.io.
-3. Подключи айфон кабелем, на телефоне нажми «Доверять этому компьютеру».
-4. Перетащи `Fon.ipa` в Sideloadly, введи свой Apple ID, нажми **Start**.
-5. На айфоне:
-   - **Настройки → Конфиденциальность и безопасность → Режим разработчика** → включить, телефон перезагрузится;
-   - **Настройки → Основные → VPN и управление устройством** → выбери свой Apple ID → **Доверять**.
-
-Готово — на домашнем экране появится **Fon**.
-
-## Раз в 7 дней
-
-С бесплатным Apple ID подпись живёт 7 дней, потом приложение перестаёт открываться. Просто снова установи `Fon.ipa` через Sideloadly — вход в аккаунт и данные сохранятся. В Sideloadly можно включить автообновление подписи, когда телефон и компьютер в одной Wi‑Fi сети.
-
-С платным аккаунтом разработчика Apple ($99 в год) подпись живёт год.
-
----
-
-## Как пользоваться
-
-- При первом запуске войди в Google-аккаунт через меню YouTube (аватарка справа сверху).
-- Включи трек или плейлист и сворачивай / блокируй экран — звук продолжит играть.
-- Управление — на экране блокировки, в Пункте управления и на AirPods.
-- Свайп от левого края — назад.
-- Если после сворачивания всё же встало на паузу — нажми ▶︎ на экране блокировки. И напиши мне, поправим.
-
----
+Mac и Xcode локально не нужны: проект описан в `project.yml`, а проект Xcode генерирует XcodeGen в облаке.
 
 ## Как это устроено
 
-| Файл | Что делает |
-| --- | --- |
-| `Fon/AppDelegate.swift` | Включает фоновый аудио-режим (`AVAudioSession .playback`) |
-| `Fon/MainViewController.swift` | Главный экран: лента, вкладки, мини-плеер поверх |
-| `Fon/PlayerView.swift` | Отдельное окно плеера: мини-полоска и развёрнутый вид |
-| `Fon/SearchViewController.swift` | Поиск с подсказками и историей |
-| `Fon/Scripts.swift` | Скрипты внутри страниц: страница всегда «видна», автопродолжение после сворачивания, кнопки экрана блокировки, мини-режим |
-| `Fon/WebViewFactory.swift` | Общие настройки браузерных окон |
-| `project.yml` | Описание проекта для XcodeGen (из него в облаке создаётся проект Xcode) |
-| `.github/workflows/build.yml` | Облачная сборка `.ipa` на Mac от GitHub |
+Swift, UIKit, WKWebView для страниц YouTube, AVPlayer для системного плеера, XcodeGen + GitHub Actions для сборки.
+Подробная карта кода и накопленные решения — в [`CLAUDE.md`](CLAUDE.md) (написан как контекст для ИИ-ассистента, но читается и людьми).
+Как участвовать — в [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-Фоновый режим объявлен в `project.yml` → `UIBackgroundModes: [audio]`.
+## Лицензия
+
+[MIT](LICENSE). Решатель подписей в `Fon/Solver/` — из проекта [yt-dlp/ejs](https://github.com/yt-dlp/ejs) (Unlicense / ISC / MIT).
 
 ---
 
-## Обновления через SideStore
+## English
 
-Каждая сборка в `main` выкладывается в **Releases** вместе с файлом-источником для SideStore.
-Один раз добавь источник в SideStore: **Sources → «+»** →
+An unofficial open-source music player for YouTube on iPhone and iPad: background and lock-screen playback, music mode,
+your library, recommendations, offline tracks and a customizable live player background. It builds for free on GitHub's
+cloud — no Mac needed.
 
-```
-https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json
-```
+> Not affiliated with or endorsed by Google or YouTube. YouTube and YouTube Music are trademarks of Google LLC.
+> Personal open-source project — use at your own risk and respect the terms of the services you use.
 
-После этого новые версии Fon появляются в **My Apps** с кнопкой **Update**. Работает, только если репозиторий публичный.
+**Install:** install [SideStore](https://sidestore.io), then add the source
+`https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json` (Sources → «+»), or grab `Fon.ipa` from
+[Releases](../../releases).
+
+**Make your own version:** the project is MIT-licensed. Fork the repo, enable Actions, change the name and bundle id
+in `project.yml` and `.github/workflows/build.yml`, push to `main` — your fork publishes its own SideStore source at
+`https://github.com/<you>/<repo>/releases/latest/download/apps.json` (the repo must be public).
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to contribute.
