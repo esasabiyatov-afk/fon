@@ -157,8 +157,8 @@ final class CloudLikes {
 
     static func describe(_ error: Error) -> String {
         if isSignedOut(error) {
-            return "Войдите в аккаунт Google: режим «Видео» → вкладка «Вы». Понравившиеся хранятся в вашем плейлисте YouTube."
+            return tr("Войдите в аккаунт Google: режим «Видео» → вкладка «Вы». Понравившиеся хранятся в вашем плейлисте YouTube.")
         }
-        return "Не удалось связаться с YouTube. Проверьте интернет и попробуйте ещё раз."
+        return tr("Не удалось связаться с YouTube. Проверьте интернет и попробуйте ещё раз.")
     }
 }

@@ -180,7 +180,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
             return
         }
         loading = true
-        if videos.isEmpty { message = "Загрузка…" }
+        if videos.isEmpty { message = tr("Загрузка…") }
         let browseID = browseID
         let token: Any = reset ? NSNull() : (nextToken.map { $0 as Any } ?? NSNull())
         HiddenPage.youtube.call("__fonCloud.videoFeed(browseId, token)", { ["browseId": browseID, "token": token] }) { [weak self] result in
@@ -198,13 +198,13 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
                     self.videos += page.filter { !known.contains($0.id) }
                 }
                 self.nextToken = dict["next"] as? String
-                self.message = self.videos.isEmpty ? "Здесь пока пусто.\nПотяните вниз, чтобы обновить." : nil
+                self.message = self.videos.isEmpty ? tr("Здесь пока пусто.\nПотяните вниз, чтобы обновить.") : nil
             case .failure(let error):
                 let text = ((error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String) ?? error.localizedDescription
                 if self.videos.isEmpty {
                     self.message = text.contains("signed-out")
-                        ? "Войдите в аккаунт Google: «Вы» → «Войти»."
-                        : "Лента не загрузилась.\nПотяните вниз, чтобы повторить."
+                        ? tr("Войдите в аккаунт Google: «Вы» → «Войти».")
+                        : tr("Лента не загрузилась.\nПотяните вниз, чтобы повторить.")
                 }
             }
             // Следующая страница — только новые карточки, уже показанные не перерисовываются (прокрутка не дёргается).
@@ -260,7 +260,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         if videos.isEmpty {
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "status", for: indexPath) as! StatusCell
-            cell.label.text = message ?? "Загрузка…"
+            cell.label.text = message ?? tr("Загрузка…")
             return cell
         }
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "video", for: indexPath) as! VideoCell

@@ -17,15 +17,16 @@ enum Signature {
     static var untilText: String? {
         guard let expiration else { return nil }
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.locale = Locale(identifier: AppLanguage.current == .en ? "en_US" : "ru_RU")
         formatter.dateFormat = "d MMMM, HH:mm"
-        return "Подпись Fon действует до \(formatter.string(from: expiration))"
+        return (AppLanguage.current == .en ? "Fon signature is valid until " : "Подпись Fon действует до ") + formatter.string(from: expiration)
     }
 
     /// «1 д 5 ч» / «7 ч».
     static func leftText(_ seconds: TimeInterval) -> String {
         let hours = max(0, Int(seconds / 3600))
-        return hours >= 24 ? "\(hours / 24) д \(hours % 24) ч" : "\(max(1, hours)) ч"
+        let d = AppLanguage.current == .en ? "d" : "д", h = AppLanguage.current == .en ? "h" : "ч"
+        return hours >= 24 ? "\(hours / 24) \(d) \(hours % 24) \(h)" : "\(max(1, hours)) \(h)"
     }
 
     private static let warnedKey = "signatureWarnedAt"
@@ -40,16 +41,18 @@ enum Signature {
         defaults.set(Date(), forKey: warnedKey)
 
         let alert = UIAlertController(
-            title: "Подпись скоро закончится",
-            message: "Через \(leftText(left)) Fon перестанет открываться. Включите LocalDevVPN, откройте SideStore и нажмите Refresh All — плейлисты и вход сохранятся.",
+            title: tr("Подпись скоро закончится"),
+            message: AppLanguage.current == .en
+                ? "In \(leftText(left)) Fon will stop opening. Turn on LocalDevVPN, open SideStore and tap Refresh All — your playlists and sign-in are kept."
+                : "Через \(leftText(left)) Fon перестанет открываться. Включите LocalDevVPN, откройте SideStore и нажмите Refresh All — плейлисты и вход сохранятся.",
             preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Позже", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Открыть SideStore", style: .default) { [weak presenter] _ in
+        alert.addAction(UIAlertAction(title: tr("Позже"), style: .cancel))
+        alert.addAction(UIAlertAction(title: tr("Открыть SideStore"), style: .default) { [weak presenter] _ in
             guard let url = URL(string: "sidestore://") else { return }
             UIApplication.shared.open(url) { opened in
                 guard !opened, let presenter else { return }
-                let missing = UIAlertController(title: "SideStore не найден",
-                                                message: "Продлите Fon через iloader на компьютере.",
+                let missing = UIAlertController(title: tr("SideStore не найден"),
+                                                message: tr("Продлите Fon через iloader на компьютере."),
                                                 preferredStyle: .alert)
                 missing.addAction(UIAlertAction(title: "OK", style: .default))
                 presenter.present(missing, animated: true)

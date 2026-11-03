@@ -43,9 +43,9 @@ enum BackdropStyle: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .soft: return "Мягкий"
-        case .neon: return "Неон"
-        case .black: return "Чёрный"
+        case .soft: return tr("Мягкий")
+        case .neon: return tr("Неон")
+        case .black: return tr("Чёрный")
         }
     }
 }
@@ -55,9 +55,9 @@ enum PanelStyle: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .matte: return "Матовое"
-        case .gloss: return "Глянец"
-        case .off: return "Без"
+        case .matte: return tr("Матовое")
+        case .gloss: return tr("Глянец")
+        case .off: return tr("Без")
         }
     }
 }

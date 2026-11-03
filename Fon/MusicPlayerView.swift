@@ -111,23 +111,23 @@ final class MusicPlayerView: UIView {
         // название слева и ♡, ползунок, крупные ⏮ ▶ ⏭ без подложки, громкость, внизу — повтор, режим видео, AirPlay, очередь.
         setup(collapseButton, "chevron.compact.down", 26, #selector(collapseTapped))
         collapseButton.tintColor = UIColor(white: 1, alpha: 0.6)
-        collapseButton.accessibilityLabel = "Свернуть"
+        collapseButton.accessibilityLabel = tr("Свернуть")
         setup(designButton, "paintpalette", 16, #selector(designTapped))
         designButton.tintColor = UIColor(white: 1, alpha: 0.6)
-        designButton.accessibilityLabel = "Оформление"
+        designButton.accessibilityLabel = tr("Оформление")
         setup(queueButton, "list.bullet", 18, #selector(queueTapped))
         setup(videoButton, "play.rectangle", 18, #selector(videoTapped))
-        queueButton.accessibilityLabel = "Очередь и похожие"
-        videoButton.accessibilityLabel = "Режим видео"
+        queueButton.accessibilityLabel = tr("Очередь и похожие")
+        videoButton.accessibilityLabel = tr("Режим видео")
         setup(downloadButton, "arrow.down.circle", 18, #selector(downloadTapped))
         downloadButton.menu = UIMenu(children: [
-            UIAction(title: "Скачать трек", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in self?.downloadTapped() },
-            UIAction(title: "Скачать микс по этому треку", image: UIImage(systemName: "square.stack")) { [weak self] _ in self?.downloadMix() }
+            UIAction(title: tr("Скачать трек"), image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in self?.downloadTapped() },
+            UIAction(title: tr("Скачать микс по этому треку"), image: UIImage(systemName: "square.stack")) { [weak self] _ in self?.downloadMix() }
         ])
         downloadButton.showsMenuAsPrimaryAction = false // нажатие — трек, долгое нажатие — меню
         NotificationCenter.default.addObserver(self, selector: #selector(updateDownload), name: OfflineStore.didChange, object: nil)
 
-        headerLabel.text = "ИГРАЕТ ИЗ"
+        headerLabel.text = tr("ИГРАЕТ ИЗ")
         headerLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         headerLabel.textColor = UIColor(white: 1, alpha: 0.7)
         headerLabel.textAlignment = .center
@@ -215,7 +215,7 @@ final class MusicPlayerView: UIView {
         setup(playButton, "play.fill", 44, #selector(playTapped))
         setup(nextButton, "forward.fill", 32, #selector(nextTapped))
         setup(loopButton, "repeat.1", 20, #selector(loopTapped))
-        loopButton.accessibilityLabel = "Повтор трека"
+        loopButton.accessibilityLabel = tr("Повтор трека")
         // Громкость YouTube — отдельно от кнопок громкости телефона.
         let small: CGFloat = 9
         let knob = UIGraphicsImageRenderer(size: CGSize(width: small, height: small)).image { ctx in
@@ -226,7 +226,7 @@ final class MusicPlayerView: UIView {
         volumeSlider.minimumTrackTintColor = UIColor(white: 1, alpha: 0.8)
         volumeSlider.maximumTrackTintColor = UIColor(white: 1, alpha: 0.2)
         volumeSlider.value = Float(Settings.youtubeVolume)
-        volumeSlider.accessibilityLabel = "Громкость YouTube"
+        volumeSlider.accessibilityLabel = tr("Громкость YouTube")
         volumeSlider.addTarget(self, action: #selector(volumeChanged), for: .valueChanged)
         for icon in [volumeLow, volumeHigh] {
             icon.tintColor = UIColor(white: 1, alpha: 0.6)
@@ -271,7 +271,7 @@ final class MusicPlayerView: UIView {
     /// Новое видео начало грузиться: сбрасываем экран.
     func reset(id: String?) {
         track = nil
-        titleLabel.text = "Загрузка…"
+        titleLabel.text = tr("Загрузка…")
         artistLabel.text = nil
         time = 0
         duration = 0
@@ -503,20 +503,20 @@ final class MusicPlayerView: UIView {
         guard let track else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch OfflineStore.shared.state(for: track.id) {
-        case .downloaded: toast("Уже скачан — есть в «Скачанных»")
-        case .waiting: toast("Уже качается")
+        case .downloaded: toast(tr("Уже скачан — есть в «Скачанных»"))
+        case .waiting: toast(tr("Уже качается"))
         case .missing:
             OfflineStore.shared.download([track])
-            toast("Скачиваю — появится в «Скачанных»")
+            toast(tr("Скачиваю — появится в «Скачанных»"))
         }
     }
 
     private func downloadMix() {
         guard let track else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        toast("Скачиваю микс…")
+        toast(tr("Скачиваю микс…"))
         OfflineStore.shared.downloadMix(seed: track.id) { [weak self] count in
-            self?.toast(count > 0 ? "Микс: \(count) треков — появятся в «Скачанных»" : "Микс не загрузился")
+            self?.toast(count > 0 ? (AppLanguage.current == .en ? "Mix: \(count) tracks — will appear in Downloaded" : "Микс: \(count) треков — появятся в «Скачанных»") : tr("Микс не загрузился"))
         }
     }
 
@@ -535,7 +535,7 @@ final class MusicPlayerView: UIView {
         }
         setSymbol(downloadButton, symbol, 18)
         downloadButton.tintColor = state == .downloaded ? PlayerView.accent : .white
-        downloadButton.accessibilityLabel = state == .downloaded ? "Скачан" : "Скачать"
+        downloadButton.accessibilityLabel = state == .downloaded ? tr("Скачан") : tr("Скачать")
     }
     @objc private func queueTapped() { onShowUpNext?() } // «Далее» — и у обычного плеера YouTube (там же «Страница»)
 

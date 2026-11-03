@@ -12,7 +12,7 @@ enum TrackVersions {
             case .slowed: return "Slowed"
             case .lyrics: return "Lyrics"
             case .spedUp: return "Sped up"
-            case .original: return "Оригинал"
+            case .original: return tr("Оригинал")
             }
         }
     }
@@ -142,12 +142,12 @@ final class UpNextViewController: UITableViewController, UITableViewDragDelegate
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Далее"
+        title = tr("Далее")
         navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "plus"), style: .plain,
                                                             target: self, action: #selector(addTapped))
-        navigationItem.rightBarButtonItem?.accessibilityLabel = "Добавить в очередь"
+        navigationItem.rightBarButtonItem?.accessibilityLabel = tr("Добавить в очередь")
         if onShowPage != nil {
-            navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Страница", style: .plain, target: self, action: #selector(pageTapped))
+            navigationItem.leftBarButtonItem = UIBarButtonItem(title: tr("Страница"), style: .plain, target: self, action: #selector(pageTapped))
         }
         tableView.register(VersionsCell.self, forCellReuseIdentifier: "versions")
         tableView.register(QueueTrackCell.self, forCellReuseIdentifier: "track")
@@ -186,7 +186,7 @@ final class UpNextViewController: UITableViewController, UITableViewDragDelegate
     }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        section == 0 ? "Другие версии" : (tracks.isEmpty ? "Очередь пуста — дальше похожие" : "В очереди")
+        section == 0 ? tr("Другие версии") : (tracks.isEmpty ? tr("Очередь пуста — дальше похожие") : tr("В очереди"))
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -213,7 +213,7 @@ final class UpNextViewController: UITableViewController, UITableViewDragDelegate
 
     override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard indexPath.section == 1, UpNext.source.canRemoveUpcoming(at: indexPath.row) else { return nil }
-        let remove = UIContextualAction(style: .destructive, title: "Убрать") { _, _, done in
+        let remove = UIContextualAction(style: .destructive, title: tr("Убрать")) { _, _, done in
             UpNext.source.removeUpcoming(at: indexPath.row)
             done(true)
         }
@@ -280,8 +280,8 @@ final class AddToQueueViewController: UITableViewController, UISearchBarDelegate
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Добавить"
-        searchBar.placeholder = "Поиск на YouTube"
+        title = tr("Добавить")
+        searchBar.placeholder = tr("Поиск на YouTube")
         searchBar.delegate = self
         searchBar.sizeToFit()
         tableView.tableHeaderView = searchBar
@@ -311,14 +311,14 @@ final class AddToQueueViewController: UITableViewController, UISearchBarDelegate
     private func search(_ text: String) {
         let query = text.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return }
-        status = "Поиск…"
+        status = tr("Поиск…")
         tableView.reloadData()
         Task { [weak self] in
             let found = await YouTubeStreams.search(query)
             await MainActor.run {
                 guard let self, self.searchBar.text?.trimmingCharacters(in: .whitespaces) == query else { return }
                 self.results = found.map(\.track)
-                self.status = found.isEmpty ? "Ничего не нашлось" : nil
+                self.status = found.isEmpty ? tr("Ничего не нашлось") : nil
                 self.tableView.reloadData()
             }
         }
@@ -359,7 +359,7 @@ private final class QueueTrackCell: UITableViewCell {
 
     func configure(_ track: Track) {
         var content = defaultContentConfiguration()
-        content.text = track.title.isEmpty ? "Трек" : track.title
+        content.text = track.title.isEmpty ? tr("Трек") : track.title
         content.secondaryText = track.artist
         content.secondaryTextProperties.color = .secondaryLabel
         content.textProperties.numberOfLines = 1

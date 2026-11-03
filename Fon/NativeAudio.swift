@@ -1015,7 +1015,7 @@ final class NativeAudio: NSObject {
         guard active, let track = currentTrack else { return }
         let duration = player.currentItem?.duration.seconds ?? 0
         let waiting = !playedOnceCurrent
-        let state = State(id: track.id, title: track.title.isEmpty && (loading || waiting) ? "Загрузка…" : track.title,
+        let state = State(id: track.id, title: track.title.isEmpty && (loading || waiting) ? tr("Загрузка…") : track.title,
                           artist: track.artist, paused: player.timeControlStatus == .paused,
                           time: displayTime,
                           duration: duration.isFinite ? duration : 0, loop: loop)
@@ -1086,7 +1086,7 @@ final class NativeAudio: NSObject {
             return .success
         }
         // ♡ на экране блокировки / в пункте управления (просьба владельца после 1.69; проба — покажет ли iOS).
-        center.likeCommand.localizedTitle = "Понравившиеся"
+        center.likeCommand.localizedTitle = tr("Понравившиеся")
         center.likeCommand.localizedShortTitle = "♡"
         on(center.likeCommand) { [weak self] _ in
             guard let track = self?.currentTrack, !track.title.isEmpty else { return .commandFailed }

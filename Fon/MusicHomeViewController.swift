@@ -34,22 +34,22 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             var actions: [UIAction] = []
             if let track = downloadTrack {
                 let done = OfflineStore.shared.state(for: track.id) != .missing
-                actions.append(UIAction(title: done ? "Трек уже скачан" : "Скачать трек", image: UIImage(systemName: "arrow.down.circle"),
+                actions.append(UIAction(title: done ? tr("Трек уже скачан") : tr("Скачать трек"), image: UIImage(systemName: "arrow.down.circle"),
                                         attributes: done ? .disabled : []) { _ in
                     OfflineStore.shared.download([track])
-                    MusicHomeViewController.toast("Скачиваю — появится в «Скачанных»")
+                    MusicHomeViewController.toast(tr("Скачиваю — появится в «Скачанных»"))
                 })
             }
             if let seed = downloadMixSeed {
-                actions.append(UIAction(title: "Скачать микс", image: UIImage(systemName: "square.stack")) { _ in
-                    MusicHomeViewController.toast("Скачиваю микс…")
+                actions.append(UIAction(title: tr("Скачать микс"), image: UIImage(systemName: "square.stack")) { _ in
+                    MusicHomeViewController.toast(tr("Скачиваю микс…"))
                     OfflineStore.shared.downloadMix(seed: seed) { count in
-                        MusicHomeViewController.toast(count > 0 ? "Микс: \(count) треков — появятся в «Скачанных»" : "Микс не загрузился")
+                        MusicHomeViewController.toast(count > 0 ? (AppLanguage.current == .en ? "Mix: \(count) tracks — will appear in Downloaded" : "Микс: \(count) треков — появятся в «Скачанных»") : tr("Микс не загрузился"))
                     }
                 })
             }
             if let unsubscribe {
-                actions.append(UIAction(title: "Отписаться", image: UIImage(systemName: "person.badge.minus"),
+                actions.append(UIAction(title: tr("Отписаться"), image: UIImage(systemName: "person.badge.minus"),
                                         attributes: .destructive) { _ in unsubscribe() })
             }
             return actions
@@ -190,17 +190,17 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         let shelves = MusicFeed.shared.shelves
         var result: [Section] = []
 
-        var quick: [Item] = [Item(title: "Понравившиеся", symbol: "heart.fill") { [weak self] in self?.onOpenLikes?() }]
+        var quick: [Item] = [Item(title: tr("Понравившиеся"), symbol: "heart.fill") { [weak self] in self?.onOpenLikes?() }]
         if let seed = history.first ?? likes.first {
-            quick.append(Item(title: "Мой микс", artworkID: seed.id) { [weak self] in
-                if let url = YouTubeLinks.myMix(seed: seed.id) { self?.onPlay?(url, "Мой микс", nil) }
+            quick.append(Item(title: tr("Мой микс"), artworkID: seed.id) { [weak self] in
+                if let url = YouTubeLinks.myMix(seed: seed.id) { self?.onPlay?(url, tr("Мой микс"), nil) }
             })
         }
         let quickCount = view.bounds.width > 600 ? 6 : 4 // сетка карточек: 2 ряда
         for track in history.prefix(quickCount - quick.count) {
             quick.append(mixItem(track))
         }
-        result.append(Section(title: "Главная", style: .quick, items: quick)) // крупный заголовок, как в Apple Music
+        result.append(Section(title: tr("Главная"), style: .quick, items: quick)) // крупный заголовок, как в Apple Music
         result += discoverSections()
 
         if shelves.isEmpty {
@@ -211,10 +211,10 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 case .songs:
                     result.append(Section(title: shelf.title, style: .rows, items: shelf.items.map { musicItem($0, source: shelf.title) }))
                 case .artists:
-                    result.append(Section(title: shelf.title, style: .round, items: shelf.items.map { musicItem($0, source: "Радио: \($0.title)") }))
+                    result.append(Section(title: shelf.title, style: .round, items: shelf.items.map { musicItem($0, source: "\(tr("Радио")): \($0.title)") }))
                 case .cards:
                     result.append(Section(title: shelf.title, style: .large, items: shelf.items.map {
-                        musicItem($0, source: $0.artist ? "Радио: \($0.title)" : $0.title)
+                        musicItem($0, source: $0.artist ? "\(tr("Радио")): \($0.title)" : $0.title)
                     }))
                 }
             }
@@ -231,12 +231,12 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         var result: [Section] = []
         if let first = shelves.daily.first {
             let ids = shelves.daily.map(\.id)
-            let item = Item(title: "Открытия дня", subtitle: "\(ids.count) треков · новое, ниша и тренды", artworkID: first.id) { [weak self] in
-                if let url = YouTubeLinks.queue(ids) { self?.onPlay?(url, "Открытия дня", ids) }
+            let item = Item(title: tr("Открытия дня"), subtitle: AppLanguage.current == .en ? "\(ids.count) tracks · new, niche and trending" : "\(ids.count) треков · новое, ниша и тренды", artworkID: first.id) { [weak self] in
+                if let url = YouTubeLinks.queue(ids) { self?.onPlay?(url, tr("Открытия дня"), ids) }
             }
-            result.append(Section(title: "Открытия дня", style: .large, items: [item]))
+            result.append(Section(title: tr("Открытия дня"), style: .large, items: [item]))
         }
-        for (title, tracks) in [("Новое в вашем вкусе", shelves.fresh), ("Ниша", shelves.niche), ("В тренде", shelves.trending)]
+        for (title, tracks) in [(tr("Новое в вашем вкусе"), shelves.fresh), (tr("Ниша"), shelves.niche), (tr("В тренде"), shelves.trending)]
         where !tracks.isEmpty {
             let ids = tracks.map(\.id)
             result.append(Section(title: title, style: .small, items: tracks.enumerated().map { index, track in
@@ -266,29 +266,29 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             seeds.append(track)
         }
         if !seeds.isEmpty {
-            result.append(Section(title: "Миксы для вас", style: .large, items: seeds.map { seed in
-                var item = Item(title: "Микс: \(seed.artist)", subtitle: "\(seed.title) и похожие", artworkID: seed.id) { [weak self] in
-                    if let url = YouTubeLinks.mix(seed.id) { self?.onPlay?(url, "Микс: \(seed.artist)", nil) }
+            result.append(Section(title: tr("Миксы для вас"), style: .large, items: seeds.map { seed in
+                var item = Item(title: "\(tr("Микс")): \(seed.artist)", subtitle: "\(seed.title)" + (AppLanguage.current == .en ? " and similar" : " и похожие"), artworkID: seed.id) { [weak self] in
+                    if let url = YouTubeLinks.mix(seed.id) { self?.onPlay?(url, "\(tr("Микс")): \(seed.artist)", nil) }
                 }
                 item.downloadMixSeed = seed.id
                 return item
             }))
         }
         if !history.isEmpty {
-            result.append(Section(title: "Недавно слушали", style: .small, items: history.prefix(20).map(mixItem)))
+            result.append(Section(title: tr("Недавно слушали"), style: .small, items: history.prefix(20).map(mixItem)))
         }
         if !likes.isEmpty {
             let ids = CloudLikes.shared.tracks.map(\.id)
-            result.append(Section(title: "Понравившиеся", style: .small, items: likes.prefix(20).map { track in
+            result.append(Section(title: tr("Понравившиеся"), style: .small, items: likes.prefix(20).map { track in
                 Item(title: track.title, subtitle: track.artist, artworkID: track.id) { [weak self] in
-                    if let url = CloudLikes.shared.playURL(startingAt: track.id) { self?.onPlay?(url, "Понравившиеся", ids) }
+                    if let url = CloudLikes.shared.playURL(startingAt: track.id) { self?.onPlay?(url, tr("Понравившиеся"), ids) }
                 }
             }))
         }
         if MusicFeed.shared.isLoadingHome {
-            result.append(Section(title: "", style: .message, items: [Item(title: "Загружаем подборки…")]))
+            result.append(Section(title: "", style: .message, items: [Item(title: tr("Загружаем подборки…"))]))
         } else if let error = MusicFeed.shared.homeError {
-            result.append(Section(title: "", style: .message, items: [Item(title: error + "\nПотяните вниз, чтобы повторить.")]))
+            result.append(Section(title: "", style: .message, items: [Item(title: error + "\n" + tr("Потяните вниз, чтобы повторить."))]))
         }
         return result
     }
@@ -301,26 +301,26 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         guard !mixes.isEmpty || !videos.isEmpty else {
             let text: String
             if feed.isLoadingFeed || feed.feedError == nil {
-                text = "Загружаем ленту YouTube…"
+                text = tr("Загружаем ленту YouTube…")
             } else {
-                text = (feed.feedError ?? "") + "\nПотяните вниз, чтобы повторить."
+                text = (feed.feedError ?? "") + "\n" + tr("Потяните вниз, чтобы повторить.")
             }
-            return [Section(title: onHome ? "" : "Лента YouTube", style: .message, items: [Item(title: text)])]
+            return [Section(title: onHome ? "" : tr("Лента YouTube"), style: .message, items: [Item(title: text)])]
         }
         var result: [Section] = []
         let tileCount = view.bounds.width > 600 ? 6 : 4
         if !videos.isEmpty {
-            result.append(Section(title: onHome ? "Лента YouTube" : "Для вас", style: .quick,
-                                  items: videos.prefix(tileCount).map { musicItem($0, source: "Лента YouTube") }))
+            result.append(Section(title: onHome ? tr("Лента YouTube") : tr("Для вас"), style: .quick,
+                                  items: videos.prefix(tileCount).map { musicItem($0, source: tr("Лента YouTube")) }))
         }
         if !mixes.isEmpty {
-            result.append(Section(title: onHome ? "Миксы YouTube" : "Миксы для вас", style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
+            result.append(Section(title: onHome ? tr("Миксы YouTube") : tr("Миксы для вас"), style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
         }
         let rest = Array(videos.dropFirst(tileCount))
         if onHome {
             // На «Главной» не один длинный список (владелец после 1.86: «скучно — свайпы, большие обложки, смешай»):
             // по очереди карусель больших карточек и короткий список.
-            let titles = ["Рекомендации YouTube", "Ещё для вас", "Вам может понравиться", "Послушайте ещё", "Ещё рекомендации"]
+            let titles = [tr("Рекомендации YouTube"), tr("Ещё для вас"), tr("Вам может понравиться"), tr("Послушайте ещё"), tr("Ещё рекомендации")]
             var start = 0, part = 0
             while start < rest.count {
                 let carousel = part % 2 == 0
@@ -328,12 +328,12 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 let chunk = rest[start..<min(rest.count, start + size)]
                 let title = titles[min(part, titles.count - 1)]
                 result.append(Section(title: title, style: carousel ? .large : .list,
-                                      items: chunk.map { musicItem($0, source: "Лента YouTube") }))
+                                      items: chunk.map { musicItem($0, source: tr("Лента YouTube")) }))
                 start += size
                 part += 1
             }
         } else if !rest.isEmpty {
-            result.append(Section(title: "Рекомендации", style: .list, items: rest.map { musicItem($0, source: "Лента YouTube") }))
+            result.append(Section(title: tr("Рекомендации"), style: .list, items: rest.map { musicItem($0, source: tr("Лента YouTube")) }))
         }
         return result
     }
@@ -346,38 +346,38 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         guard !artists.isEmpty else {
             let text: String
             if feed.isLoadingSubscriptions || (!feed.subscriptionsLoaded && feed.subscriptionsError == nil) {
-                text = "Загружаем ваших исполнителей…"
+                text = tr("Загружаем ваших исполнителей…")
             } else if feed.signedOut {
-                text = "Войдите в аккаунт Google (режим «Видео» → «Вы»), чтобы видеть исполнителей, на которых вы подписаны."
+                text = tr("Войдите в аккаунт Google (режим «Видео» → «Вы»), чтобы видеть исполнителей, на которых вы подписаны.")
             } else if let error = feed.subscriptionsError {
-                text = error + "\nПотяните вниз, чтобы повторить."
+                text = error + "\n" + tr("Потяните вниз, чтобы повторить.")
             } else {
-                text = "Здесь будут исполнители, на которых вы подписаны на YouTube, и их новые треки."
+                text = tr("Здесь будут исполнители, на которых вы подписаны на YouTube, и их новые треки.")
             }
-            return [Section(title: "Подписки", style: .message, items: [Item(title: text)])]
+            return [Section(title: tr("Подписки"), style: .message, items: [Item(title: text)])]
         }
 
-        var result = [Section(title: "Подписки", style: .round, items: artists.map { artist in
-            var item = musicItem(artist, source: "Радио: \(artist.title)")
+        var result = [Section(title: tr("Подписки"), style: .round, items: artists.map { artist in
+            var item = musicItem(artist, source: "\(tr("Радио")): \(artist.title)")
             if artist.browseId != nil { item.unsubscribe = { [weak self] in self?.confirmUnsubscribe(artist) } }
             return item
         })]
         let releases = feed.releases
         if releases.isEmpty {
             if feed.isLoadingSubscriptions {
-                result.append(message("Ищем новые треки…"))
+                result.append(message(tr("Ищем новые треки…")))
             } else if let error = feed.subscriptionsError {
                 result.append(message(error))
             } else {
-                result.append(message("Новых треков от ваших исполнителей в ленте подписок пока нет."))
+                result.append(message(tr("Новых треков от ваших исполнителей в ленте подписок пока нет.")))
             }
         } else {
             // Нажатый трек и следующие за ним — одной очередью.
             let ids = releases.compactMap(\.videoId)
-            result.append(Section(title: "Новое", style: .list, items: releases.enumerated().map { index, release in
+            result.append(Section(title: tr("Новое"), style: .list, items: releases.enumerated().map { index, release in
                 Item(title: release.title, subtitle: release.subtitle, artworkID: release.videoId) { [weak self] in
                     let queue = Array(ids[index...].prefix(50))
-                    if let url = YouTubeLinks.queue(queue) { self?.onPlay?(url, "Подписки", queue) }
+                    if let url = YouTubeLinks.queue(queue) { self?.onPlay?(url, tr("Подписки"), queue) }
                 }
             }))
         }
@@ -408,19 +408,19 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 if let url {
                     self.onPlay?(url, source, nil)
                 } else {
-                    self.view.showToast("Не удалось включить", at: CGPoint(x: self.view.bounds.midX, y: self.view.bounds.height - 60))
+                    self.view.showToast(tr("Не удалось включить"), at: CGPoint(x: self.view.bounds.midX, y: self.view.bounds.height - 60))
                 }
             }
         }
     }
 
     private func confirmUnsubscribe(_ artist: MusicItem) {
-        let alert = UIAlertController(title: "Отписаться от «\(artist.title)»?", message: nil, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Отписаться", style: .destructive) { [weak self] _ in
+        let alert = UIAlertController(title: AppLanguage.current == .en ? "Unsubscribe from “\(artist.title)”?" : "Отписаться от «\(artist.title)»?", message: nil, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: tr("Отмена"), style: .cancel))
+        alert.addAction(UIAlertAction(title: tr("Отписаться"), style: .destructive) { [weak self] _ in
             MusicFeed.shared.unsubscribe(artist) { ok in
                 guard let self else { return }
-                self.view.showToast(ok ? "Вы отписались" : "Не удалось отписаться",
+                self.view.showToast(ok ? tr("Вы отписались") : tr("Не удалось отписаться"),
                                     at: CGPoint(x: self.view.bounds.midX, y: self.view.bounds.height - 60))
             }
         })
@@ -430,7 +430,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     /// Трек и похожие на него (Mix YouTube).
     private func mixItem(_ track: Track) -> Item {
         var item = Item(title: track.title, subtitle: track.artist, artworkID: track.id) { [weak self] in
-            if let url = YouTubeLinks.mix(track.id) { self?.onPlay?(url, "Микс", nil) }
+            if let url = YouTubeLinks.mix(track.id) { self?.onPlay?(url, tr("Микс"), nil) }
         }
         item.downloadTrack = track
         item.downloadMixSeed = track.id
@@ -600,7 +600,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             addSubview(label)
             searchButton.setImage(UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21, weight: .semibold)), for: .normal)
             searchButton.tintColor = .white
-            searchButton.accessibilityLabel = "Поиск"
+            searchButton.accessibilityLabel = tr("Поиск")
             searchButton.addTarget(self, action: #selector(searchTapped), for: .touchUpInside)
             addSubview(searchButton)
         }

@@ -9,7 +9,7 @@ final class LibraryViewController: UITableViewController {
 
     init() {
         super.init(style: .insetGrouped)
-        title = "Медиатека"
+        title = tr("Медиатека")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -21,7 +21,7 @@ final class LibraryViewController: UITableViewController {
         refreshControl = UIRefreshControl()
         refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         let settings = UIBarButtonItem(image: UIImage(systemName: "gearshape"), style: .plain, target: self, action: #selector(openSettings))
-        settings.accessibilityLabel = "Настройки"
+        settings.accessibilityLabel = tr("Настройки")
         navigationItem.rightBarButtonItem = settings
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
@@ -43,7 +43,7 @@ final class LibraryViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         let cloud = CloudLikes.shared
-        let status = cloud.lastError ?? "Понравившиеся хранятся в вашем аккаунте YouTube — плейлист «Fon — музыка»."
+        let status = cloud.lastError ?? tr("Понравившиеся хранятся в вашем аккаунте YouTube — плейлист «Fon — музыка».")
         return [status, Signature.untilText].compactMap { $0 }.joined(separator: "\n\n")
     }
 
@@ -56,15 +56,15 @@ final class LibraryViewController: UITableViewController {
         cell.backgroundColor = UIColor(white: 1, alpha: 0.08) // полупрозрачно — виден живой фон
         if indexPath.row == 0 {
             let cloud = CloudLikes.shared
-            content.text = "Понравившиеся"
-            content.secondaryText = cloud.loaded || !cloud.tracks.isEmpty ? LibraryViewController.tracksCount(cloud.tracks.count) : "Загрузка…"
+            content.text = tr("Понравившиеся")
+            content.secondaryText = cloud.loaded || !cloud.tracks.isEmpty ? LibraryViewController.tracksCount(cloud.tracks.count) : tr("Загрузка…")
             content.image = UIImage(systemName: "heart.fill")
         } else if indexPath.row == 1 {
-            content.text = "Недавно слушали"
+            content.text = tr("Недавно слушали")
             content.secondaryText = LibraryViewController.tracksCount(Library.shared.history.count)
             content.image = UIImage(systemName: "clock.arrow.circlepath")
         } else {
-            content.text = "Скачанные"
+            content.text = tr("Скачанные")
             content.secondaryText = LibraryViewController.offlineStatus()
             content.image = UIImage(systemName: "arrow.down.circle.fill")
         }
@@ -82,18 +82,19 @@ final class LibraryViewController: UITableViewController {
     /// «120 треков · 450 МБ из 2 ГБ · качается…»
     static func offlineStatus() -> String {
         let store = OfflineStore.shared
-        var parts = [tracksCount(store.tracks.count), OfflineStore.sizeText(store.totalSize) + " из " + OfflineStore.sizeText(OfflineStore.limit)]
+        var parts = [tracksCount(store.tracks.count), OfflineStore.sizeText(store.totalSize) + (AppLanguage.current == .en ? " of " : " из ") + OfflineStore.sizeText(OfflineStore.limit)]
         if !store.online {
-            parts.append("нет сети — играют скачанные")
+            parts.append(tr("нет сети — играют скачанные"))
         } else if store.downloading != nil {
-            parts.append("качается, в очереди \(store.waitingCount)")
+            parts.append(AppLanguage.current == .en ? "downloading, \(store.waitingCount) queued" : "качается, в очереди \(store.waitingCount)")
         } else if store.waitsForWiFi {
-            parts.append("ждёт Wi-Fi")
+            parts.append(tr("ждёт Wi-Fi"))
         }
         return parts.joined(separator: " · ")
     }
 
     static func tracksCount(_ n: Int) -> String {
+        if AppLanguage.current == .en { return n == 1 ? "1 track" : "\(n) tracks" }
         let mod10 = n % 10, mod100 = n % 100
         let word: String
         if mod10 == 1 && mod100 != 11 { word = "трек" }
@@ -124,9 +125,9 @@ final class TrackListViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         switch kind {
-        case .liked: title = "Понравившиеся"
-        case .history: title = "Недавно слушали"
-        case .downloaded: title = "Скачанные"
+        case .liked: title = tr("Понравившиеся")
+        case .history: title = tr("Недавно слушали")
+        case .downloaded: title = tr("Скачанные")
         case .artist(_, let name): title = name.replacingOccurrences(of: " - Topic", with: "")
         }
         tableView.backgroundColor = .clear
@@ -140,7 +141,7 @@ final class TrackListViewController: UITableViewController {
             refreshControl = UIRefreshControl()
             refreshControl?.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         } else {
-            navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Очистить", style: .plain, target: self, action: #selector(clearHistory))
+            navigationItem.rightBarButtonItem = UIBarButtonItem(title: tr("Очистить"), style: .plain, target: self, action: #selector(clearHistory))
         }
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(reload), name: CloudLikes.didChange, object: nil) // ♡ у треков
@@ -186,14 +187,14 @@ final class TrackListViewController: UITableViewController {
         if tracks.isEmpty {
             let label = UILabel()
             if case .artist = kind {
-                label.text = artistError ?? (artistTracks == nil ? "Загрузка…" : "На канале не нашлось музыки")
+                label.text = artistError ?? (artistTracks == nil ? tr("Загрузка…") : tr("На канале не нашлось музыки"))
             } else if kind == .liked {
                 label.text = CloudLikes.shared.lastError
-                    ?? (CloudLikes.shared.loaded ? "Нажмите ♡ в плеере —\nтрек сохранится в ваш плейлист\nYouTube «Fon — музыка»" : "Загрузка…")
+                    ?? (CloudLikes.shared.loaded ? tr("Нажмите ♡ в плеере —\nтрек сохранится в ваш плейлист\nYouTube «Fon — музыка»") : tr("Загрузка…"))
             } else if kind == .downloaded {
-                label.text = "Здесь появятся треки для прослушивания без интернета.\nПриложение скачивает их само по Wi-Fi:\nпонравившиеся, часто слушаемые, миксы\nи немного рекомендаций (до 2 ГБ)."
+                label.text = tr("Здесь появятся треки для прослушивания без интернета.\nПриложение скачивает их само по Wi-Fi:\nпонравившиеся, часто слушаемые, миксы\nи немного рекомендаций (до 2 ГБ).")
             } else {
-                label.text = "Здесь появятся треки,\nкоторые вы слушали в режиме музыки"
+                label.text = tr("Здесь появятся треки,\nкоторые вы слушали в режиме музыки")
             }
             label.numberOfLines = 0
             label.textAlignment = .center
@@ -208,7 +209,7 @@ final class TrackListViewController: UITableViewController {
     /// Внизу «Скачанных» — сколько места и что сейчас качается.
     private func offlineFooter() -> UIView {
         let label = UILabel(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 64))
-        label.text = LibraryViewController.offlineStatus() + "\nСмахните трек, чтобы удалить: сам он больше не скачается."
+        label.text = LibraryViewController.offlineStatus() + tr("\nСмахните трек, чтобы удалить: сам он больше не скачается.")
         label.numberOfLines = 0
         label.font = .systemFont(ofSize: 12)
         label.textColor = .secondaryLabel
@@ -222,9 +223,9 @@ final class TrackListViewController: UITableViewController {
     }
 
     @objc private func clearHistory() {
-        let alert = UIAlertController(title: "Очистить историю?", message: nil, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Очистить", style: .destructive) { _ in Library.shared.clearHistory() })
+        let alert = UIAlertController(title: tr("Очистить историю?"), message: nil, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: tr("Отмена"), style: .cancel))
+        alert.addAction(UIAlertAction(title: tr("Очистить"), style: .destructive) { _ in Library.shared.clearHistory() })
         present(alert, animated: true)
     }
 
@@ -241,8 +242,8 @@ final class TrackListViewController: UITableViewController {
             return UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in self?.playAll(shuffle: shuffle) })
         }
         let stack = UIStackView(arrangedSubviews: [
-            button("Слушать", "play.fill", filled: true, shuffle: false),
-            button("Перемешать", "shuffle", filled: false, shuffle: true)
+            button(tr("Слушать"), "play.fill", filled: true, shuffle: false),
+            button(tr("Перемешать"), "shuffle", filled: false, shuffle: true)
         ])
         stack.axis = .horizontal
         stack.distribution = .fillEqually
@@ -253,7 +254,7 @@ final class TrackListViewController: UITableViewController {
         return header
     }
 
-    private var sourceName: String { title ?? "Медиатека" }
+    private var sourceName: String { title ?? tr("Медиатека") }
 
     /// Нажатый трек и следующие — одной очередью (исполнитель, скачанные — без сети миксов нет).
     private var playsAsQueue: Bool {
@@ -296,14 +297,14 @@ final class TrackListViewController: UITableViewController {
             let queue = Array(tracks[indexPath.row...].map(\.id).prefix(50))
             if let url = YouTubeLinks.queue(queue) { onPlay?(url, sourceName, queue) }
         } else if let url = YouTubeLinks.mix(track.id) {
-            onPlay?(url, "Микс", nil) // из истории — трек и похожие на него
+            onPlay?(url, tr("Микс"), nil) // из истории — трек и похожие на него
         }
     }
 
     override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         if case .artist = kind { return nil }
         let track = tracks[indexPath.row]
-        let title = kind == .liked ? "Убрать" : "Удалить"
+        let title = kind == .liked ? tr("Убрать") : tr("Удалить")
         let action = UIContextualAction(style: .destructive, title: title) { [weak self] _, _, done in
             guard let self else { return done(false) }
             if self.kind == .downloaded {
@@ -343,7 +344,7 @@ final class TrackCell: UITableViewCell {
         artistLabel.font = .systemFont(ofSize: 13)
         artistLabel.textColor = .secondaryLabel
         likeButton.tintColor = PlayerView.accent
-        likeButton.accessibilityLabel = "Понравившиеся"
+        likeButton.accessibilityLabel = tr("Понравившиеся")
         likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
         [artwork, titleLabel, artistLabel, likeButton].forEach { contentView.addSubview($0) }
     }

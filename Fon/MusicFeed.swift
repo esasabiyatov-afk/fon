@@ -156,9 +156,9 @@ final class MusicFeed {
             }
             let (mixes, videos) = Self.parseFeed(dict)
             var shelves: [MusicShelf] = []
-            if !mixes.isEmpty { shelves.append(MusicShelf(title: "Миксы для вас", kind: .cards, items: mixes)) }
+            if !mixes.isEmpty { shelves.append(MusicShelf(title: tr("Миксы для вас"), kind: .cards, items: mixes)) }
             if !videos.isEmpty { shelves.append(MusicShelf(title: "Быстрый выбор", kind: .songs, items: Array(videos.prefix(16)))) }
-            if videos.count > 16 { shelves.append(MusicShelf(title: "Рекомендации", kind: .cards, items: Array(videos.dropFirst(16)))) }
+            if videos.count > 16 { shelves.append(MusicShelf(title: tr("Рекомендации"), kind: .cards, items: Array(videos.dropFirst(16)))) }
             let chip = dict["chip"] as? Bool ?? false
             self.finishHome(shelves, error: shelves.isEmpty ? "Подборки не загрузились (\(reason); лента: \(chip ? "пусто" : "нет фильтра «Музыка»"))." : nil)
         }

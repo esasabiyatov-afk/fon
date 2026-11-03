@@ -58,7 +58,7 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     }
 
     func updatePlaceholder() {
-        searchBar.placeholder = Settings.musicMode ? "Песни, исполнители, альбомы" : "Поиск на YouTube"
+        searchBar.placeholder = Settings.musicMode ? tr("Песни, исполнители, альбомы") : tr("Поиск на YouTube")
     }
 
     /// Окно, где показываются результаты (страница YouTube) — под полем поиска.
@@ -100,7 +100,7 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
     private func updateEmptyHint() {
         guard rows.isEmpty else { tableView.backgroundView = nil; return }
         let label = UILabel()
-        label.text = Settings.musicMode ? "Ищите песни, исполнителей и альбомы" : "Ищите видео, музыку и каналы"
+        label.text = Settings.musicMode ? tr("Ищите песни, исполнителей и альбомы") : tr("Ищите видео, музыку и каналы")
         label.textColor = .secondaryLabel
         label.textAlignment = .center
         tableView.backgroundView = label
@@ -226,13 +226,13 @@ final class SearchViewController: UIViewController, UISearchBarDelegate, UITable
         guard showingHistory, !history.isEmpty else { return nil }
         let header = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 44))
         let label = UILabel()
-        label.text = "Недавние"
+        label.text = tr("Недавние")
         label.font = .systemFont(ofSize: 20, weight: .bold)
         label.textColor = .white
         label.frame = CGRect(x: 20, y: 8, width: 200, height: 30)
         header.addSubview(label)
         let clear = UIButton(type: .system)
-        clear.setTitle("Очистить", for: .normal)
+        clear.setTitle(tr("Очистить"), for: .normal)
         clear.tintColor = PlayerView.accent
         clear.frame = CGRect(x: tableView.bounds.width - 110, y: 8, width: 96, height: 30)
         clear.autoresizingMask = [.flexibleLeftMargin]

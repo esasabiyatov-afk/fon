@@ -16,7 +16,7 @@ targets:
         CFBundleDisplayName: Fon
         # Системные кнопки (Отмена, Назад, Изменить) — на русском.
         CFBundleDevelopmentRegion: ru
-        CFBundleLocalizations: [ru]
+        CFBundleLocalizations: [ru, en]
         # Номер версии подставляет сборка в GitHub (1.<номер сборки>) — по нему SideStore видит обновления.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"

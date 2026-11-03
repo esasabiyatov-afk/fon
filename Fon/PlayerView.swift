@@ -160,7 +160,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicButton.addTarget(self, action: #selector(musicTapped), for: .touchUpInside)
         pipButton.setImage(UIImage(systemName: "pip.enter", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
         pipButton.tintColor = .white
-        pipButton.accessibilityLabel = "Картинка в картинке"
+        pipButton.accessibilityLabel = tr("Картинка в картинке")
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
         likeButton.tintColor = .white
         likeButton.addTarget(self, action: #selector(likeTapped(_:)), for: .touchUpInside)
@@ -203,10 +203,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         youTubeMenuOpen = false
         updateLikeButton()
         let list = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "list" }?.value
-        musicView.sourceName = source ?? (list?.hasPrefix("RD") == true ? "Микс" : "YouTube")
+        musicView.sourceName = source ?? (list?.hasPrefix("RD") == true ? tr("Микс") : "YouTube")
         musicView.reset(id: currentVideoID)
         showingPage = false
-        titleLabel.text = "Загрузка…"
+        titleLabel.text = tr("Загрузка…")
         subtitleLabel.text = nil
         topTitleLabel.text = nil
         progress = 0
@@ -269,7 +269,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         }
         let miniSymbols = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
         closeButton.setImage(UIImage(systemName: musicMode ? "forward.fill" : "xmark", withConfiguration: miniSymbols), for: .normal)
-        closeButton.accessibilityLabel = musicMode ? "Следующий трек" : "Закрыть"
+        closeButton.accessibilityLabel = musicMode ? tr("Следующий трек") : tr("Закрыть")
         // Мини-плеер режима музыки — карточка чуть светлее фона, как в Apple Music.
         backgroundColor = isMini && musicMode ? UIColor(white: 0.16, alpha: 1) : UIColor(white: 0.09, alpha: 1)
         miniArtwork.isHidden = !(isMini && musicMode)
@@ -290,7 +290,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         let symbols = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
         musicButton.setImage(UIImage(systemName: musicMode ? "music.note" : "play.rectangle", withConfiguration: symbols), for: .normal)
         musicButton.tintColor = musicMode ? Self.accent : .white
-        musicButton.accessibilityLabel = musicMode ? "Вернуться к плееру" : "Режим видео"
+        musicButton.accessibilityLabel = musicMode ? tr("Вернуться к плееру") : tr("Режим видео")
     }
 
     @objc private func musicTapped() {
@@ -306,7 +306,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         showingPage = false
         musicModeDidChange()
         onMusicModeChanged?()
-        showToast(musicMode ? "Режим музыки" : "Режим видео", at: CGPoint(x: bounds.midX, y: safeAreaInsets.top + 90))
+        showToast(musicMode ? tr("Режим музыки") : tr("Режим видео"), at: CGPoint(x: bounds.midX, y: safeAreaInsets.top + 90))
     }
 
     /// Режим сменили (здесь или во вкладке приложения) — обновляем экран и страницу.
@@ -360,7 +360,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         let device = UIDevice.current
         let details = "\(reason)\n\n\(device.model), \(device.systemName) \(device.systemVersion)\n\(YouTubeSession.summary)"
         let alert = UIAlertController(title: "Системный плеер не смог включить трек", message: details + "\n\nИграет обычный плеер.", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Скопировать", style: .default) { _ in UIPasteboard.general.string = details })
+        alert.addAction(UIAlertAction(title: tr("Скопировать"), style: .default) { _ in UIPasteboard.general.string = details })
         alert.addAction(UIAlertAction(title: "OK", style: .cancel))
         top.present(alert, animated: true)
     }
@@ -399,7 +399,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             button.setImage(UIImage(systemName: liked ? "heart.fill" : "heart",
                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .semibold)), for: .normal)
             button.tintColor = liked ? Self.accent : .white
-            button.accessibilityLabel = liked ? "Убрать из «Понравившихся»" : "Добавить в «Понравившиеся»"
+            button.accessibilityLabel = liked ? tr("Убрать из «Понравившихся»") : tr("Добавить в «Понравившиеся»")
         }
     }
 
@@ -412,7 +412,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             UIView.animate(withDuration: 0.2) { sender.transform = .identity }
         }
         guard sender === likeButton else { return } // в мини-полоске хватает закрашенного ♡
-        showToast(liked ? "Добавлено в «Понравившиеся»" : "Убрано из «Понравившихся»",
+        showToast(liked ? tr("Добавлено в «Понравившиеся»") : tr("Убрано из «Понравившихся»"),
                   at: CGPoint(x: bounds.midX, y: topBar.frame.maxY + 40))
     }
 
@@ -785,7 +785,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         if musicMode, let track = currentTrack { Taste.shared.progress(track, time: time, duration: duration) }
         if let queue = queueIDs, !queue.contains(id) {
             queueIDs = nil
-            musicView.sourceName = "Похожие треки"
+            musicView.sourceName = tr("Похожие треки")
         }
         updateMiniArtwork(id)
         musicView.update(id: id, title: title, artist: artist, paused: paused, time: time, duration: duration, loop: loop)
@@ -908,7 +908,7 @@ private final class FullscreenBar: UIView {
         exitButton.setImage(UIImage(systemName: "arrow.down.right.and.arrow.up.left",
                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
         exitButton.tintColor = .white
-        exitButton.accessibilityLabel = "Выйти из полного экрана"
+        exitButton.accessibilityLabel = tr("Выйти из полного экрана")
         titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.lineBreakMode = .byTruncatingTail

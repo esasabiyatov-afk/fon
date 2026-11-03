@@ -20,7 +20,7 @@ final class DesignViewController: UIViewController {
     init(artwork: UIImage?) {
         self.artwork = artwork
         super.init(nibName: nil, bundle: nil)
-        title = "Оформление"
+        title = tr("Оформление")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -95,10 +95,10 @@ final class DesignViewController: UIViewController {
         styleNote.numberOfLines = 0
 
         let rows = UIStackView(arrangedSubviews: [
-            header("Фон"), styleControl, styleNote,
-            header("Подложка под кнопками"), panelControl,
-            switchRow("Ореол вокруг обложки", glowSwitch),
-            switchRow("Живой фон на всех экранах", everywhereSwitch)
+            header(tr("Фон")), styleControl, styleNote,
+            header(tr("Подложка под кнопками")), panelControl,
+            switchRow(tr("Ореол вокруг обложки"), glowSwitch),
+            switchRow(tr("Живой фон на всех экранах"), everywhereSwitch)
         ])
         rows.axis = .vertical
         rows.spacing = 10
@@ -184,9 +184,9 @@ final class DesignViewController: UIViewController {
 
     private func updateNote() {
         switch Settings.backdropStyle {
-        case .soft: styleNote.text = "Размытая обложка плавно вращается, мягкие пятна её цветов."
-        case .neon: styleNote.text = "Яркие контрастные пятна и лучи на чёрном, цвета переливаются."
-        case .black: styleNote.text = "Глубокий чёрный с лёгким свечением — тёмное видео сливается с фоном."
+        case .soft: styleNote.text = tr("Размытая обложка плавно вращается, мягкие пятна её цветов.")
+        case .neon: styleNote.text = tr("Яркие контрастные пятна и лучи на чёрном, цвета переливаются.")
+        case .black: styleNote.text = tr("Глубокий чёрный с лёгким свечением — тёмное видео сливается с фоном.")
         }
     }
 

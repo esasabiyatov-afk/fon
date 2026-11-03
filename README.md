@@ -1,6 +1,36 @@
 # Fon
 
-**Русский** · [English](#english)
+**English** · [Русский](#русский)
+
+An unofficial open-source music player for YouTube on iPhone and iPad: background and lock-screen playback, music mode,
+your library, recommendations, offline tracks and a customizable live player background. It builds for free on GitHub's
+cloud — no Mac needed.
+
+> Not affiliated with or endorsed by Google or YouTube. YouTube and YouTube Music are trademarks of Google LLC.
+> Personal open-source project — use at your own risk and respect the terms of the services you use.
+
+**Install:** install [SideStore](https://sidestore.io), then add the source
+`https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json` (Sources → «+»), or grab `Fon.ipa` from
+[Releases](../../releases).
+
+**Make your own version:** the project is MIT-licensed. Fork the repo, enable Actions, change the name and bundle id
+in `project.yml` and `.github/workflows/build.yml`, push to `main` — your fork publishes its own SideStore source at
+`https://github.com/<you>/<repo>/releases/latest/download/apps.json` (the repo must be public).
+
+## About the author
+
+I'm not a programmer — just an ordinary user who wanted a music player of my own. Fon was built with the help of AI
+([Claude](https://claude.ai/code)) for personal use, and then I published it as open source so anyone can take it,
+change it and make their own version. The same text is in the app: Settings → About.
+
+The interface is available in English and Russian (Settings → Language; by default it follows your phone's language).
+Translations of the remaining screens are welcome — see [issue #4](../../issues/4).
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to contribute.
+
+---
+
+## Русский
 
 Неофициальный открытый музыкальный плеер для YouTube на iPhone и iPad. Музыка играет в фоне и на экране блокировки,
 есть режим музыки с обложкой вместо видео, своя медиатека, рекомендации, музыка без интернета и настраиваемый
@@ -57,21 +87,10 @@ Swift, UIKit, WKWebView для страниц YouTube, AVPlayer для сист�
 
 ---
 
-## English
+## Об авторе
 
-An unofficial open-source music player for YouTube on iPhone and iPad: background and lock-screen playback, music mode,
-your library, recommendations, offline tracks and a customizable live player background. It builds for free on GitHub's
-cloud — no Mac needed.
+Я не программист, а обычный пользователь, которому захотелось своё приложение для музыки. Fon сделан с помощью ИИ
+([Claude](https://claude.ai/code)) для личного пользования, а потом выложен как открытый проект: берите код, меняйте
+и делайте свои версии. Такой же текст есть в приложении: Настройки → О приложении.
 
-> Not affiliated with or endorsed by Google or YouTube. YouTube and YouTube Music are trademarks of Google LLC.
-> Personal open-source project — use at your own risk and respect the terms of the services you use.
-
-**Install:** install [SideStore](https://sidestore.io), then add the source
-`https://github.com/esasabiyatov-afk/fon/releases/latest/download/apps.json` (Sources → «+»), or grab `Fon.ipa` from
-[Releases](../../releases).
-
-**Make your own version:** the project is MIT-licensed. Fork the repo, enable Actions, change the name and bundle id
-in `project.yml` and `.github/workflows/build.yml`, push to `main` — your fork publishes its own SideStore source at
-`https://github.com/<you>/<repo>/releases/latest/download/apps.json` (the repo must be public).
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to contribute.
+Интерфейс на русском и английском (Настройки → Язык; по умолчанию — язык телефона). Перевод остальных экранов приветствуется — см. [issue #4](../../issues/4).

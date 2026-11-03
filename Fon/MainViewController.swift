@@ -58,11 +58,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private let base = "https://m.youtube.com"
     /// Порядок владельца: Главная · История · [режим] · Подписки · Вы.
     private let tabs: [(title: String, icon: String, kind: TabKind)] = [
-        ("Главная", "house", .home),
-        ("История", "clock.arrow.circlepath", .history),
-        ("Режим", "music.note", .mode),
-        ("Подписки", "play.rectangle.on.rectangle", .subscriptions),
-        ("Вы", "person.crop.circle", .you)
+        (tr("Главная"), "house", .home),
+        (tr("История"), "clock.arrow.circlepath", .history),
+        (tr("Режим"), "music.note", .mode),
+        (tr("Подписки"), "play.rectangle.on.rectangle", .subscriptions),
+        (tr("Вы"), "person.crop.circle", .you)
     ]
     private let modeTabIndex = 2
     private let libraryTabIndex = 4
@@ -261,7 +261,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     /// ♡ не сохранился в облако (нет входа в Google, нет сети) — коротко объясняем.
     @objc private func cloudFailed(_ note: Notification) {
         guard let message = note.object as? String else { return }
-        let alert = UIAlertController(title: "Не сохранилось в «Понравившиеся»", message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: tr("Не сохранилось в «Понравившиеся»"), message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         (presentedViewController ?? self).present(alert, animated: true)
     }
@@ -411,7 +411,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         // «Лента YouTube: музыка» — нативный экран: плитки и компактный список (просьба владельца после 1.72).
         home.onOpenFeed = { [weak self] in
             let feed = MusicHomeViewController(kind: .feed)
-            feed.title = "Лента YouTube"
+            feed.title = tr("Лента YouTube")
             feed.onPlay = { url, source, queue in self?.play(url, source: source, queue: queue) }
             self?.homeNav?.pushViewController(feed, animated: true)
         }
@@ -448,7 +448,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     /// Лента режима «Видео»: «Главная» (FEwhat_to_watch) или «Подписки» (FEsubscriptions).
     private func videoFeedController(home: Bool) -> UINavigationController {
         if let nav = home ? videoHomeNav : videoSubscriptionsNav { return nav }
-        let feed = VideoFeedViewController(browseID: home ? "FEwhat_to_watch" : "FEsubscriptions", title: home ? "Главная" : "Подписки")
+        let feed = VideoFeedViewController(browseID: home ? "FEwhat_to_watch" : "FEsubscriptions", title: home ? tr("Главная") : tr("Подписки"))
         feed.onPlay = { [weak self] url in self?.play(url, source: "YouTube", queue: nil) }
         feed.navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "magnifyingglass"), style: .plain,
                                                                  target: self, action: #selector(searchButtonTapped))
@@ -620,7 +620,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             Settings.musicMode.toggle()
             playerView.musicModeDidChange()
             musicModeChanged()
-            view.showToast(Settings.musicMode ? "Режим музыки" : "Режим видео",
+            view.showToast(Settings.musicMode ? tr("Режим музыки") : tr("Режим видео"),
                            at: CGPoint(x: view.bounds.midX, y: contentBottom - (playerState == .hidden ? 40 : PlayerView.miniHeight + 40)))
         }
     }
@@ -658,12 +658,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     private func updateModeTabs() {
         let music = Settings.musicMode
         if music {
-            tabBar.setItem(modeTabIndex, title: "Музыка", icon: "music.note", color: PlayerView.accent)
+            tabBar.setItem(modeTabIndex, title: tr("Музыка"), icon: "music.note", color: PlayerView.accent)
         } else {
-            tabBar.setItem(modeTabIndex, title: "Видео", icon: "play.rectangle")
+            tabBar.setItem(modeTabIndex, title: tr("Видео"), icon: "play.rectangle")
         }
-        tabBar.setItem(libraryTabIndex, title: music ? "Медиатека" : "Вы", icon: music ? "square.stack.fill" : "person.crop.circle")
-        sidebar.setItem(libraryTabIndex, title: "Медиатека", icon: "square.stack.fill")
+        tabBar.setItem(libraryTabIndex, title: music ? tr("Медиатека") : tr("Вы"), icon: music ? "square.stack.fill" : "person.crop.circle")
+        sidebar.setItem(libraryTabIndex, title: tr("Медиатека"), icon: "square.stack.fill")
         tabBar.selectedColor = music ? PlayerView.accent : .white // выбранная вкладка красная, как в Apple Music
         updateNavigationStyle()
         layoutPlayer()

@@ -69,7 +69,7 @@ final class SidebarView: UIView {
         var search = UIButton.Configuration.plain()
         search.image = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
         search.imagePadding = 8
-        var searchTitle = AttributedString("Поиск")
+        var searchTitle = AttributedString(tr("Поиск"))
         searchTitle.font = .systemFont(ofSize: 16)
         search.attributedTitle = searchTitle
         search.baseForegroundColor = UIColor(white: 0.6, alpha: 1)
@@ -87,7 +87,7 @@ final class SidebarView: UIView {
                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
             config.imagePadding = 12
             config.imageColorTransformer = UIConfigurationColorTransformer { _ in isMode ? UIColor(white: 0.6, alpha: 1) : PlayerView.accent }
-            var title = AttributedString(isMode ? "Режим видео" : titles[index])
+            var title = AttributedString(isMode ? tr("Режим видео") : titles[index])
             title.font = .systemFont(ofSize: 17, weight: selected ? .semibold : .regular)
             config.attributedTitle = title
             config.baseForegroundColor = isMode ? UIColor(white: 0.6, alpha: 1) : .white
