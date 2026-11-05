@@ -18,24 +18,22 @@ final class LiveBackdrop: UIView {
     private let shade = CAGradientLayer()
     /// Дополнительное затемнение — для фона под лентами (содержимое должно читаться).
     private let dimLayer = CALayer()
-    var dim: Float = 0 { didSet { dimLayer.opacity = dim } }
+    var dim: Float = 0 { didSet { dimLayer.opacity = dim; shaderView?.dim = dim } }
     /// Неоновые лучи — косые светящиеся полосы, медленно проходят по экрану (владелец: «motion background, neon»).
     private var beams: [CAGradientLayer] = []
-    /// Светящиеся линии (стили «Контур», «Аврора», «Лента»): заранее отрисованные картинки (`SilkRenderer`: мягкое
-    /// свечение, яркое ядро, затухание к краям) — два варианта узора плавно перетекают друг в друга и медленно плывут.
-    /// Движение — только прозрачность и сдвиг готовых картинок (на видеокарте), рисуются они в фоне при смене обложки/стиля.
-    /// В 1.95 линии были простыми штрихами `CAShapeLayer` и дёргались туда-сюда — владелец: «дешёвые анимации, как в паинте».
-    private let linesHost = CALayer()
-    private let silkA = CALayer()
-    private let silkB = CALayer()
-    private var silkKey = ""
-    private var silkGeneration = 0
+    /// Стили-шейдеры (жидкость, шёлк, нити, волна, сферы): своя картинка на видеокарте поверх всего (`ShaderBackdrop`).
+    /// В 1.95–1.96 вместо них были линии `CAShapeLayer` — владелец: «дешёвые анимации, как в паинте; где такие графики?».
+    private var shaderView: ShaderBackdrop?
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     var style: BackdropStyle = Settings.backdropStyle {
         didSet { if style != oldValue { restyle() } }
     }
-    private var look: Look { Look.of(style) }
+    /// Шейдер не собрался или нет видеокарты — вместо стилей-шейдеров обычный «Неон».
+    private var look: Look {
+        let look = Look.of(style)
+        return look.shader != nil && !ShaderBackdrop.available ? Look.of(.neon) : look
+    }
     /// Последняя картинка и её цвета «как есть» — при смене стиля перекрашиваем без новой загрузки.
     private var rawColors: [UIColor] = []
     private var lastCycle = true
@@ -71,11 +69,6 @@ final class LiveBackdrop: UIView {
             beam.locations = [0, 0.5, 1]
             layer.addSublayer(beam)
             beams.append(beam)
-        }
-        layer.addSublayer(linesHost)
-        for silk in [silkA, silkB] {
-            silk.contentsGravity = .resize
-            linesHost.addSublayer(silk)
         }
         shade.locations = [0, 0.45, 1]
         layer.addSublayer(shade)
@@ -115,10 +108,8 @@ final class LiveBackdrop: UIView {
         var baseBrightness: CGFloat?
         /// Яркое ядро у пятна — неоновое свечение, а не мягкое облако.
         var core: Bool
-        /// Светящиеся линии (nil — нет).
-        var lines: LineSpec?
-
-        typealias LineSpec = SilkSpec
+        /// Форма шейдера (`ShaderBackdrop.shape`); nil — обычный фон из слоёв.
+        var shader: Int?
 
         static func of(_ style: BackdropStyle) -> Look {
             switch style {
@@ -134,24 +125,11 @@ final class LiveBackdrop: UIView {
                 return Look(imageOpacity: (0.1, 0), blobCount: 2, blobSize: 0.7, blobOpacity: 0.4,
                             drift: (26, 6, 0.15, 0.1), pulse: (0.9, 1.15, 12, 3), beams: false, cycle: false,
                             shade: (0, 0, 0.35), baseBrightness: nil, core: false)
-            case .contour:
-                return Look(imageOpacity: (0.05, 0), blobCount: 2, blobSize: 0.8, blobOpacity: 0.45,
-                            drift: (22, 5, 0.12, 0.1), pulse: (0.9, 1.15, 12, 3), beams: false, cycle: false,
-                            shade: (0, 0, 0.3), baseBrightness: nil, core: false,
-                            lines: LineSpec(count: 4, vertical: false, width: 2.2, amplitude: 0.2, spread: 0.8, phaseStep: 1.4, frequency: 0.95,
-                                            alpha: 1, glow: 12, fold: true, body: 0, twist: 0, center: 0.5))
-            case .aurora:
-                return Look(imageOpacity: (0.08, 0), blobCount: 2, blobSize: 0.8, blobOpacity: 0.5,
-                            drift: (20, 5, 0.15, 0.1), pulse: (0.85, 1.2, 10, 3), beams: false, cycle: true,
-                            shade: (0, 0.05, 0.4), baseBrightness: nil, core: false,
-                            lines: LineSpec(count: 40, vertical: true, width: 0.8, amplitude: 0.12, spread: 0.75, phaseStep: 0.05, frequency: 0.75,
-                                            alpha: 0.9, glow: 8, fold: false, body: 170, twist: 0.35, center: 0.45))
-            case .ribbon:
-                return Look(imageOpacity: (0.06, 0), blobCount: 1, blobSize: 0.9, blobOpacity: 0.5,
-                            drift: (24, 5, 0.1, 0.1), pulse: (0.9, 1.2, 12, 3), beams: false, cycle: true,
-                            shade: (0, 0.05, 0.4), baseBrightness: nil, core: false,
-                            lines: LineSpec(count: 24, vertical: false, width: 0.9, amplitude: 0.16, spread: 0.24, phaseStep: 0.045, frequency: 0.85,
-                                            alpha: 1, glow: 8, fold: false, body: 120, twist: 0.75, center: 0.55))
+            case .fluid, .silk, .fibers, .wave, .orb, .prism:
+                let shape: [BackdropStyle: Int] = [.fluid: 0, .silk: 1, .fibers: 2, .wave: 3, .orb: 4, .prism: 5]
+                return Look(imageOpacity: (0, 0), blobCount: 0, blobSize: 0.5, blobOpacity: 0,
+                            drift: (20, 5, 0.1, 0.1), pulse: (1, 1, 10, 2), beams: false, cycle: false,
+                            shade: (0, 0, 0), baseBrightness: nil, core: false, shader: shape[style])
             case .haze:
                 return Look(imageOpacity: (0.95, 0.55), blobCount: 2, blobSize: 0.8, blobOpacity: 0.3,
                             drift: (24, 6, 0.2, 0.12), pulse: (0.9, 1.2, 12, 3), beams: false, cycle: false,
@@ -174,18 +152,51 @@ final class LiveBackdrop: UIView {
             blob.locations = stops
         }
         beams.forEach { $0.isHidden = !look.beams; $0.opacity = 0.6 }
-        linesHost.isHidden = look.lines == nil
         shade.colors = [UIColor(white: 0, alpha: look.shade.0).cgColor, UIColor(white: 0, alpha: look.shade.1).cgColor,
                         UIColor(white: 0, alpha: look.shade.2).cgColor]
         CATransaction.commit()
+        updateShader()
+    }
+
+    /// Шейдер — только у стилей-шейдеров; у остальных его нет (и он ничего не считает).
+    private func updateShader() {
+        if let shape = look.shader {
+            let view = shaderView ?? ShaderBackdrop()
+            if shaderView == nil {
+                shaderView = view
+                view.frame = bounds
+                view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                addSubview(view)
+            }
+            view.shape = shape
+            view.dim = dim
+            if !toned.isEmpty { view.setColors(toned) }
+            updateShaderActivity()
+        } else if let view = shaderView {
+            view.setActive(false)
+            view.removeFromSuperview()
+            shaderView = nil
+        }
+    }
+
+    /// Шейдер считает, только пока фон виден и приложение открыто.
+    private func updateShaderActivity() {
+        shaderView?.setActive(!isHidden && window != nil && layer.speed != 0
+                              && UIApplication.shared.applicationState != .background)
+    }
+
+    override var isHidden: Bool {
+        didSet { updateShaderActivity() }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateShaderActivity()
     }
 
     /// Стиль поменяли в настройщике: заново прозрачности, цвета и движение (без новой загрузки картинки).
     private func restyle() {
-        ([imageA, imageB, silkA, silkB] + blobs + beams).forEach { $0.removeAllAnimations() }
-        silkKey = ""
-        silkA.contents = nil
-        silkB.contents = nil
+        ([imageA, imageB] + blobs + beams).forEach { $0.removeAllAnimations() }
         applyLook()
         if !rawColors.isEmpty { applyColors(animated: true) }
         setNeedsLayout()
@@ -220,49 +231,8 @@ final class LiveBackdrop: UIView {
             beam.position = CGPoint(x: b.width * (i == 0 ? 0.2 : 0.8), y: b.midY)
             beam.setAffineTransform(CGAffineTransform(rotationAngle: i == 0 ? 0.45 : -0.6))
         }
-        // Картинки линий чуть больше экрана: при медленном сдвиге края не видны.
-        linesHost.frame = b
-        for silk in [silkA, silkB] {
-            silk.frame = b.insetBy(dx: -b.width * 0.075, dy: -b.height * 0.075)
-        }
         CATransaction.commit()
-        refreshSilk()
         if imageA.animation(forKey: "spin") == nil { startAnimations() }
-    }
-
-    /// Отрисовать линии заново (в фоне), если поменялись стиль, размер или цвета обложки.
-    private func refreshSilk() {
-        guard let spec = look.lines, bounds.width > 0, !toned.isEmpty else { return }
-        let colors = toned
-        let size = silkA.frame.size
-        let key = "\(style.rawValue)|\(Int(size.width))x\(Int(size.height))|" + colors.map { color -> String in
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            color.getRed(&r, green: &g, blue: &b, alpha: &a)
-            return "\(Int(r * 20)),\(Int(g * 20)),\(Int(b * 20))"
-        }.joined(separator: ";")
-        guard key != silkKey else { return }
-        silkKey = key
-        silkGeneration += 1
-        let generation = silkGeneration
-        let rgb = colors.map { color -> (CGFloat, CGFloat, CGFloat) in
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            color.getRed(&r, green: &g, blue: &b, alpha: &a)
-            return (r, g, b)
-        }
-        Task.detached(priority: .utility) { [weak self] in
-            let first = SilkRenderer.render(spec, size: size, colors: rgb, variant: 0)
-            let second = SilkRenderer.render(spec, size: size, colors: rgb, variant: 1)
-            await MainActor.run {
-                guard let self, generation == self.silkGeneration else { return }
-                let fade = CATransition()
-                fade.duration = 1.2
-                fade.type = .fade
-                self.silkA.add(fade, forKey: "fade")
-                self.silkB.add(fade, forKey: "fade")
-                self.silkA.contents = first
-                self.silkB.contents = second
-            }
-        }
     }
 
     // MARK: - Движение
@@ -329,33 +299,6 @@ final class LiveBackdrop: UIView {
                 beam.add(glow, forKey: "glow")
             }
         }
-        if look.lines != nil {
-            // Линии: два варианта узора медленно перетекают друг в друга (кажется, что линии плавно меняют форму),
-            // и каждый не спеша плывёт и «дышит» — плавные кривые с долгими периодами, без рывков туда-обратно.
-            for (i, silk) in [silkA, silkB].enumerated() {
-                let morph = CAKeyframeAnimation(keyPath: "opacity")
-                morph.values = i == 0 ? [1, 0.12, 1] : [0.12, 1, 0.12]
-                morph.keyTimes = [0, 0.5, 1]
-                morph.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
-                morph.duration = 18
-                morph.repeatCount = .infinity
-                silk.add(morph, forKey: "morph")
-                let moves: [(String, [CGFloat], Double)] = [
-                    ("transform.translation.x", [0, w * 0.035, -w * 0.025, 0], 31 + Double(i) * 7),
-                    ("transform.translation.y", [0, -h * 0.02, h * 0.025, 0], 37 + Double(i) * 5),
-                    ("transform.scale", [1, 1.045, 1.015, 1], 27 + Double(i) * 6),
-                    ("transform.rotation.z", [0, 0.018, -0.014, 0], 43 + Double(i) * 9)
-                ]
-                for (path, values, duration) in moves {
-                    let move = CAKeyframeAnimation(keyPath: path)
-                    move.values = values
-                    move.duration = duration
-                    move.calculationMode = .cubic
-                    move.repeatCount = .infinity
-                    silk.add(move, forKey: path)
-                }
-            }
-        }
         animateColors()
     }
 
@@ -406,6 +349,7 @@ final class LiveBackdrop: UIView {
             layer.speed = 0
             layer.timeOffset = paused
         }
+        updateShaderActivity()
     }
 
     // MARK: - Под видео — по миниатюрам кадров (отдельно от плеера)
@@ -515,8 +459,7 @@ final class LiveBackdrop: UIView {
         base.backgroundColor = (look.baseBrightness.map { Self.darkened(toned[0], to: $0) } ?? .black).cgColor
         CATransaction.commit()
         animateColors()
-        // Линии — по цветам обложки; под видео (цвета каждые 3 с) не перерисовываем — дорого и не нужно.
-        if lastCycle || silkA.contents == nil { refreshSilk() }
+        shaderView?.setColors(toned)
     }
 
     /// Уменьшенная (64 px) и размытая копия — растянутая на экран, она гладкая и почти ничего не стоит.
@@ -575,12 +518,12 @@ final class LiveBackdrop: UIView {
             return UIColor(hue: hue, saturation: s, brightness: min(1, max(0.92, bri * 1.4)), alpha: 1)
         case .black:
             return UIColor(hue: hue, saturation: min(1, sat * 1.2 + 0.05), brightness: min(0.8, max(0.45, bri)), alpha: 1)
-        case .contour:
+        case .fluid, .silk, .fibers:
             return UIColor(hue: hue, saturation: min(1, max(0.5, sat * 1.2)), brightness: 0.95, alpha: 1)
-        case .aurora:
-            return UIColor(hue: hue, saturation: min(1, max(0.7, sat * 1.4)), brightness: 0.9, alpha: 1)
-        case .ribbon:
+        case .wave, .orb:
             return UIColor(hue: hue, saturation: min(1, max(0.6, sat * 1.3)), brightness: 1, alpha: 1)
+        case .prism:
+            return UIColor(hue: hue, saturation: min(1, sat * 0.9 + 0.1), brightness: 0.9, alpha: 1)
         case .haze:
             return UIColor(hue: hue, saturation: sat * 0.55, brightness: min(0.85, max(0.45, bri * 0.9)), alpha: 1)
         }

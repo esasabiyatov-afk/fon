@@ -244,9 +244,12 @@ final class DesignViewController: UIViewController {
         case .soft: styleNote.text = tr("Размытая обложка плавно вращается, мягкие пятна её цветов.")
         case .neon: styleNote.text = tr("Яркие контрастные пятна и лучи на чёрном, цвета переливаются.")
         case .black: styleNote.text = tr("Глубокий чёрный с лёгким свечением — тёмное видео сливается с фоном.")
-        case .contour: styleNote.text = tr("Тонкие светящиеся контуры плывут по глубокому чёрному.")
-        case .aurora: styleNote.text = tr("Мягкие световые нити, как северное сияние.")
-        case .ribbon: styleNote.text = tr("Светящаяся лента плавно изгибается на тёмном фоне.")
+        case .fluid: styleNote.text = tr("Перетекающая неоновая жидкость со светящимися краями.")
+        case .silk: styleNote.text = tr("Большие мягкие формы со светящейся каймой, как шёлк.")
+        case .fibers: styleNote.text = tr("Световые нити текут сверху вниз.")
+        case .wave: styleNote.text = tr("Светящаяся лента из тонких линий плавно изгибается.")
+        case .orb: styleNote.text = tr("Светящаяся сфера с медленно вращающимися кольцами.")
+        case .prism: styleNote.text = tr("Переливающаяся стеклянная сфера.")
         case .haze: styleNote.text = tr("Мягкий туман цвета обложки, как матовое стекло.")
         }
     }
