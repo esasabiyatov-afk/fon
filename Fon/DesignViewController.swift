@@ -40,7 +40,6 @@ final class DesignViewController: UIViewController {
         navigationItem.standardAppearance = appearance
         navigationItem.scrollEdgeAppearance = appearance
 
-        backdrop.coversOthers = true
         backdrop.frame = view.bounds
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(backdrop)
@@ -189,16 +188,6 @@ final class DesignViewController: UIViewController {
         updateGlow()
     }
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        backdrop.setCovering(true)
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        backdrop.setCovering(false)
-    }
-
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewHolder.layer.shadowPath = UIBezierPath(roundedRect: preview.frame, cornerRadius: 10).cgPath
@@ -255,12 +244,6 @@ final class DesignViewController: UIViewController {
         case .soft: styleNote.text = tr("Размытая обложка плавно вращается, мягкие пятна её цветов.")
         case .neon: styleNote.text = tr("Яркие контрастные пятна и лучи на чёрном, цвета переливаются.")
         case .black: styleNote.text = tr("Глубокий чёрный с лёгким свечением — тёмное видео сливается с фоном.")
-        case .fluid: styleNote.text = tr("Перетекающая неоновая жидкость со светящимися краями.")
-        case .silk: styleNote.text = tr("Большие мягкие формы со светящейся каймой, как шёлк.")
-        case .fibers: styleNote.text = tr("Световые нити текут сверху вниз.")
-        case .wave: styleNote.text = tr("Светящаяся лента из тонких линий плавно изгибается.")
-        case .orb: styleNote.text = tr("Светящаяся сфера с медленно вращающимися кольцами.")
-        case .prism: styleNote.text = tr("Переливающаяся стеклянная сфера.")
         case .haze: styleNote.text = tr("Мягкий туман цвета обложки, как матовое стекло.")
         }
     }

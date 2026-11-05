@@ -40,20 +40,6 @@ enum BackdropStyle: Int, CaseIterable {
     case neon = 1
     /// Чёрный: почти чёрный фон с едва заметным свечением — тёмное видео «выходит» за рамку.
     case black = 2
-    // Шейдеры (`ShaderBackdrop`, с 1.97; по референсам владельца). Номера 3–5 были у линий 1.95–1.96 — выбранное
-    // тогда переходит на похожий шейдер.
-    /// Жидкость: перетекающая неоновая жидкость со светящимися краями.
-    case fluid = 7
-    /// Шёлк: большие мягкие формы со светящейся каймой.
-    case silk = 3
-    /// Нити: световые волокна, текущие сверху вниз.
-    case fibers = 4
-    /// Волна: светящаяся лента из тонких линий.
-    case wave = 5
-    /// Сфера: светящаяся сфера с кольцами.
-    case orb = 8
-    /// Перелив: переливающаяся «стеклянная» сфера.
-    case prism = 9
     /// Туман: мягкий матовый туман цвета обложки, как матовое стекло.
     case haze = 6
 
@@ -62,12 +48,6 @@ enum BackdropStyle: Int, CaseIterable {
         case .soft: return tr("Мягкий")
         case .neon: return tr("Неон")
         case .black: return tr("Чёрный")
-        case .fluid: return tr("Жидкость")
-        case .silk: return tr("Шёлк")
-        case .fibers: return tr("Нити")
-        case .wave: return tr("Волна")
-        case .orb: return tr("Сфера")
-        case .prism: return tr("Перелив")
         case .haze: return tr("Туман")
         }
     }

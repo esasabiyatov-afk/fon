@@ -18,34 +18,15 @@ final class LiveBackdrop: UIView {
     private let shade = CAGradientLayer()
     /// Дополнительное затемнение — для фона под лентами (содержимое должно читаться).
     private let dimLayer = CALayer()
-    var dim: Float = 0 { didSet { dimLayer.opacity = dim; shaderView?.dim = dim } }
+    var dim: Float = 0 { didSet { dimLayer.opacity = dim } }
     /// Неоновые лучи — косые светящиеся полосы, медленно проходят по экрану (владелец: «motion background, neon»).
     private var beams: [CAGradientLayer] = []
-    /// Стили-шейдеры (жидкость, шёлк, нити, волна, сферы): своя картинка на видеокарте поверх всего (`ShaderBackdrop`).
-    /// В 1.95–1.96 вместо них были линии `CAShapeLayer` — владелец: «дешёвые анимации, как в паинте; где такие графики?».
-    private var shaderView: ShaderBackdrop?
-    /// Этот фон закрывает собой весь экран (настройщик «Оформление»): пока он открыт, шейдеры остальных фонов
-    /// (под лентами, в плеере) стоят — их не видно, а считать два шейдера сразу незачем.
-    var coversOthers = false
-    private static var covering = 0
-    private static let coverChanged = Notification.Name("FonBackdropCoverChanged")
-
-    /// Вызывают экраны с фоном во весь экран: появился / ушёл.
-    func setCovering(_ on: Bool) {
-        guard coversOthers else { return }
-        Self.covering = max(0, Self.covering + (on ? 1 : -1))
-        NotificationCenter.default.post(name: Self.coverChanged, object: nil)
-    }
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     var style: BackdropStyle = Settings.backdropStyle {
         didSet { if style != oldValue { restyle() } }
     }
-    /// Шейдер не собрался или нет видеокарты — вместо стилей-шейдеров обычный «Неон».
-    private var look: Look {
-        let look = Look.of(style)
-        return look.shader != nil && !ShaderBackdrop.available ? Look.of(.neon) : look
-    }
+    private var look: Look { Look.of(style) }
     /// Последняя картинка и её цвета «как есть» — при смене стиля перекрашиваем без новой загрузки.
     private var rawColors: [UIColor] = []
     private var lastCycle = true
@@ -99,9 +80,6 @@ final class LiveBackdrop: UIView {
         nc.addObserver(forName: Settings.designChanged, object: nil, queue: .main) { [weak self] _ in
             self?.style = Settings.backdropStyle
         }
-        nc.addObserver(forName: Self.coverChanged, object: nil, queue: .main) { [weak self] _ in
-            self?.updateShaderActivity()
-        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -123,8 +101,6 @@ final class LiveBackdrop: UIView {
         var baseBrightness: CGFloat?
         /// Яркое ядро у пятна — неоновое свечение, а не мягкое облако.
         var core: Bool
-        /// Форма шейдера (`ShaderBackdrop.shape`); nil — обычный фон из слоёв.
-        var shader: Int?
 
         static func of(_ style: BackdropStyle) -> Look {
             switch style {
@@ -140,11 +116,6 @@ final class LiveBackdrop: UIView {
                 return Look(imageOpacity: (0.1, 0), blobCount: 2, blobSize: 0.7, blobOpacity: 0.4,
                             drift: (26, 6, 0.15, 0.1), pulse: (0.9, 1.15, 12, 3), beams: false, cycle: false,
                             shade: (0, 0, 0.35), baseBrightness: nil, core: false)
-            case .fluid, .silk, .fibers, .wave, .orb, .prism:
-                let shape: [BackdropStyle: Int] = [.fluid: 0, .silk: 1, .fibers: 2, .wave: 3, .orb: 4, .prism: 5]
-                return Look(imageOpacity: (0, 0), blobCount: 0, blobSize: 0.5, blobOpacity: 0,
-                            drift: (20, 5, 0.1, 0.1), pulse: (1, 1, 10, 2), beams: false, cycle: false,
-                            shade: (0, 0, 0), baseBrightness: nil, core: false, shader: shape[style])
             case .haze:
                 return Look(imageOpacity: (0.95, 0.55), blobCount: 2, blobSize: 0.8, blobOpacity: 0.3,
                             drift: (24, 6, 0.2, 0.12), pulse: (0.9, 1.2, 12, 3), beams: false, cycle: false,
@@ -170,44 +141,6 @@ final class LiveBackdrop: UIView {
         shade.colors = [UIColor(white: 0, alpha: look.shade.0).cgColor, UIColor(white: 0, alpha: look.shade.1).cgColor,
                         UIColor(white: 0, alpha: look.shade.2).cgColor]
         CATransaction.commit()
-        updateShader()
-    }
-
-    /// Шейдер — только у стилей-шейдеров; у остальных его нет (и он ничего не считает).
-    private func updateShader() {
-        if let shape = look.shader {
-            let view = shaderView ?? ShaderBackdrop()
-            if shaderView == nil {
-                shaderView = view
-                view.frame = bounds
-                view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                addSubview(view)
-            }
-            view.shape = shape
-            view.dim = dim
-            if !toned.isEmpty { view.setColors(toned) }
-            updateShaderActivity()
-        } else if let view = shaderView {
-            view.setActive(false)
-            view.removeFromSuperview()
-            shaderView = nil
-        }
-    }
-
-    /// Шейдер считает, только пока фон виден и приложение открыто.
-    private func updateShaderActivity() {
-        shaderView?.setActive(!isHidden && window != nil && layer.speed != 0
-                              && UIApplication.shared.applicationState != .background
-                              && (coversOthers || Self.covering == 0))
-    }
-
-    override var isHidden: Bool {
-        didSet { updateShaderActivity() }
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        updateShaderActivity()
     }
 
     /// Стиль поменяли в настройщике: заново прозрачности, цвета и движение (без новой загрузки картинки).
@@ -365,7 +298,6 @@ final class LiveBackdrop: UIView {
             layer.speed = 0
             layer.timeOffset = paused
         }
-        updateShaderActivity()
     }
 
     // MARK: - Под видео — по миниатюрам кадров (отдельно от плеера)
@@ -475,7 +407,6 @@ final class LiveBackdrop: UIView {
         base.backgroundColor = (look.baseBrightness.map { Self.darkened(toned[0], to: $0) } ?? .black).cgColor
         CATransaction.commit()
         animateColors()
-        shaderView?.setColors(toned)
     }
 
     /// Уменьшенная (64 px) и размытая копия — растянутая на экран, она гладкая и почти ничего не стоит.
@@ -534,12 +465,6 @@ final class LiveBackdrop: UIView {
             return UIColor(hue: hue, saturation: s, brightness: min(1, max(0.92, bri * 1.4)), alpha: 1)
         case .black:
             return UIColor(hue: hue, saturation: min(1, sat * 1.2 + 0.05), brightness: min(0.8, max(0.45, bri)), alpha: 1)
-        case .fluid, .silk, .fibers:
-            return UIColor(hue: hue, saturation: min(1, max(0.5, sat * 1.2)), brightness: 0.95, alpha: 1)
-        case .wave, .orb:
-            return UIColor(hue: hue, saturation: min(1, max(0.6, sat * 1.3)), brightness: 1, alpha: 1)
-        case .prism:
-            return UIColor(hue: hue, saturation: min(1, sat * 0.9 + 0.1), brightness: 0.9, alpha: 1)
         case .haze:
             return UIColor(hue: hue, saturation: sat * 0.55, brightness: min(0.85, max(0.45, bri * 0.9)), alpha: 1)
         }
