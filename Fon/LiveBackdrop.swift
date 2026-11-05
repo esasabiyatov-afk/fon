@@ -24,6 +24,18 @@ final class LiveBackdrop: UIView {
     /// Стили-шейдеры (жидкость, шёлк, нити, волна, сферы): своя картинка на видеокарте поверх всего (`ShaderBackdrop`).
     /// В 1.95–1.96 вместо них были линии `CAShapeLayer` — владелец: «дешёвые анимации, как в паинте; где такие графики?».
     private var shaderView: ShaderBackdrop?
+    /// Этот фон закрывает собой весь экран (настройщик «Оформление»): пока он открыт, шейдеры остальных фонов
+    /// (под лентами, в плеере) стоят — их не видно, а считать два шейдера сразу незачем.
+    var coversOthers = false
+    private static var covering = 0
+    private static let coverChanged = Notification.Name("FonBackdropCoverChanged")
+
+    /// Вызывают экраны с фоном во весь экран: появился / ушёл.
+    func setCovering(_ on: Bool) {
+        guard coversOthers else { return }
+        Self.covering = max(0, Self.covering + (on ? 1 : -1))
+        NotificationCenter.default.post(name: Self.coverChanged, object: nil)
+    }
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     var style: BackdropStyle = Settings.backdropStyle {
@@ -86,6 +98,9 @@ final class LiveBackdrop: UIView {
         }
         nc.addObserver(forName: Settings.designChanged, object: nil, queue: .main) { [weak self] _ in
             self?.style = Settings.backdropStyle
+        }
+        nc.addObserver(forName: Self.coverChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.updateShaderActivity()
         }
     }
 
@@ -182,7 +197,8 @@ final class LiveBackdrop: UIView {
     /// Шейдер считает, только пока фон виден и приложение открыто.
     private func updateShaderActivity() {
         shaderView?.setActive(!isHidden && window != nil && layer.speed != 0
-                              && UIApplication.shared.applicationState != .background)
+                              && UIApplication.shared.applicationState != .background
+                              && (coversOthers || Self.covering == 0))
     }
 
     override var isHidden: Bool {

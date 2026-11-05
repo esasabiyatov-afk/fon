@@ -32,11 +32,31 @@ final class ShaderBackdrop: MTKView, MTKViewDelegate {
 
     private let queue: MTLCommandQueue?
     /// Номер формы в шейдере: 0 жидкость, 1 шёлк, 2 нити, 3 волна, 4 сфера, 5 перелив.
-    var shape: Int = 0 {
-        didSet {
-            // Тонким линиям (волна, сфера) нужна чёткость; мягким формам хватает точки на пиксель.
-            contentScaleFactor = shape == 3 || shape == 4 ? min(UIScreen.main.scale, 2) : 1
+    var shape: Int = 0 { didSet { updateQuality() } }
+
+    /// Разрешение и частота кадров (оптимизация, просьба владельца «оптимизируй»): мягким формам хватает
+    /// 0,75 пикселя на точку (растягивается плавно, разницы не видно), нитям — 1, тонким линиям (волна, сфера) — 1,5;
+    /// 30 кадров/с. В режиме энергосбережения — 24 кадра и чуть меньше пикселей, телефон греется — 15 кадров и 0,5.
+    private func updateQuality() {
+        var scale: CGFloat
+        switch shape {
+        case 3, 4: scale = min(UIScreen.main.scale, 1.5)
+        case 2: scale = 1
+        default: scale = 0.75
         }
+        var fps = 30
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            fps = 24
+            scale = max(0.5, scale * 0.8)
+        }
+        switch ProcessInfo.processInfo.thermalState {
+        case .serious, .critical:
+            fps = 15
+            scale = 0.5
+        default: break
+        }
+        if contentScaleFactor != scale { contentScaleFactor = scale }
+        if preferredFramesPerSecond != fps { preferredFramesPerSecond = fps }
     }
     var dim: Float = 0
     private var colors: [SIMD3<Float>] = [SIMD3(0.3, 0.8, 1), SIMD3(0.45, 0.4, 1), SIMD3(0.9, 0.4, 0.9)]
@@ -57,6 +77,11 @@ final class ShaderBackdrop: MTKView, MTKViewDelegate {
         contentScaleFactor = 1
         // Каждый фон начинает со своего места — не одинаковые картинки в плеере и под лентами.
         time = Float.random(in: 0...60)
+        updateQuality()
+        let nc = NotificationCenter.default
+        for name in [Notification.Name.NSProcessInfoPowerStateDidChange, ProcessInfo.thermalStateDidChangeNotification] {
+            nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.updateQuality() }
+        }
     }
 
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

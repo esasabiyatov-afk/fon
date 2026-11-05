@@ -106,6 +106,8 @@ float3 fibersStyle(float2 pt, float W, float t, float3 c1, float3 c2) {
 float3 waveStyle(float2 pt, float W, float H, float t, float3 c2, float3 c3) {
     float px = (pt.x - W * 0.5) / H;
     float py = (pt.y - H * 0.42) / H;
+    // Лента не выходит за ±0,1 высоты (+ свечение): дальше — ничего не считаем (экономия: 72 экспоненты на точку).
+    if (abs(py) > 0.17) return float3(0.0);
     float env = exp(-(px / 0.4) * (px / 0.4));
     float acc = 0.0, glow = 0.0;
     const int N = 36;

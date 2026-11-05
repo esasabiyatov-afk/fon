@@ -40,6 +40,7 @@ final class DesignViewController: UIViewController {
         navigationItem.standardAppearance = appearance
         navigationItem.scrollEdgeAppearance = appearance
 
+        backdrop.coversOthers = true
         backdrop.frame = view.bounds
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(backdrop)
@@ -186,6 +187,16 @@ final class DesignViewController: UIViewController {
         updateNote()
         updatePanel()
         updateGlow()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        backdrop.setCovering(true)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        backdrop.setCovering(false)
     }
 
     override func viewDidLayoutSubviews() {
