@@ -40,24 +40,40 @@ enum BackdropStyle: Int, CaseIterable {
     case neon
     /// Чёрный: почти чёрный фон с едва заметным свечением — тёмное видео «выходит» за рамку.
     case black
+    /// Контур: тонкие светящиеся линии-контуры плывут по глубокому чёрному (референсы владельца: «шёлк» с голубой каймой).
+    case contour
+    /// Аврора: много тонких световых нитей, как северное сияние.
+    case aurora
+    /// Лента: светящаяся лента волной.
+    case ribbon
+    /// Туман: мягкий матовый туман цвета обложки, как матовое стекло.
+    case haze
 
     var title: String {
         switch self {
         case .soft: return tr("Мягкий")
         case .neon: return tr("Неон")
         case .black: return tr("Чёрный")
+        case .contour: return tr("Контур")
+        case .aurora: return tr("Аврора")
+        case .ribbon: return tr("Лента")
+        case .haze: return tr("Туман")
         }
     }
 }
 
 enum PanelStyle: Int, CaseIterable {
-    case matte, gloss, off
+    case matte = 0, gloss = 1
+    /// Светлое матовое стекло, как карточки на референсах владельца.
+    case frost = 3
+    case off = 2
 
     var title: String {
         switch self {
         case .matte: return tr("Матовое")
         case .gloss: return tr("Глянец")
         case .off: return tr("Без")
+        case .frost: return tr("Светлое")
         }
     }
 }

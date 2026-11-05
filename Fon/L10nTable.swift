@@ -148,5 +148,14 @@ enum L10nTable {
         "Закрыть окно": "Close",
         "Микс YouTube": "YouTube mix",
         "Готово": "Done",
+        "Контур": "Contour",
+        "Аврора": "Aurora",
+        "Лента": "Ribbon",
+        "Туман": "Haze",
+        "Светлое": "Frost",
+        "Тонкие светящиеся контуры плывут по глубокому чёрному.": "Thin glowing outlines drift across deep black.",
+        "Мягкие световые нити, как северное сияние.": "Soft threads of light, like an aurora.",
+        "Светящаяся лента плавно изгибается на тёмном фоне.": "A glowing ribbon gently bends on a dark background.",
+        "Мягкий туман цвета обложки, как матовое стекло.": "Soft haze in the cover's colors, like frosted glass.",
     ]
 }

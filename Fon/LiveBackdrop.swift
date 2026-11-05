@@ -21,6 +21,10 @@ final class LiveBackdrop: UIView {
     var dim: Float = 0 { didSet { dimLayer.opacity = dim } }
     /// Неоновые лучи — косые светящиеся полосы, медленно проходят по экрану (владелец: «motion background, neon»).
     private var beams: [CAGradientLayer] = []
+    /// Светящиеся линии (стили «Контур», «Аврора», «Лента»): до 14 тонких штрихов и столько же широких бледных — «свечение».
+    private let linesHost = CALayer()
+    private var lines: [CAShapeLayer] = []
+    private var linesKey = ""
     private static let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     var style: BackdropStyle = Settings.backdropStyle {
@@ -63,6 +67,16 @@ final class LiveBackdrop: UIView {
             layer.addSublayer(beam)
             beams.append(beam)
         }
+        layer.addSublayer(linesHost)
+        for _ in 0..<28 {
+            let shape = CAShapeLayer()
+            shape.fillColor = nil
+            shape.lineCap = .round
+            shape.lineJoin = .round
+            shape.isHidden = true
+            linesHost.addSublayer(shape)
+            lines.append(shape)
+        }
         shade.locations = [0, 0.45, 1]
         layer.addSublayer(shade)
         dimLayer.backgroundColor = UIColor.black.cgColor
@@ -101,6 +115,18 @@ final class LiveBackdrop: UIView {
         var baseBrightness: CGFloat?
         /// Яркое ядро у пятна — неоновое свечение, а не мягкое облако.
         var core: Bool
+        /// Светящиеся линии (nil — нет).
+        var lines: LineSpec?
+
+        struct LineSpec {
+            var count: Int          // сколько линий (до 14)
+            var vertical: Bool      // вдоль экрана (нити) или поперёк (лента)
+            var width: CGFloat      // толщина штриха
+            var amplitude: CGFloat  // размах изгиба (доля ширины/высоты)
+            var spread: CGFloat     // на какую долю экрана разбросаны линии
+            var phaseStep: CGFloat  // сдвиг фазы между линиями: мало — нити почти параллельны, много — разные кривые
+            var alpha: CGFloat
+        }
 
         static func of(_ style: BackdropStyle) -> Look {
             switch style {
@@ -116,6 +142,25 @@ final class LiveBackdrop: UIView {
                 return Look(imageOpacity: (0.1, 0), blobCount: 2, blobSize: 0.7, blobOpacity: 0.4,
                             drift: (26, 6, 0.15, 0.1), pulse: (0.9, 1.15, 12, 3), beams: false, cycle: false,
                             shade: (0, 0, 0.35), baseBrightness: nil, core: false)
+            case .contour:
+                return Look(imageOpacity: (0.05, 0), blobCount: 2, blobSize: 0.8, blobOpacity: 0.45,
+                            drift: (22, 5, 0.12, 0.1), pulse: (0.9, 1.15, 12, 3), beams: false, cycle: false,
+                            shade: (0, 0, 0.3), baseBrightness: nil, core: false,
+                            lines: LineSpec(count: 5, vertical: false, width: 2.2, amplitude: 0.2, spread: 0.55, phaseStep: 0.9, alpha: 0.95))
+            case .aurora:
+                return Look(imageOpacity: (0.08, 0), blobCount: 2, blobSize: 0.8, blobOpacity: 0.5,
+                            drift: (20, 5, 0.15, 0.1), pulse: (0.85, 1.2, 10, 3), beams: false, cycle: true,
+                            shade: (0, 0.05, 0.4), baseBrightness: nil, core: false,
+                            lines: LineSpec(count: 14, vertical: true, width: 1.3, amplitude: 0.1, spread: 0.7, phaseStep: 0.2, alpha: 0.8))
+            case .ribbon:
+                return Look(imageOpacity: (0.06, 0), blobCount: 1, blobSize: 0.9, blobOpacity: 0.5,
+                            drift: (24, 5, 0.1, 0.1), pulse: (0.9, 1.2, 12, 3), beams: false, cycle: true,
+                            shade: (0, 0.05, 0.4), baseBrightness: nil, core: false,
+                            lines: LineSpec(count: 10, vertical: false, width: 1.5, amplitude: 0.12, spread: 0.16, phaseStep: 0.16, alpha: 0.9))
+            case .haze:
+                return Look(imageOpacity: (0.95, 0.55), blobCount: 2, blobSize: 0.8, blobOpacity: 0.3,
+                            drift: (24, 6, 0.2, 0.12), pulse: (0.9, 1.2, 12, 3), beams: false, cycle: false,
+                            shade: (0.1, 0.2, 0.55), baseBrightness: 0.12, core: false)
             }
         }
     }
@@ -141,7 +186,9 @@ final class LiveBackdrop: UIView {
 
     /// Стиль поменяли в настройщике: заново прозрачности, цвета и движение (без новой загрузки картинки).
     private func restyle() {
-        ([imageA, imageB] + blobs + beams).forEach { $0.removeAllAnimations() }
+        ([imageA, imageB] + blobs + beams + lines).forEach { $0.removeAllAnimations() }
+        linesHost.removeAllAnimations()
+        linesKey = ""
         applyLook()
         if !rawColors.isEmpty { applyColors(animated: true) }
         setNeedsLayout()
@@ -163,8 +210,8 @@ final class LiveBackdrop: UIView {
         }
         let blobSide = max(b.width, b.height) * look.blobSize
         // У «Чёрного» свечение — только у обложки (верх экрана).
-        let spots: [CGPoint] = style == .black
-            ? [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.72, y: 0.36)]
+        let spots: [CGPoint] = look.blobCount <= 2
+            ? [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.72, y: 0.5)]
             : [CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.85, y: 0.35), CGPoint(x: 0.3, y: 0.7),
                CGPoint(x: 0.8, y: 0.85), CGPoint(x: 0.5, y: 0.45)]
         for (blob, spot) in zip(blobs, spots) {
@@ -177,7 +224,57 @@ final class LiveBackdrop: UIView {
             beam.setAffineTransform(CGAffineTransform(rotationAngle: i == 0 ? 0.45 : -0.6))
         }
         CATransaction.commit()
+        buildLines()
         if imageA.animation(forKey: "spin") == nil { startAnimations() }
+    }
+
+    /// Пути светящихся линий под размер и стиль (только при смене размера/стиля).
+    private func buildLines() {
+        let key = "\(style.rawValue)-\(Int(bounds.width))x\(Int(bounds.height))"
+        guard key != linesKey, bounds.width > 0 else { return }
+        linesKey = key
+        let spec = look.lines
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        linesHost.frame = bounds
+        for (i, shape) in lines.enumerated() {
+            let main = i < 14
+            let k = i % 14
+            guard let spec, k < spec.count else {
+                shape.isHidden = true
+                shape.path = nil
+                continue
+            }
+            shape.isHidden = false
+            shape.frame = linesHost.bounds
+            shape.path = Self.curve(k, spec, size: bounds.size)
+            shape.lineWidth = main ? spec.width : spec.width * 5
+            shape.opacity = Float(main ? spec.alpha : spec.alpha * 0.22)
+            if !toned.isEmpty { shape.strokeColor = toned[k % toned.count].cgColor }
+        }
+        CATransaction.commit()
+    }
+
+    /// Плавная кривая через весь экран: волна из двух синусов, у линий свой сдвиг фазы.
+    private static func curve(_ k: Int, _ spec: Look.LineSpec, size: CGSize) -> CGPath {
+        let long = spec.vertical ? size.height : size.width
+        let across = spec.vertical ? size.width : size.height
+        let n = CGFloat(max(1, spec.count - 1))
+        let t = spec.count > 1 ? CGFloat(k) / n : 0.5
+        let base = across * (0.5 + (t - 0.5) * spec.spread * (spec.vertical ? 1.4 : 1.6))
+        let phase = CGFloat(k) * spec.phaseStep
+        let amp = across * spec.amplitude * (0.85 + 0.3 * sin(CGFloat(k) * 1.7))
+        let path = CGMutablePath()
+        let steps = 48
+        for s in 0...steps {
+            let u = CGFloat(s) / CGFloat(steps)
+            let along = long * (-0.15 + 1.3 * u)
+            let wave = sin(u * 2 * .pi * 1.1 + phase) + 0.5 * sin(u * 2 * .pi * 2.3 + phase * 1.7)
+            let offset = base + amp * wave
+            let point = spec.vertical ? CGPoint(x: offset, y: along) : CGPoint(x: along, y: offset)
+            if s == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        return path
     }
 
     // MARK: - Движение
@@ -242,6 +339,43 @@ final class LiveBackdrop: UIView {
                 glow.autoreverses = true
                 glow.repeatCount = .infinity
                 beam.add(glow, forKey: "glow")
+            }
+        }
+        if let spec = look.lines {
+            // Линии: вся группа чуть покачивается, каждая линия сдвигается и мерцает по-своему — шёлковое движение.
+            let sway = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+            sway.values = [0, 0.045, -0.035, 0]
+            sway.duration = 38
+            sway.calculationMode = .cubic
+            sway.repeatCount = .infinity
+            linesHost.add(sway, forKey: "sway")
+            for (i, shape) in lines.enumerated() where !shape.isHidden {
+                let k = i % 14
+                let move = CABasicAnimation(keyPath: spec.vertical ? "transform.translation.x" : "transform.translation.y")
+                let distance = (spec.vertical ? w : h) * (0.015 + 0.004 * CGFloat(k % 5))
+                move.fromValue = -distance
+                move.toValue = distance
+                move.duration = 8 + Double(k) * 0.7
+                move.autoreverses = true
+                move.repeatCount = .infinity
+                move.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                shape.add(move, forKey: "move")
+                let along = CABasicAnimation(keyPath: spec.vertical ? "transform.translation.y" : "transform.translation.x")
+                let shift = (spec.vertical ? h : w) * 0.05
+                along.fromValue = -shift
+                along.toValue = shift
+                along.duration = 14 + Double(k) * 1.1
+                along.autoreverses = true
+                along.repeatCount = .infinity
+                along.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                shape.add(along, forKey: "along")
+                let glow = CABasicAnimation(keyPath: "opacity")
+                glow.fromValue = shape.opacity * 0.5
+                glow.toValue = shape.opacity
+                glow.duration = 5 + Double(k) * 0.5
+                glow.autoreverses = true
+                glow.repeatCount = .infinity
+                shape.add(glow, forKey: "glow")
             }
         }
         animateColors()
@@ -400,6 +534,9 @@ final class LiveBackdrop: UIView {
         for (i, beam) in beams.enumerated() {
             beam.colors = beamStops(toned[(i * 2) % toned.count])
         }
+        for (i, shape) in lines.enumerated() {
+            shape.strokeColor = toned[(i % 14) % toned.count].cgColor
+        }
         base.backgroundColor = (look.baseBrightness.map { Self.darkened(toned[0], to: $0) } ?? .black).cgColor
         CATransaction.commit()
         animateColors()
@@ -461,6 +598,14 @@ final class LiveBackdrop: UIView {
             return UIColor(hue: hue, saturation: s, brightness: min(1, max(0.92, bri * 1.4)), alpha: 1)
         case .black:
             return UIColor(hue: hue, saturation: min(1, sat * 1.2 + 0.05), brightness: min(0.8, max(0.45, bri)), alpha: 1)
+        case .contour:
+            return UIColor(hue: hue, saturation: min(1, max(0.5, sat * 1.2)), brightness: 0.95, alpha: 1)
+        case .aurora:
+            return UIColor(hue: hue, saturation: min(1, max(0.7, sat * 1.4)), brightness: 0.9, alpha: 1)
+        case .ribbon:
+            return UIColor(hue: hue, saturation: min(1, max(0.6, sat * 1.3)), brightness: 1, alpha: 1)
+        case .haze:
+            return UIColor(hue: hue, saturation: sat * 0.55, brightness: min(0.85, max(0.45, bri * 0.9)), alpha: 1)
         }
     }
 
@@ -484,6 +629,14 @@ final class GlassPanel: UIView {
     private let rimMask = CAShapeLayer()
     var cornerRadius: CGFloat = 30 { didSet { setNeedsLayout() } }
     /// Глянец (блик, полоса отражения, яркая кромка) или матовое стекло — тема в настройщике «Оформление».
+    /// Светлое матовое стекло (тема «Светлое»): белёсая подложка и яркая кромка, без бликов.
+    var frosted = false {
+        didSet {
+            guard !native else { return }
+            layer.backgroundColor = (frosted ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0.04, alpha: 0.16)).cgColor
+            if frosted { rim.opacity = 1 }
+        }
+    }
     var glossy = true {
         didSet {
             sheen.isHidden = !glossy

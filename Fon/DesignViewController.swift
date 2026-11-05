@@ -10,7 +10,9 @@ final class DesignViewController: UIViewController {
     private let preview = UIImageView()
     private let previewHolder = UIView()
     private let panel = GlassPanel()
-    private let styleControl = UISegmentedControl(items: BackdropStyle.allCases.map(\.title))
+    /// Стили фона — «чипсы» в прокручиваемой полосе (их семь, в сегменты не влезают).
+    private let styleScroll = UIScrollView()
+    private var styleChips: [UIButton] = []
     private let panelControl = UISegmentedControl(items: PanelStyle.allCases.map(\.title))
     private let glowSwitch = UISwitch()
     private let everywhereSwitch = UISwitch()
@@ -82,17 +84,41 @@ final class DesignViewController: UIViewController {
         panel.cornerRadius = 26
         card.addSubview(panel)
 
-        styleControl.selectedSegmentIndex = Settings.backdropStyle.rawValue
+        let chipRow = UIStackView()
+        chipRow.axis = .horizontal
+        chipRow.spacing = 8
+        chipRow.translatesAutoresizingMaskIntoConstraints = false
+        styleScroll.showsHorizontalScrollIndicator = false
+        styleScroll.translatesAutoresizingMaskIntoConstraints = false
+        styleScroll.addSubview(chipRow)
+        for (index, style) in BackdropStyle.allCases.enumerated() {
+            let chip = UIButton(type: .system)
+            chip.setTitle(style.title, for: .normal)
+            chip.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+            chip.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+            chip.layer.cornerRadius = 17
+            chip.addAction(UIAction { [weak self] _ in self?.styleChanged(index) }, for: .touchUpInside)
+            chipRow.addArrangedSubview(chip)
+            styleChips.append(chip)
+        }
+        NSLayoutConstraint.activate([
+            chipRow.leadingAnchor.constraint(equalTo: styleScroll.contentLayoutGuide.leadingAnchor),
+            chipRow.trailingAnchor.constraint(equalTo: styleScroll.contentLayoutGuide.trailingAnchor),
+            chipRow.topAnchor.constraint(equalTo: styleScroll.contentLayoutGuide.topAnchor),
+            chipRow.bottomAnchor.constraint(equalTo: styleScroll.contentLayoutGuide.bottomAnchor),
+            chipRow.heightAnchor.constraint(equalTo: styleScroll.frameLayoutGuide.heightAnchor),
+            styleScroll.heightAnchor.constraint(equalToConstant: 36)
+        ])
+        updateChips()
         panelControl.selectedSegmentIndex = PanelStyle.allCases.firstIndex(of: Settings.panelStyle) ?? 0
         glowSwitch.isOn = Settings.artworkGlow
         everywhereSwitch.isOn = Settings.ambientEverywhere
-        for control in [styleControl, panelControl] {
+        for control in [panelControl] {
             control.selectedSegmentTintColor = UIColor(white: 1, alpha: 0.28)
             control.backgroundColor = UIColor(white: 0, alpha: 0.25)
             control.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
         }
         [glowSwitch, everywhereSwitch].forEach { $0.onTintColor = PlayerView.accent }
-        styleControl.addAction(UIAction { [weak self] _ in self?.styleChanged() }, for: .valueChanged)
         panelControl.addAction(UIAction { [weak self] _ in self?.panelChanged() }, for: .valueChanged)
         glowSwitch.addAction(UIAction { [weak self] _ in
             Settings.artworkGlow = self?.glowSwitch.isOn ?? true
@@ -108,7 +134,7 @@ final class DesignViewController: UIViewController {
         styleNote.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let rows = UIStackView(arrangedSubviews: [
-            header(tr("Фон")), styleControl, styleNote,
+            header(tr("Фон")), styleScroll, styleNote,
             header(tr("Подложка под кнопками")), panelControl,
             switchRow(tr("Ореол вокруг обложки"), glowSwitch),
             switchRow(tr("Живой фон на всех экранах"), everywhereSwitch)
@@ -191,9 +217,20 @@ final class DesignViewController: UIViewController {
         return row
     }
 
-    private func styleChanged() {
-        Settings.backdropStyle = BackdropStyle(rawValue: styleControl.selectedSegmentIndex) ?? .soft
+    private func styleChanged(_ index: Int) {
+        guard BackdropStyle.allCases.indices.contains(index) else { return }
+        Settings.backdropStyle = BackdropStyle.allCases[index]
+        updateChips()
         updateNote()
+    }
+
+    private func updateChips() {
+        let current = BackdropStyle.allCases.firstIndex(of: Settings.backdropStyle) ?? 0
+        for (index, chip) in styleChips.enumerated() {
+            let selected = index == current
+            chip.backgroundColor = selected ? UIColor(white: 1, alpha: 0.28) : UIColor(white: 0, alpha: 0.25)
+            chip.setTitleColor(.white, for: .normal)
+        }
     }
 
     private func panelChanged() {
@@ -207,12 +244,17 @@ final class DesignViewController: UIViewController {
         case .soft: styleNote.text = tr("Размытая обложка плавно вращается, мягкие пятна её цветов.")
         case .neon: styleNote.text = tr("Яркие контрастные пятна и лучи на чёрном, цвета переливаются.")
         case .black: styleNote.text = tr("Глубокий чёрный с лёгким свечением — тёмное видео сливается с фоном.")
+        case .contour: styleNote.text = tr("Тонкие светящиеся контуры плывут по глубокому чёрному.")
+        case .aurora: styleNote.text = tr("Мягкие световые нити, как северное сияние.")
+        case .ribbon: styleNote.text = tr("Светящаяся лента плавно изгибается на тёмном фоне.")
+        case .haze: styleNote.text = tr("Мягкий туман цвета обложки, как матовое стекло.")
         }
     }
 
     private func updatePanel() {
         panel.isHidden = Settings.panelStyle == .off
         panel.glossy = Settings.panelStyle == .gloss
+        panel.frosted = Settings.panelStyle == .frost
     }
 
     private func updateGlow() {

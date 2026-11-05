@@ -395,6 +395,7 @@ final class MusicPlayerView: UIView {
         let panel = Settings.panelStyle
         panelGlass.isHidden = panel == .off
         panelGlass.glossy = panel == .gloss
+        panelGlass.frosted = panel == .frost
         setGlow(glowColor)
     }
 
