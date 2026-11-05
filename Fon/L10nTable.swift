@@ -146,5 +146,7 @@ enum L10nTable {
         "Версия": "Version",
         "Исходный код на GitHub": "Source code on GitHub",
         "Закрыть окно": "Close",
+        "Микс YouTube": "YouTube mix",
+        "Готово": "Done",
     ]
 }

@@ -29,7 +29,7 @@ final class DesignViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .black
         if navigationController?.viewControllers.first === self { // открыт из плеера листом, а не из ⚙
-            navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
+            navigationItem.rightBarButtonItem = UIBarButtonItem(title: tr("Готово"), image: nil, primaryAction: UIAction { [weak self] _ in
                 self?.dismiss(animated: true)
             })
         }
@@ -46,7 +46,19 @@ final class DesignViewController: UIViewController {
             self?.panel.setTint(colors.first)
             self?.updateGlow()
         }
-        if let artwork { backdrop.setImage(artwork) } else { backdrop.setDefault() }
+        if let artwork {
+            backdrop.setImage(artwork)
+        } else {
+            backdrop.setDefault()
+            // Открыто из настроек (ничего не играет прямо сейчас) — для примера берём последний трек из истории.
+            if let id = Library.shared.history.first?.id {
+                ArtworkLoader.shared.load(id, size: .player) { [weak self] image, _ in
+                    guard let self, let image else { return }
+                    self.preview.image = image
+                    self.backdrop.setImage(image)
+                }
+            }
+        }
 
         let scroll = UIScrollView()
         scroll.alwaysBounceVertical = true
@@ -93,6 +105,7 @@ final class DesignViewController: UIViewController {
         styleNote.font = .systemFont(ofSize: 13)
         styleNote.textColor = UIColor(white: 1, alpha: 0.6)
         styleNote.numberOfLines = 0
+        styleNote.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let rows = UIStackView(arrangedSubviews: [
             header(tr("Фон")), styleControl, styleNote,
@@ -122,9 +135,14 @@ final class DesignViewController: UIViewController {
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             content.topAnchor.constraint(equalTo: guide.topAnchor, constant: 24),
             content.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -32),
+            // Ширина: по экрану с отступами 24, на iPad — не шире 520. Длинные подписи (английский) сжимаются/переносятся,
+            // а не растягивают экран (в английском интерфейсе содержимое выезжало за края).
             content.centerXAnchor.constraint(equalTo: scroll.frameLayoutGuide.centerXAnchor),
-            content.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48).withPriority(.defaultHigh),
+            content.leadingAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.leadingAnchor, constant: 24),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: scroll.frameLayoutGuide.trailingAnchor, constant: -24),
             content.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
+            content.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 24).withPriority(UILayoutPriority(999)),
+            content.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -24).withPriority(UILayoutPriority(999)),
             preview.centerXAnchor.constraint(equalTo: previewHolder.centerXAnchor),
             preview.topAnchor.constraint(equalTo: previewHolder.topAnchor),
             preview.bottomAnchor.constraint(equalTo: previewHolder.bottomAnchor),
@@ -162,6 +180,8 @@ final class DesignViewController: UIViewController {
         label.text = text
         label.font = .systemFont(ofSize: 16)
         label.textColor = .white
+        label.numberOfLines = 0
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.8
         let row = UIStackView(arrangedSubviews: [label, control])

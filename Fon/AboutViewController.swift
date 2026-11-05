@@ -11,7 +11,7 @@ final class AboutViewController: UIViewController {
         title = tr("О приложении")
         view.backgroundColor = .black
         if navigationController?.viewControllers.first === self {
-            navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
+            navigationItem.rightBarButtonItem = UIBarButtonItem(title: tr("Готово"), image: nil, primaryAction: UIAction { [weak self] _ in
                 self?.dismiss(animated: true)
             })
         }

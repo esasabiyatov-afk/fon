@@ -382,9 +382,13 @@ final class OfflineStore {
 
     /// «1,2 ГБ» / «350 МБ».
     static func sizeText(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
+        // Единицы — по языку приложения (ByteCountFormatter берёт язык телефона: «ГБ» в английском интерфейсе).
+        let mb = Double(bytes) / 1_000_000
+        let number = NumberFormatter()
+        number.locale = Locale(identifier: AppLanguage.current == .en ? "en_US" : "ru_RU")
+        number.maximumFractionDigits = mb >= 1000 ? 2 : 0
+        let en = AppLanguage.current == .en
+        if mb >= 1000 { return (number.string(from: NSNumber(value: mb / 1000)) ?? "") + (en ? " GB" : " ГБ") }
+        return (number.string(from: NSNumber(value: mb)) ?? "") + (en ? " MB" : " МБ")
     }
 }

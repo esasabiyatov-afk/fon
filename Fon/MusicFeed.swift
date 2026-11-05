@@ -168,7 +168,7 @@ final class MusicFeed {
     private static func parseFeed(_ dict: [String: Any]) -> (mixes: [MusicItem], videos: [MusicItem]) {
         let mixes: [MusicItem] = (dict["mixes"] as? [[String: Any]] ?? []).compactMap { mix in
             guard let title = mix["title"] as? String, let id = mix["videoId"] as? String else { return nil }
-            return MusicItem(title: title, subtitle: "Микс YouTube", thumb: nil, videoId: id, playlistId: mix["playlistId"] as? String)
+            return MusicItem(title: title, subtitle: tr("Микс YouTube"), thumb: nil, videoId: id, playlistId: mix["playlistId"] as? String)
         }
         let videos: [MusicItem] = (dict["videos"] as? [[String: Any]] ?? []).compactMap { video in
             guard let id = video["id"] as? String else { return nil }
