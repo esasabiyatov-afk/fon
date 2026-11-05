@@ -13,7 +13,7 @@ final class SettingsViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        tableView.backgroundColor = .black
+        tableView.backgroundColor = .clear // виден живой фон, как на остальных экранах (владелец после 1.96)
         nativeSwitch.onTintColor = PlayerView.accent
         nativeSwitch.isOn = Settings.nativeAudio
         nativeSwitch.addTarget(self, action: #selector(nativeChanged), for: .valueChanged)
@@ -81,7 +81,7 @@ final class SettingsViewController: UITableViewController {
             content.image = UIImage(systemName: indexPath.row == 0 ? "info.circle" : "chevron.left.forwardslash.chevron.right")
             content.imageProperties.tintColor = PlayerView.accent
             cell.contentConfiguration = content
-            cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+            cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             cell.accessoryType = .disclosureIndicator
             return cell
         }
@@ -91,7 +91,7 @@ final class SettingsViewController: UITableViewController {
             content.image = UIImage(systemName: "globe")
             content.imageProperties.tintColor = PlayerView.accent
             cell.contentConfiguration = content
-            cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+            cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             cell.accessoryType = .disclosureIndicator
             return cell
         }
@@ -100,7 +100,7 @@ final class SettingsViewController: UITableViewController {
             content.image = UIImage(systemName: "paintpalette")
             content.imageProperties.tintColor = PlayerView.accent
             cell.contentConfiguration = content
-            cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+            cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             cell.accessoryType = .disclosureIndicator
             return cell
         }
@@ -108,7 +108,7 @@ final class SettingsViewController: UITableViewController {
         content.image = UIImage(systemName: "waveform")
         content.imageProperties.tintColor = PlayerView.accent
         cell.contentConfiguration = content
-        cell.backgroundColor = UIColor(white: 0.1, alpha: 1)
+        cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
         cell.selectionStyle = .none
         cell.accessoryView = nativeSwitch
         return cell

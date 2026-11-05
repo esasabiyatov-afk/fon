@@ -129,6 +129,8 @@ enum TrackVersions {
 /// и «＋» — найти и добавить своё. У системного плеера — его очередь, у обычного плеера YouTube — `WebQueue`
 /// (свои добавленные + список YouTube на странице); там же слева «Страница» — страница видео YouTube.
 final class UpNextViewController: UITableViewController, UITableViewDragDelegate, UITableViewDropDelegate {
+    private let backdrop = LiveBackdrop()
+    private var backdropID: String?
     private var tracks: [Track] = []
     private var currentID: String?
     /// Только у обычного плеера: показать страницу YouTube (комментарии, описание).
@@ -143,6 +145,14 @@ final class UpNextViewController: UITableViewController, UITableViewDragDelegate
     override func viewDidLoad() {
         super.viewDidLoad()
         title = tr("Далее")
+        // Тот же живой фон, что в плеере (владелец после 1.96: «темы туда не применяются»).
+        backdrop.dim = 0.35
+        tableView.backgroundView = backdrop
+        tableView.backgroundColor = .clear
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        navigationItem.standardAppearance = appearance
+        navigationItem.scrollEdgeAppearance = appearance
         navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "plus"), style: .plain,
                                                             target: self, action: #selector(addTapped))
         navigationItem.rightBarButtonItem?.accessibilityLabel = tr("Добавить в очередь")
@@ -166,6 +176,12 @@ final class UpNextViewController: UITableViewController, UITableViewDragDelegate
         let audio = UpNext.source
         tracks = audio.upcoming
         currentID = audio.currentTrack?.id
+        if let id = currentID, id != backdropID {
+            backdropID = id
+            ArtworkLoader.shared.load(id, size: .large) { [weak self] image, _ in
+                if let image { self?.backdrop.setImage(image) }
+            }
+        }
         if let track = audio.currentTrack { TrackVersions.prepare(track, rawTitle: audio.rawTitle(for: track.id)) }
         tableView.reloadData()
     }
@@ -198,10 +214,12 @@ final class UpNextViewController: UITableViewController, UITableViewDragDelegate
                 UpNext.source.playNow(track)
                 self?.dismiss(animated: true)
             }
+            cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             return cell
         }
         let cell = tableView.dequeueReusableCell(withIdentifier: "track", for: indexPath) as! QueueTrackCell
         cell.configure(tracks[indexPath.row])
+        cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
         return cell
     }
 

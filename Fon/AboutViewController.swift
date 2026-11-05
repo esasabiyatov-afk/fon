@@ -9,7 +9,7 @@ final class AboutViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = tr("О приложении")
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
         if navigationController?.viewControllers.first === self {
             navigationItem.rightBarButtonItem = UIBarButtonItem(title: tr("Готово"), image: nil, primaryAction: UIAction { [weak self] _ in
                 self?.dismiss(animated: true)

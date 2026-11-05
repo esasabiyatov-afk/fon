@@ -52,6 +52,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let progressView = UIView()
     private let miniArtwork = UIImageView()
     private var miniArtworkID: String?
+    /// Мини-плеер режима музыки — «стекло» под оформление (владелец после 1.96: не вписывался — сплошной серый):
+    /// полупрозрачная подложка, сквозь которую виден живой фон, оттенок цвета обложки и тонкая светлая кромка.
+    /// Без живого размытия (правило: плавность важнее).
+    private let miniTint = CALayer()
     private var progress: CGFloat = 0
 
     // Шапка развёрнутого плеера (режим видео или страница YouTube в режиме музыки)
@@ -91,6 +95,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         super.init(frame: frame)
         backgroundColor = UIColor(white: 0.09, alpha: 1)
         clipsToBounds = true
+        miniTint.isHidden = true
+        layer.insertSublayer(miniTint, at: 0)
+        NotificationCenter.default.addObserver(forName: Settings.designChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.updateVisibility()
+        }
 
         webView = WebViewFactory.make(scripts: [Scripts.common, Scripts.player], handler: self)
         webView.navigationDelegate = self
@@ -271,7 +280,12 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         closeButton.setImage(UIImage(systemName: musicMode ? "forward.fill" : "xmark", withConfiguration: miniSymbols), for: .normal)
         closeButton.accessibilityLabel = musicMode ? tr("Следующий трек") : tr("Закрыть")
         // Мини-плеер режима музыки — карточка чуть светлее фона, как в Apple Music.
-        backgroundColor = isMini && musicMode ? UIColor(white: 0.16, alpha: 1) : UIColor(white: 0.09, alpha: 1)
+        let glass = isMini && musicMode
+        let frost = Settings.panelStyle == .frost
+        backgroundColor = glass ? UIColor(white: frost ? 1 : 0.06, alpha: frost ? 0.16 : 0.5) : UIColor(white: 0.09, alpha: 1)
+        miniTint.isHidden = !glass
+        layer.borderWidth = glass ? 0.5 : 0
+        layer.borderColor = UIColor(white: 1, alpha: frost ? 0.35 : 0.16).cgColor
         miniArtwork.isHidden = !(isMini && musicMode)
         musicView.isHidden = !nativeMusic
         topBar.isHidden = isMini || nativeMusic || isFullscreen
@@ -642,6 +656,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        miniTint.frame = bounds
+        CATransaction.commit()
         let w = bounds.width
         musicView.frame = bounds
         switch mode {
@@ -717,9 +735,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         guard id != miniArtworkID else { return }
         miniArtworkID = id
         onTrackChanged?(id)
-        ArtworkLoader.shared.load(id, size: .small) { [weak self] image, _ in
-            guard self?.miniArtworkID == id else { return }
-            self?.miniArtwork.image = image
+        ArtworkLoader.shared.load(id, size: .small) { [weak self] image, color in
+            guard let self, self.miniArtworkID == id else { return }
+            self.miniArtwork.image = image
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.8)
+            self.miniTint.backgroundColor = (color ?? .clear).withAlphaComponent(0.3).cgColor
+            CATransaction.commit()
         }
     }
 
