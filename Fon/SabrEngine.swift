@@ -223,7 +223,7 @@ final class SabrEngine {
 
     /// Запрос библиотеки к googlevideo — ответ целиком (по сети ~300 КБ за запрос).
     private func fetch(_ id: Int, url: String, method: String, headers: String, body: String) {
-        guard let address = URL(string: url) else { return reply(id, status: 0, type: "", body: "", error: "плохой адрес") }
+        guard let address = URL(string: url) else { return reply(id, status: 0, type: "", body: Data(), error: "плохой адрес") }
         var request = URLRequest(url: address, timeoutInterval: 30)
         request.httpMethod = method
         ((try? JSONSerialization.jsonObject(with: Data(headers.utf8))) as? [String: String])?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
