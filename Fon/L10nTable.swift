@@ -178,5 +178,6 @@ enum L10nTable {
         "Качество": "Quality",
         "Скорость": "Speed",
         "Обычная": "Normal",
+        "Русский (перевод)": "Russian (translated)",
     ]
 }

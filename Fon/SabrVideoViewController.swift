@@ -160,8 +160,10 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
         loading = nil
         let old = session
         session = next
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
         old?.close()
+        restoreSubtitles(item)
         pending = (time, play)
         seekTimer?.invalidate()
         let started = Date()
@@ -276,6 +278,33 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
         if player.rate > 0 { player.rate = speed }
         updateMenu()
         updateNowPlaying()
+    }
+
+    // MARK: - Субтитры (выбор — системной кнопкой плеера, запоминается)
+
+    private var restoringSubtitles = false
+
+    private func restoreSubtitles(_ item: AVPlayerItem) {
+        NotificationCenter.default.removeObserver(self, name: AVPlayerItem.mediaSelectionDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(subtitlesChanged(_:)), name: AVPlayerItem.mediaSelectionDidChangeNotification, object: item)
+        guard let saved = Settings.sabrSubtitles else { return }
+        Task { @MainActor in
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else { return }
+            let option = saved.isEmpty ? nil : group.options.first { $0.extendedLanguageTag == saved || $0.locale?.identifier == saved }
+            guard saved.isEmpty || option != nil else { return }
+            restoringSubtitles = true
+            item.select(option, in: group)
+            restoringSubtitles = false
+        }
+    }
+
+    @objc private func subtitlesChanged(_ note: Notification) {
+        guard !restoringSubtitles, let item = note.object as? AVPlayerItem else { return }
+        Task { @MainActor in
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else { return }
+            let option = item.currentMediaSelection.selectedMediaOption(in: group)
+            Settings.sabrSubtitles = option?.extendedLanguageTag ?? ""
+        }
     }
 
     // MARK: - Фон, PiP, экран блокировки

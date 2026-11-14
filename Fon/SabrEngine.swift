@@ -20,6 +20,16 @@ final class SabrEngine {
         let clientVersion: String
         let formats: [[String: Any]]
         let playerURL: URL?
+        /// Субтитры со страницы (для своего видеоплеера) и длина видео.
+        var captions: [Caption] = []
+        var duration: Double = 0
+    }
+
+    struct Caption {
+        let url: String
+        let name: String
+        let language: String
+        let translatable: Bool
     }
 
     enum Failure: LocalizedError {

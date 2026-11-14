@@ -29,6 +29,10 @@ final class SabrVideoSession {
     /// Готово к воспроизведению (есть начало обеих дорожек) или ошибка — один раз, на главном потоке.
     var onReady: ((String?) -> Void)?
     private var reported = false
+    /// Субтитры: дорожки страницы (+ перевод на русский, если русских нет) и уже скачанные WebVTT.
+    private let captions: [(name: String, language: String, url: String)]
+    private let duration: Double
+    private var subtitles: [Int: String] = [:]
 
     static let folder: URL = {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("sabr-video", isDirectory: true)
@@ -64,6 +68,19 @@ final class SabrVideoSession {
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         self.id = id
         self.quality = quality
+        duration = source.duration
+        var list = source.captions.map { (name: $0.name, language: $0.language, url: $0.url) }
+        if !source.captions.contains(where: { $0.language.hasPrefix("ru") }),
+           let first = source.captions.first(where: { $0.translatable && !$0.url.contains("kind=asr") }) ?? source.captions.first(where: \.translatable) {
+            list.append((name: tr("Русский (перевод)"), language: "ru", url: first.url + "&tlang=ru"))
+        }
+        // Названия в группе должны различаться.
+        var seen: [String: Int] = [:]
+        captions = list.map { item in
+            seen[item.name, default: 0] += 1
+            let count = seen[item.name] ?? 1
+            return count > 1 ? (name: "\(item.name) \(count)", language: item.language, url: item.url) : item
+        }
         Self.removeOld()
         video = FragmentedTrack(file: Self.folder.appendingPathComponent("\(id)-v.mp4"))
         audio = FragmentedTrack(file: Self.folder.appendingPathComponent("\(id)-a.mp4"))
@@ -160,13 +177,47 @@ final class SabrVideoSession {
             #EXT-X-VERSION:7
             #EXT-X-INDEPENDENT-SEGMENTS
             #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,URI="a.m3u8"
-            #EXT-X-STREAM-INF:BANDWIDTH=\(quality.bitrate + 140_000),CODECS="\(quality.codecs),mp4a.40.2"\(resolution),FRAME-RATE=\(quality.fps),AUDIO="aud"
+            \(subtitleMedia)#EXT-X-STREAM-INF:BANDWIDTH=\(quality.bitrate + 140_000),CODECS="\(quality.codecs),mp4a.40.2"\(resolution),FRAME-RATE=\(quality.fps),AUDIO="aud"\(captions.isEmpty || duration <= 0 ? "" : ",SUBTITLES=\"subs\"")
             v.m3u8
 
             """
+        case _ where name.hasPrefix("s"):
+            guard let index = Int(name.dropFirst().dropLast(5)), captions.indices.contains(index), duration > 0 else { return nil }
+            let length = String(format: "%.3f", duration)
+            return "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:\(Int(duration.rounded(.up)))\n#EXT-X-MEDIA-SEQUENCE:0\n"
+                + "#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:\(length),\ns\(index).vtt\n#EXT-X-ENDLIST\n"
         case "v.m3u8": return video.playlist(media: "v.mp4", finished: finished)
         case "a.m3u8": return audio.playlist(media: "a.mp4", finished: finished)
         default: return nil
+        }
+    }
+
+    /// Строки субтитров для master (под замком).
+    private var subtitleMedia: String {
+        guard duration > 0 else { return "" }
+        return captions.enumerated().map { index, item in
+            let name = item.name.replacingOccurrences(of: "\"", with: "'")
+            let language = item.language.isEmpty ? "" : ",LANGUAGE=\"\(item.language)\""
+            return "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"\(name)\"\(language),DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI=\"s\(index).m3u8\"\n"
+        }.joined()
+    }
+
+    /// WebVTT дорожки `s<i>.vtt`: YouTube json3 → свой WebVTT (чище, чем их vtt с «бегущими» строками), не вышло — их vtt.
+    /// Не скачалось — пустой WebVTT (плеер не ломается).
+    func subtitle(_ name: String, completion: @escaping (String) -> Void) {
+        guard name.hasPrefix("s"), name.hasSuffix(".vtt"), let index = Int(name.dropFirst().dropLast(4)) else { return completion(Subtitles.empty) }
+        lock.lock()
+        let cached = subtitles[index]
+        let item = captions.indices.contains(index) ? captions[index] : nil
+        lock.unlock()
+        if let cached { return completion(cached) }
+        guard let item else { return completion(Subtitles.empty) }
+        Task {
+            let text = await Subtitles.load(item.url)
+            self.lock.lock()
+            if text != Subtitles.empty { self.subtitles[index] = text }
+            self.lock.unlock()
+            completion(text)
         }
     }
 
@@ -468,6 +519,11 @@ final class LocalHLSServer {
         lock.unlock()
         guard let session, path.count == 2 else { return send(connection, status: "404 Not Found", type: "text/plain", body: Data()) }
         let name = path[1]
+        if name.hasSuffix(".vtt") {
+            return session.subtitle(name) { text in
+                self.queue.async { self.send(connection, status: "200 OK", type: "text/vtt", body: Data(text.utf8), head: method == "HEAD") }
+            }
+        }
         if name.hasSuffix(".m3u8") {
             guard let text = session.playlist(name) else { return send(connection, status: "404 Not Found", type: "text/plain", body: Data()) }
             return send(connection, status: "200 OK", type: "application/vnd.apple.mpegurl", body: Data(text.utf8), head: method == "HEAD")
@@ -508,5 +564,56 @@ final class LocalHLSServer {
         var data = Data(header.joined(separator: "\r\n").utf8)
         if !head { data.append(body) }
         connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+}
+
+/// Субтитры YouTube (timedtext) → WebVTT для HLS.
+enum Subtitles {
+    static let empty = "WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000\n\n"
+
+    static func load(_ base: String) async -> String {
+        if let data = await fetch(base + "&fmt=json3"), let text = fromJSON3(data) { return text }
+        if let data = await fetch(base + "&fmt=vtt"), var text = String(data: data, encoding: .utf8), text.hasPrefix("WEBVTT") {
+            if !text.contains("X-TIMESTAMP-MAP") {
+                let end = text.firstIndex(of: "\n") ?? text.endIndex
+                text.insert(contentsOf: "\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000", at: end)
+            }
+            return text
+        }
+        return empty
+    }
+
+    private static func fetch(_ address: String) async -> Data? {
+        guard let url = URL(string: address) else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue(YouTubeStreams.iPhoneSafariUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return nil }
+        return data
+    }
+
+    /// json3: events[] с tStartMs, dDurationMs и segs[].utf8.
+    static func fromJSON3(_ data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let events = object["events"] as? [[String: Any]] else { return nil }
+        var lines = [empty]
+        var count = 0
+        for event in events {
+            guard let segments = event["segs"] as? [[String: Any]], let start = event["tStartMs"] as? Double else { continue }
+            let text = segments.compactMap { $0["utf8"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let length = event["dDurationMs"] as? Double ?? 2000
+            let escaped = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            lines.append("\(stamp(start)) --> \(stamp(start + max(length, 300)))\n\(escaped)\n\n")
+            count += 1
+        }
+        return count > 0 ? lines.joined() : nil
+    }
+
+    private static func stamp(_ ms: Double) -> String {
+        let total = Int(ms.rounded())
+        return String(format: "%02d:%02d:%02d.%03d", total / 3_600_000, total / 60_000 % 60, total / 1000 % 60, total % 1000)
     }
 }

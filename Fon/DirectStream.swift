@@ -119,6 +119,18 @@ enum DirectStream {
                                             clientName: number(in: data, after: "\"INNERTUBE_CONTEXT_CLIENT_NAME\":") ?? 1,
                                             clientVersion: YouTubeStreams.string(in: data, after: "\"INNERTUBE_CLIENT_VERSION\":\"") ?? "2.20261112.10.00",
                                             formats: adaptive, playerURL: js)
+            result.sabr?.duration = Double((response["videoDetails"] as? [String: Any])?["lengthSeconds"] as? String ?? "") ?? 0
+            let tracks = ((response["captions"] as? [String: Any])?["playerCaptionsTracklistRenderer"] as? [String: Any])?["captionTracks"] as? [[String: Any]] ?? []
+            result.sabr?.captions = tracks.compactMap { track in
+                guard let url = track["baseUrl"] as? String else { return nil }
+                let name = track["name"] as? [String: Any]
+                let title = name?["simpleText"] as? String
+                    ?? (name?["runs"] as? [[String: Any]])?.compactMap { $0["text"] as? String }.joined() ?? ""
+                let language = track["languageCode"] as? String ?? ""
+                return SabrEngine.Caption(url: url.hasPrefix("/") ? YouTubeStreams.origin + url : url,
+                                          name: title.isEmpty ? language : title, language: language,
+                                          translatable: track["isTranslatable"] as? Bool ?? false)
+            }
         }
         // Для диагностики: есть ли у ответа свой протокол YouTube и какие поля у выбранного формата.
         let sabr = streaming["serverAbrStreamingUrl"] != nil ? "SABR: да" : "SABR: нет"

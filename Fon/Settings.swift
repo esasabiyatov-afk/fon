@@ -36,6 +36,12 @@ extension Settings {
         set { UserDefaults.standard.set(newValue, forKey: "sabrVideoHeight") }
     }
 
+    /// Субтитры своего видеоплеера: код языка выбранной дорожки, "" — выключены, nil — не выбирали.
+    static var sabrSubtitles: String? {
+        get { UserDefaults.standard.string(forKey: "sabrSubtitles") }
+        set { UserDefaults.standard.set(newValue, forKey: "sabrSubtitles") }
+    }
+
     static var sabrVideoSpeed: Float {
         get { UserDefaults.standard.object(forKey: "sabrVideoSpeed") as? Float ?? 1 }
         set { UserDefaults.standard.set(newValue, forKey: "sabrVideoSpeed") }
