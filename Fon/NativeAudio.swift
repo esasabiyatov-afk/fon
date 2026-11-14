@@ -130,6 +130,8 @@ enum YouTubeStreams {
         var reason: String?
         /// У форматов на странице не нашлось ссылок (повтор без cookies посетителя может помочь).
         var noLinks = false
+        /// Адрес и настройки SABR со страницы — для устройств без обычных ссылок (`SabrEngine`).
+        var sabr: SabrEngine.Source?
     }
 
     /// Очередь плейлиста или микса (`next`): треки по порядку.
@@ -357,7 +359,12 @@ final class NativeAudio: NSObject {
     /// YouTube отдаёт этому устройству видео только своим протоколом (SABR, без ссылок — так на iPad владельца, 1.77):
     /// 6 часов сразу играем обычным плеером, без попыток и без окна; потом пробуем снова.
     var sabrOnly: Bool {
-        (UserDefaults.standard.object(forKey: "sabrOnlyUntil") as? Date ?? .distantPast) > Date()
+        // С 1.100 SABR играет системный плеер — отметка прошлых версий («6 ч только обычный плеер») больше не нужна.
+        if !UserDefaults.standard.bool(forKey: "sabrFlagReset100") {
+            UserDefaults.standard.set(true, forKey: "sabrFlagReset100")
+            UserDefaults.standard.removeObject(forKey: "sabrOnlyUntil")
+        }
+        return (UserDefaults.standard.object(forKey: "sabrOnlyUntil") as? Date ?? .distantPast) > Date()
     }
     private var extending = false
     private var statusObservation: NSKeyValueObservation?

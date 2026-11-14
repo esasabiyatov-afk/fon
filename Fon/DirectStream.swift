@@ -10,7 +10,8 @@ enum DirectStream {
     /// На iPad (iPadOS 26.2, вход есть, 1.76) страница отдала форматы без ссылок — «ссылки не разобрались»: похоже, этому
     /// посетителю/аккаунту YouTube включил только свой протокол (SABR). Тогда пробуем ещё раз без cookies экспериментов
     /// посетителя (VISITOR_INFO1_LIVE, PREF…), а затем совсем без cookies — пока не найдётся обычная ссылка.
-    static func find(_ videoID: String) async -> YouTubeStreams.Result {
+    /// `sabr: false` — нужен файл с видео (предпросмотр в ленте), звук по SABR не подходит.
+    static func find(_ videoID: String, sabr allowSABR: Bool = true) async -> YouTubeStreams.Result {
         await YouTubeSession.refreshed()
         let visitor: Set<String> = ["VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "__Secure-ROLLOUT_TOKEN", "PREF", "YSC", "__Secure-YEC"]
         // Cookies входа: без них запрос выглядит как Safari без аккаунта, но со своим посетителем (после 1.98: на iPhone 17
@@ -25,6 +26,7 @@ enum DirectStream {
             ("без входа", nil)
         ]
         var reasons: [String] = []
+        var triedSABR = false
         var last = YouTubeStreams.Result()
         for (index, attempt) in attempts.enumerated() {
             let result = await self.attempt(videoID, cookie: attempt.cookie)
@@ -34,12 +36,31 @@ enum DirectStream {
                 return found
             }
             reasons.append(attempt.label.isEmpty ? (result.reason ?? "?") : "\(attempt.label): \(result.reason ?? "?")")
+            // Обычных ссылок нет (iPad, iPhone 17) — звук по SABR внутри приложения (с 1.100; проба 1.99 — работает).
+            if allowSABR, !triedSABR, result.noLinks, let source = result.sabr {
+                triedSABR = true // один раз: повтор с другими cookies SABR не поможет, а ждать долго
+                do {
+                    let file = try await SabrEngine.shared.download(source)
+                    var found = result
+                    found.streams = [AudioStream(url: file, headers: [:], client: "SABR")]
+                    found.noLinks = false
+                    found.reason = nil
+                    return found
+                } catch {
+                    reasons.append(error.localizedDescription)
+                }
+            }
             // Повтор помогает только когда у форматов нет ссылок; сеть, капча, вход — не лечатся.
             last = result
             last.reason = reasons.joined(separator: "; ")
             guard result.noLinks else { break }
         }
         return last
+    }
+
+    private static func number(in data: Data, after marker: String) -> Int? {
+        guard let found = data.range(of: Data(marker.utf8)) else { return nil }
+        return Int(String(decoding: data[found.upperBound...].prefix { (0x30...0x39).contains($0) }, as: UTF8.self))
     }
 
     private static func attempt(_ videoID: String, cookie: String?) async -> YouTubeStreams.Result {
@@ -78,6 +99,14 @@ enum DirectStream {
         if status != "OK" {
             let why = ((response["playabilityStatus"] as? [String: Any])?["reason"] as? String) ?? ""
             return fail("YouTube: \(status) \(why.prefix(60))")
+        }
+        if let sabrURL = streaming["serverAbrStreamingUrl"] as? String,
+           let config = (((response["playerConfig"] as? [String: Any])?["mediaCommonConfig"] as? [String: Any])?["mediaUstreamerRequestConfig"] as? [String: Any])?["videoPlaybackUstreamerConfig"] as? String {
+            let js = YouTubeStreams.string(in: data, after: "\"jsUrl\":\"").flatMap { URL(string: YouTubeStreams.origin + $0.replacingOccurrences(of: "\\/", with: "/")) }
+            result.sabr = SabrEngine.Source(videoID: videoID, url: sabrURL, config: config,
+                                            clientName: number(in: data, after: "\"INNERTUBE_CONTEXT_CLIENT_NAME\":") ?? 1,
+                                            clientVersion: YouTubeStreams.string(in: data, after: "\"INNERTUBE_CLIENT_VERSION\":\"") ?? "2.20261112.10.00",
+                                            formats: adaptive, playerURL: js)
         }
         // Для диагностики: есть ли у ответа свой протокол YouTube и какие поля у выбранного формата.
         let sabr = streaming["serverAbrStreamingUrl"] != nil ? "SABR: да" : "SABR: нет"

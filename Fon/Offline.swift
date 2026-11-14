@@ -314,6 +314,13 @@ final class OfflineStore {
     private static func download(_ track: Track, to destination: URL) async -> (Int64, String?)? {
         let found = await DirectStream.find(track.id)
         guard let stream = found.streams.first(where: { $0.client == "Прямо звук" }) ?? found.streams.first else { return nil }
+        // Звук по SABR (iPad, iPhone 17) уже лежит файлом m4a — просто копируем.
+        if stream.url.isFileURL {
+            try? FileManager.default.removeItem(at: destination)
+            guard (try? FileManager.default.copyItem(at: stream.url, to: destination)) != nil else { return nil }
+            let size = ((try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
+            return size > 0 ? (size, found.title) : nil
+        }
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
         defer { try? FileManager.default.removeItem(at: temp) }
         FileManager.default.createFile(atPath: temp.path, contents: nil)

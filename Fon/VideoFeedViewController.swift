@@ -459,7 +459,7 @@ final class InlinePreview {
             return
         }
         Task { [weak self] in
-            let found = await DirectStream.find(id)
+            let found = await DirectStream.find(id, sabr: false)
             let stream = found.streams.first { $0.client != "Прямо звук" }
             await MainActor.run {
                 guard let self, self.token == current else { return }

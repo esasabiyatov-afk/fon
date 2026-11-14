@@ -1,0 +1,153 @@
+// Fon: недостающие браузерные функции для JavaScriptCore + запуск SabrStream (SabrEngine.swift). Проверено в node vm против настоящего браузерного окружения — те же запросы и байты.
+// Недостающие браузерные функции для JavaScriptCore (в нём нет URL, потоков, таймеров, TextDecoder…) —
+// ровно то, что использует библиотека googlevideo (SabrStream). Таймеры и запросы — из Swift:
+// __fonNative.timer(id, ms), __fonNative.cancel(id), __fonNative.fetch(id, url, method, headersJSON, bodyB64).
+(function (g) {
+  'use strict';
+  g.console = g.console || { log() {}, warn() {}, error() {}, info() {}, debug() {} };
+  // --- таймеры
+  let timerSeq = 0; const timers = new Map();
+  if (!g.setTimeout) g.setTimeout = function (fn, ms) { const id = ++timerSeq; const args = Array.prototype.slice.call(arguments, 2); timers.set(id, () => fn.apply(null, args)); __fonNative.timer(id, Math.max(0, +ms || 0)); return id; };
+  if (!g.clearTimeout) g.clearTimeout = function (id) { if (timers.delete(id)) __fonNative.cancel(id); };
+  g.__fonFire = function (id) { const fn = timers.get(id); if (!fn) return; timers.delete(id); fn(); };
+  g.performance = g.performance || { now: () => Date.now() };
+  // --- base64
+  const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const LOOKUP = new Uint8Array(256); for (let i = 0; i < 64; i++) LOOKUP[ABC.charCodeAt(i)] = i;
+  LOOKUP['-'.charCodeAt(0)] = 62; LOOKUP['_'.charCodeAt(0)] = 63;
+  g.__fonB64 = function (u8) {
+    let out = ''; let i = 0;
+    for (; i + 2 < u8.length; i += 3) { const n = (u8[i] << 16) | (u8[i + 1] << 8) | u8[i + 2]; out += ABC[n >> 18] + ABC[(n >> 12) & 63] + ABC[(n >> 6) & 63] + ABC[n & 63]; }
+    if (i < u8.length) { const n = (u8[i] << 16) | ((i + 1 < u8.length ? u8[i + 1] : 0) << 8); out += ABC[n >> 18] + ABC[(n >> 12) & 63] + (i + 1 < u8.length ? ABC[(n >> 6) & 63] : '=') + '='; }
+    return out;
+  };
+  g.__fonUnB64 = function (s) {
+    s = String(s || '').replace(/[^A-Za-z0-9+/\-_]/g, '');
+    const len = Math.floor(s.length * 3 / 4); const out = new Uint8Array(len); let o = 0;
+    for (let i = 0; i < s.length; i += 4) {
+      const n = (LOOKUP[s.charCodeAt(i)] << 18) | (LOOKUP[s.charCodeAt(i + 1)] << 12) | ((i + 2 < s.length ? LOOKUP[s.charCodeAt(i + 2)] : 0) << 6) | (i + 3 < s.length ? LOOKUP[s.charCodeAt(i + 3)] : 0);
+      if (o < len) out[o++] = n >> 16; if (o < len && i + 2 < s.length) out[o++] = (n >> 8) & 255; if (o < len && i + 3 < s.length) out[o++] = n & 255;
+    }
+    return o === len ? out : out.subarray(0, o);
+  };
+  g.atob = g.atob || function (s) { const u8 = g.__fonUnB64(s); let r = ''; for (let i = 0; i < u8.length; i++) r += String.fromCharCode(u8[i]); return r; };
+  g.btoa = g.btoa || function (s) { const u8 = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i) & 255; return g.__fonB64(u8); };
+  // --- UTF-8
+  if (!g.TextEncoder) g.TextEncoder = class { encode(str) { str = String(str ?? ''); const out = []; for (let i = 0; i < str.length; i++) { let c = str.charCodeAt(i); if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length) { const d = str.charCodeAt(i + 1); if (d >= 0xdc00 && d < 0xe000) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i++; } } if (c < 0x80) out.push(c); else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63)); else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)); else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)); } return new Uint8Array(out); } get encoding() { return 'utf-8'; } };
+  if (!g.TextDecoder) g.TextDecoder = class { constructor() {} get encoding() { return 'utf-8'; } decode(input) { if (!input) return ''; const u8 = input instanceof Uint8Array ? input : new Uint8Array(input.buffer || input, input.byteOffset || 0, input.byteLength); let s = ''; for (let i = 0; i < u8.length;) { let c = u8[i++]; if (c >= 0xf0 && i + 2 < u8.length + 1) { c = ((c & 7) << 18) | ((u8[i++] & 63) << 12) | ((u8[i++] & 63) << 6) | (u8[i++] & 63); c -= 0x10000; s += String.fromCharCode(0xd800 + (c >> 10), 0xdc00 + (c & 1023)); continue; } if (c >= 0xe0) c = ((c & 15) << 12) | ((u8[i++] & 63) << 6) | (u8[i++] & 63); else if (c >= 0xc0) c = ((c & 31) << 6) | (u8[i++] & 63); s += String.fromCharCode(c); } return s; } };
+  // --- URL (только абсолютные адреса http/https — этого хватает библиотеке)
+  if (!g.URL) {
+    class SearchParams {
+      constructor(query, owner) { this._list = []; this._owner = owner; if (query) for (const part of query.split('&')) { if (!part) continue; const k = part.indexOf('='); const key = k < 0 ? part : part.slice(0, k); const val = k < 0 ? '' : part.slice(k + 1); this._list.push([dec(key), dec(val)]); } }
+      get(name) { const e = this._list.find((x) => x[0] === name); return e ? e[1] : null; }
+      has(name) { return this._list.some((x) => x[0] === name); }
+      set(name, value) { value = String(value); const i = this._list.findIndex((x) => x[0] === name); if (i < 0) this._list.push([name, value]); else { this._list[i][1] = value; this._list = this._list.filter((x, j) => x[0] !== name || j === i); } }
+      append(name, value) { this._list.push([name, String(value)]); }
+      delete(name) { this._list = this._list.filter((x) => x[0] !== name); }
+      forEach(fn) { this._list.forEach((x) => fn(x[1], x[0], this)); }
+      toString() { return this._list.map((x) => enc(x[0]) + '=' + enc(x[1])).join('&'); }
+    }
+    function dec(s) { try { return decodeURIComponent(s.replace(/\+/g, ' ')); } catch (e) { return s; } }
+    function enc(s) { return encodeURIComponent(s).replace(/%20/g, '+'); }
+    g.URL = class URL {
+      constructor(input, base) {
+        input = String(input instanceof URL ? input.href : input);
+        const m = /^([a-z][a-z0-9+.-]*:)\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(input);
+        if (!m) throw new TypeError('Invalid URL: ' + input);
+        this.protocol = m[1].toLowerCase(); const hostPort = m[2]; const c = hostPort.lastIndexOf(':');
+        if (c > 0 && /^\d+$/.test(hostPort.slice(c + 1))) { this.hostname = hostPort.slice(0, c); this.port = hostPort.slice(c + 1); } else { this.hostname = hostPort; this.port = ''; }
+        this.pathname = m[3] || '/'; this.hash = m[5] || '';
+        this.searchParams = new SearchParams((m[4] || '').slice(1), this);
+      }
+      get host() { return this.hostname + (this.port ? ':' + this.port : ''); }
+      get origin() { return this.protocol + '//' + this.host; }
+      get search() { const q = this.searchParams.toString(); return q ? '?' + q : ''; }
+      get href() { return this.protocol + '//' + this.host + this.pathname + this.search + this.hash; }
+      toString() { return this.href; }
+      toJSON() { return this.href; }
+    };
+  }
+  // --- AbortController
+  if (!g.AbortController) {
+    class AbortSignal { constructor() { this.aborted = false; this.reason = undefined; this._l = []; this.onabort = null; } addEventListener(t, fn) { if (t === 'abort') this._l.push(fn); } removeEventListener(t, fn) { this._l = this._l.filter((x) => x !== fn); } throwIfAborted() { if (this.aborted) throw this.reason; } }
+    g.AbortController = class { constructor() { this.signal = new AbortSignal(); } abort(reason) { const s = this.signal; if (s.aborted) return; s.aborted = true; s.reason = reason ?? new Error('AbortError'); const ev = { type: 'abort' }; if (s.onabort) s.onabort(ev); s._l.slice().forEach((fn) => fn(ev)); } };
+  }
+  // --- потоки (минимум ReadableStream: enqueue/close/error, desiredSize, pull при чтении, getReader/read/cancel)
+  if (!g.ByteLengthQueuingStrategy) g.ByteLengthQueuingStrategy = class { constructor(o) { this.highWaterMark = (o && o.highWaterMark) || 0; } size(chunk) { return chunk.byteLength; } };
+  if (!g.ReadableStream) {
+    g.ReadableStream = class ReadableStream {
+      constructor(source, strategy) {
+        source = source || {}; const hwm = strategy && strategy.highWaterMark !== undefined ? strategy.highWaterMark : 1; const size = (strategy && strategy.size) ? (c) => strategy.size(c) : () => 1;
+        const queue = []; let queued = 0; let closed = false; let errored = null; const waiting = []; this.locked = false; const self = this;
+        const flush = () => { while (waiting.length) { if (queue.length) { const c = queue.shift(); queued -= c.size; waiting.shift().ok({ value: c.value, done: false }); } else if (errored) { waiting.shift().fail(errored); } else if (closed) { waiting.shift().ok({ value: undefined, done: true }); } else break; } };
+        const pull = () => { if (source.pull && !closed && !errored) { try { const r = source.pull(controller); if (r && r.catch) r.catch((e) => controller.error(e)); } catch (e) { controller.error(e); } } };
+        const controller = {
+          get desiredSize() { return errored ? null : (closed ? 0 : hwm - queued); },
+          enqueue(chunk) { if (closed || errored) throw new TypeError('stream closed'); const s = size(chunk); if (waiting.length) waiting.shift().ok({ value: chunk, done: false }); else { queue.push({ value: chunk, size: s }); queued += s; } },
+          close() { if (closed || errored) return; closed = true; flush(); },
+          error(e) { if (errored || closed) return; errored = e || new Error('stream error'); queue.length = 0; queued = 0; flush(); }
+        };
+        this._cancel = (reason) => { closed = true; queue.length = 0; queued = 0; flush(); if (source.cancel) { try { return Promise.resolve(source.cancel(reason)); } catch (e) { return Promise.reject(e); } } return Promise.resolve(); };
+        this._read = () => new Promise((ok, fail) => { waiting.push({ ok, fail }); flush(); if (!closed && !errored && hwm - queued > 0) pull(); });
+        if (source.start) { try { source.start(controller); } catch (e) { controller.error(e); } }
+      }
+      getReader() { if (this.locked) throw new TypeError('locked'); this.locked = true; const self = this; return { read: () => self._read(), cancel: (r) => self._cancel(r), releaseLock: () => { self.locked = false; }, get closed() { return Promise.resolve(); } }; }
+      cancel(reason) { return this._cancel(reason); }
+    };
+  }
+  // --- fetch для SabrStream: ответ приходит из Swift целиком
+  let fetchSeq = 0; const fetches = new Map();
+  g.__fonFetch = function (input, init) {
+    init = init || {};
+    return new Promise((ok, fail) => {
+      const id = ++fetchSeq; fetches.set(id, { ok, fail });
+      let body = '';
+      if (init.body) { const b = init.body; body = g.__fonB64(b instanceof Uint8Array ? b : new Uint8Array(b.buffer || b, b.byteOffset || 0, b.byteLength)); }
+      const signal = init.signal; if (signal) signal.addEventListener('abort', () => { if (fetches.delete(id)) fail(new Error('AbortError')); });
+      __fonNative.fetch(id, String(input), init.method || 'GET', JSON.stringify(init.headers || {}), body);
+    });
+  };
+  g.__fonFetchDone = function (id, status, contentType, bodyB64, error) {
+    const f = fetches.get(id); if (!f) return; fetches.delete(id);
+    if (error) { f.fail(new Error(error)); return; }
+    const bytes = g.__fonUnB64(bodyB64); let sent = false;
+    f.ok({ status, ok: status >= 200 && status < 300, statusText: String(status), headers: { get: (n) => (String(n).toLowerCase() === 'content-type' ? contentType : null) },
+      body: { getReader: () => ({ read: () => Promise.resolve(sent || !bytes.length ? { done: true, value: undefined } : (sent = true, { done: false, value: bytes })), cancel: () => Promise.resolve(), releaseLock() {} }) } });
+  };
+})(globalThis);
+
+// Скачивание звука по SABR: __fonSabrDownload(job) → куски в __fonNative.chunk(id, b64), конец — __fonNative.done(id, error, infoJSON).
+(function (g) {
+  g.__fonSabrJobs = g.__fonSabrJobs || {};
+  g.__fonSabrDownload = function (job) {
+    const S = FonSabr; const id = job.id; const log = []; let requests = 0; let stopped = false; let finished = false;
+    const done = (error) => { if (finished) return; finished = true; stopped = true; delete g.__fonSabrJobs[id]; __fonNative.done(id, error || '', JSON.stringify({ log: log.slice(0, 30), requests })); };
+    try {
+      const formats = job.formats.map((f) => { try { return S.buildSabrFormat(f); } catch (e) { return null; } }).filter(Boolean);
+      const audio = formats.find((f) => f.itag === (job.itag || 140)) || formats.find((f) => f.hasAudio && !f.hasVideo && /mp4/.test(f.mimeType || ''));
+      if (!audio) return done('нет звуковой дорожки mp4 (' + formats.length + ' форматов)');
+      const fetchFunction = (input, init) => {
+        if (stopped) return Promise.reject(new Error('остановлено'));
+        requests += 1;
+        // Пустые ответы иначе крутят цикл запросов без паузы.
+        return new Promise((ok) => setTimeout(ok, requests > 1 ? 50 : 0)).then(() => g.__fonFetch(input, init));
+      };
+      const stream = new S.SabrStream({ videoId: job.videoId, serverAbrStreamingUrl: job.url, videoPlaybackUstreamerConfig: job.config,
+        clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction });
+      stream.on('streamProtectionStatusUpdate', (s) => { if (s.status !== 1) log.push('защита потока: ' + s.status); });
+      stream.on('error', (e) => log.push('ошибка: ' + (e && e.message)));
+      const started = stream.start({ audioFormat: audio, enabledTrackTypes: S.EnabledTrackTypes.AUDIO_ONLY, isPostLiveDvr: false, maxRetries: 4 });
+      const reader = started.audioStream.getReader();
+      g.__fonSabrJobs[id] = () => { stopped = true; stream.abort().catch(() => {}); done('отменено'); };
+      const pump = () => reader.read().then((r) => {
+        if (finished) return;
+        if (r.done) return done('');
+        const v = r.value; const u8 = v instanceof Uint8Array ? v : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+        __fonNative.chunk(id, g.__fonB64(u8));
+        return pump();
+      }, (e) => done('чтение: ' + (e && e.message ? e.message : e)));
+      pump();
+    } catch (e) { done('старт: ' + (e && e.message ? e.message : e)); }
+  };
+  g.__fonSabrCancel = function (id) { const c = g.__fonSabrJobs[id]; if (c) c(); };
+})(globalThis);
