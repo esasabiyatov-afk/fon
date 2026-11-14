@@ -13,9 +13,8 @@ enum DirectStream {
     static func find(_ videoID: String) async -> YouTubeStreams.Result {
         await YouTubeSession.refreshed()
         let visitor: Set<String> = ["VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "__Secure-ROLLOUT_TOKEN", "PREF", "YSC", "__Secure-YEC"]
-        // Cookies входа: без них запрос выглядит как Safari без аккаунта, но со своим посетителем. Владелец после 1.98:
-        // на iPhone 17 с другим аккаунтом — «только SABR», а без входа системный плеер работал; запрос совсем без
-        // cookies (новый посетитель каждый раз) там тоже получал SABR — значит, YouTube включил SABR аккаунту.
+        // Cookies входа: без них запрос выглядит как Safari без аккаунта, но со своим посетителем (после 1.98: на iPhone 17
+        // с другим аккаунтом — «только SABR»; если YouTube включил SABR аккаунту, так найдётся обычная ссылка).
         let login: Set<String> = ["SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO", "SIDCC",
                                   "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID", "__Secure-3PAPISID",
                                   "__Secure-1PSIDCC", "__Secure-3PSIDCC", "__Secure-1PSIDTS", "__Secure-3PSIDTS"]
