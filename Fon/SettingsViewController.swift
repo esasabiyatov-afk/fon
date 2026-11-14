@@ -28,7 +28,7 @@ final class SettingsViewController: UITableViewController {
 
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
 
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 1 ? 2 : (section == 2 ? 2 : 1) }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 2 }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         section == 0 ? tr("Воспроизведение") : (section == 1 ? tr("Внешний вид") : tr("О приложении"))
@@ -59,6 +59,25 @@ final class SettingsViewController: UITableViewController {
             : "\n\nСейчас на этом телефоне недоступен: YouTube отдаёт ему поток только в своём формате (SABR), поэтому музыка играет в обычном плеере. Fon попробует снова после \(time) — или выключите и включите переключатель, чтобы попробовать сейчас." + reason
     }
 
+    /// Проба SABR (`SabrProbe`): ~30 с, потом текст с кнопкой «Скопировать» — владелец присылает его.
+    private func runSabrProbe() {
+        let videoID = NativeAudio.shared.currentTrack?.id ?? "dQw4w9WgXcQ"
+        let waiting = UIAlertController(title: "Проверяю SABR…", message: "Около 30 секунд. Не закрывайте экран.", preferredStyle: .alert)
+        present(waiting, animated: true)
+        let host: UIView = view.window ?? view
+        Task { [weak self] in
+            let text = await SabrProbe.run(videoID: videoID, in: host)
+            await MainActor.run {
+                waiting.dismiss(animated: true) {
+                    let alert = UIAlertController(title: "Проверка SABR", message: text, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: tr("Скопировать"), style: .default) { _ in UIPasteboard.general.string = text })
+                    alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+                    self?.present(alert, animated: true)
+                }
+            }
+        }
+    }
+
     /// Язык интерфейса: Авто / Русский / English — после перезапуска.
     private func chooseLanguage() {
         let sheet = UIAlertController(title: tr("Язык"), message: tr("Применится после перезапуска приложения."), preferredStyle: .actionSheet)
@@ -76,7 +95,9 @@ final class SettingsViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        if indexPath.section == 1 {
+        if indexPath.section == 0, indexPath.row == 1 {
+            runSabrProbe()
+        } else if indexPath.section == 1 {
             if indexPath.row == 0 {
                 navigationController?.pushViewController(DesignViewController(artwork: nil), animated: true)
             } else {
@@ -120,6 +141,15 @@ final class SettingsViewController: UITableViewController {
             cell.contentConfiguration = content
             cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             cell.accessoryType = .disclosureIndicator
+            return cell
+        }
+        if indexPath.row == 1 {
+            content.text = "Проверить SABR"
+            content.secondaryText = "проба для iPad/iPhone без системного плеера"
+            content.image = UIImage(systemName: "stethoscope")
+            content.imageProperties.tintColor = PlayerView.accent
+            cell.contentConfiguration = content
+            cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             return cell
         }
         content.text = tr("Системный плеер для музыки")
