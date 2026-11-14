@@ -38,6 +38,12 @@ final class SabrEngine {
     private let queue = DispatchQueue(label: "fon.sabr", qos: .userInitiated)
     private var context: JSContext?
     private var jobs: [Int: Job] = [:]
+    /// Видео для своего видеоплеера (`SabrVideo`): куски дорожек отдаются сразу, на очереди `fon.sabr`.
+    private struct VideoJob {
+        let onData: (Int, Data) -> Void
+        let onDone: (String?) -> Void
+    }
+    private var videoJobs: [Int: VideoJob] = [:]
     private var timers: [Int: DispatchWorkItem] = [:]
     private var nextID = 1
     private var lastException: String?
@@ -59,18 +65,52 @@ final class SabrEngine {
     /// Трек целиком в файл. n в адресе — решателем (как у обычных ссылок).
     func download(_ source: Source) async throws -> URL {
         if let file = Self.cached(source.videoID) { return file }
-        var source = source
-        if var parts = URLComponents(string: source.url), let n = parts.queryItems?.first(where: { $0.name == "n" })?.value,
-           let playerURL = source.playerURL,
-           let solved = try? await ChallengeSolver.shared.solve(playerURL: playerURL, n: [n], signatures: []), let value = solved.n[n] {
-            parts.queryItems = parts.queryItems?.map { $0.name == "n" ? URLQueryItem(name: "n", value: value) : $0 }
-            source.url = parts.url?.absoluteString ?? source.url
-        }
+        let source = await solved(source)
         Self.cleanUp()
         let file = Self.folder.appendingPathComponent(source.videoID + ".m4a")
         return try await withCheckedThrowingContinuation { continuation in
             queue.async { self.start(source, file: file) { continuation.resume(with: $0) } }
         }
+    }
+
+    /// Видео + звук двумя дорожками fMP4 (`SabrVideo`). onData(0 — видео / 1 — звук, байты), onDone(nil — всё пришло,
+    /// иначе причина). Вызовы — на своей очереди. Возвращает номер для `cancel`.
+    func streamVideo(_ source: Source, videoItag: Int, onData: @escaping (Int, Data) -> Void, onDone: @escaping (String?) -> Void) async -> Int {
+        let source = await solved(source)
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                let id = self.nextID
+                self.nextID += 1
+                continuation.resume(returning: id)
+                guard let context = self.prepareContext() else { return onDone("SABR: движок не запустился (\(self.lastException ?? "?"))") }
+                self.videoJobs[id] = VideoJob(onData: onData, onDone: onDone)
+                let job: [String: Any] = ["id": id, "videoId": source.videoID, "url": source.url, "config": source.config, "clientName": source.clientName,
+                                          "clientVersion": source.clientVersion, "videoItag": videoItag, "audioItag": 140, "formats": source.formats]
+                guard let data = try? JSONSerialization.data(withJSONObject: job), let json = String(data: data, encoding: .utf8) else {
+                    return self.complete(id, error: "SABR: форматы не разобрались", info: "")
+                }
+                context.evaluateScript("__fonSabrVideo(\(json))")
+            }
+        }
+    }
+
+    func cancel(_ id: Int) {
+        queue.async {
+            guard self.videoJobs.removeValue(forKey: id) != nil else { return }
+            self.context?.evaluateScript("__fonSabrCancel(\(id))")
+        }
+    }
+
+    /// n в адресе — решателем (как у обычных ссылок).
+    private func solved(_ source: Source) async -> Source {
+        var source = source
+        if var parts = URLComponents(string: source.url), let n = parts.queryItems?.first(where: { $0.name == "n" })?.value,
+           let playerURL = source.playerURL,
+           let answer = try? await ChallengeSolver.shared.solve(playerURL: playerURL, n: [n], signatures: []), let value = answer.n[n] {
+            parts.queryItems = parts.queryItems?.map { $0.name == "n" ? URLQueryItem(name: "n", value: value) : $0 }
+            source.url = parts.url?.absoluteString ?? source.url
+        }
+        return source
     }
 
     // MARK: - На своей очереди
@@ -98,6 +138,11 @@ final class SabrEngine {
     }
 
     private func complete(_ id: Int, error: String, info: String) {
+        if let video = videoJobs.removeValue(forKey: id) {
+            let log = ((try? JSONSerialization.jsonObject(with: Data(info.utf8))) as? [String: Any])?["log"] as? [String] ?? []
+            guard !error.isEmpty else { return video.onDone(nil) }
+            return video.onDone(([error.hasPrefix("SABR") ? error : "SABR: " + error] + log.prefix(3)).joined(separator: "; "))
+        }
         guard let job = jobs.removeValue(forKey: id) else { return }
         try? job.handle.close()
         if error.isEmpty, job.bytes > 10_000 {
@@ -133,12 +178,21 @@ final class SabrEngine {
             job.bytes += data.count
             self.jobs[id] = job
         }
+        // Куски видео — Uint8Array без base64 (в JavaScriptCore приложения нет JIT — перекодирование дорогое).
+        let media: @convention(block) (Int, Int, JSValue) -> Void = { [weak self] id, track, value in
+            guard let self, let job = self.videoJobs[id], let ref = value.context?.jsGlobalContextRef,
+                  let object = JSValueToObject(ref, value.jsValueRef, nil) else { return }
+            let length = JSObjectGetTypedArrayByteLength(ref, object, nil)
+            guard length > 0, let bytes = JSObjectGetTypedArrayBytesPtr(ref, object, nil) else { return }
+            job.onData(track, Data(bytes: bytes, count: length))
+        }
         let done: @convention(block) (Int, String, String) -> Void = { [weak self] id, error, info in self?.complete(id, error: error, info: info) }
         native?.setObject(timer, forKeyedSubscript: "timer" as NSString)
         native?.setObject(cancel, forKeyedSubscript: "cancel" as NSString)
         native?.setObject(fetch, forKeyedSubscript: "fetch" as NSString)
         native?.setObject(chunk, forKeyedSubscript: "chunk" as NSString)
         native?.setObject(done, forKeyedSubscript: "done" as NSString)
+        native?.setObject(media, forKeyedSubscript: "media" as NSString)
         context.setObject(native, forKeyedSubscript: "__fonNative" as NSString)
         lastException = nil
         context.evaluateScript(runtime) // окружение и запуск (FonSabr нужен только при вызове)
@@ -171,13 +225,25 @@ final class SabrEngine {
             let http = response as? HTTPURLResponse
             self?.queue.async {
                 self?.reply(id, status: http?.statusCode ?? 0, type: http?.value(forHTTPHeaderField: "Content-Type") ?? "",
-                            body: (data ?? Data()).base64EncodedString(), error: error?.localizedDescription ?? "")
+                            body: data ?? Data(), error: error?.localizedDescription ?? "")
             }
         }.resume()
     }
 
-    private func reply(_ id: Int, status: Int, type: String, body: String, error: String) {
-        context?.objectForKeyedSubscript("__fonFetchDone")?.call(withArguments: [id, status, type, body, error])
+    /// Ответ — готовым Uint8Array (байты кладутся напрямую), не base64: видео — десятки МБ.
+    private func reply(_ id: Int, status: Int, type: String, body: Data, error: String) {
+        guard let context, let ref = context.jsGlobalContextRef else { return }
+        var payload: Any = ""
+        if !body.isEmpty {
+            if let array = JSObjectMakeTypedArray(ref, kJSTypedArrayTypeUint8Array, body.count, nil),
+               let bytes = JSObjectGetTypedArrayBytesPtr(ref, array, nil), let value = JSValue(jsValueRef: array, in: context) {
+                body.copyBytes(to: bytes.assumingMemoryBound(to: UInt8.self), count: body.count)
+                payload = value
+            } else {
+                payload = body.base64EncodedString()
+            }
+        }
+        context.objectForKeyedSubscript("__fonFetchDone")?.call(withArguments: [id, status, type, payload, error])
     }
 
     private static func text(_ name: String) -> String? {

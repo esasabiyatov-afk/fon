@@ -163,5 +163,20 @@ enum L10nTable {
         "Светящаяся лента из тонких линий плавно изгибается.": "A glowing ribbon of thin lines gently bends.",
         "Светящаяся сфера с медленно вращающимися кольцами.": "A glowing sphere with slowly turning rings.",
         "Переливающаяся стеклянная сфера.": "An iridescent glass sphere.",
+        // Свой видеоплеер (SABR)
+        "SABR: видео не пришло": "SABR: no video arrived",
+        "Свой плеер": "Own player",
+        "Загрузка по SABR…": "Loading via SABR…",
+        "не запустился сервер внутри приложения": "the in-app server did not start",
+        "нет видео H.264 (mp4)": "no H.264 (mp4) video",
+        "слишком долго нет видео": "video is taking too long",
+        "сервер внутри приложения остановился": "the in-app server stopped",
+        "плеер iOS не открыл видео": "the iOS player could not open the video",
+        "Качество не сменилось": "Quality did not change",
+        "Свой плеер не запустился": "Own player did not start",
+        "Обычный плеер": "Regular player",
+        "Качество": "Quality",
+        "Скорость": "Speed",
+        "Обычная": "Normal",
     ]
 }

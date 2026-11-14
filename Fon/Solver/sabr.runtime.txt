@@ -110,7 +110,8 @@
   g.__fonFetchDone = function (id, status, contentType, bodyB64, error) {
     const f = fetches.get(id); if (!f) return; fetches.delete(id);
     if (error) { f.fail(new Error(error)); return; }
-    const bytes = g.__fonUnB64(bodyB64); let sent = false;
+    // Ответ приходит готовым Uint8Array (Swift кладёт байты сам) — в старом виде base64-строкой.
+    const bytes = typeof bodyB64 === 'string' ? g.__fonUnB64(bodyB64) : (bodyB64 || new Uint8Array(0)); let sent = false;
     f.ok({ status, ok: status >= 200 && status < 300, statusText: String(status), headers: { get: (n) => (String(n).toLowerCase() === 'content-type' ? contentType : null) },
       body: { getReader: () => ({ read: () => Promise.resolve(sent || !bytes.length ? { done: true, value: undefined } : (sent = true, { done: false, value: bytes })), cancel: () => Promise.resolve(), releaseLock() {} }) } });
   };
@@ -150,4 +151,41 @@
     } catch (e) { done('старт: ' + (e && e.message ? e.message : e)); }
   };
   g.__fonSabrCancel = function (id) { const c = g.__fonSabrJobs[id]; if (c) c(); };
+})(globalThis);
+
+// Видео по SABR (свой видеоплеер): __fonSabrVideo(job) — видео и звук двумя дорожками fMP4,
+// куски — __fonNative.media(id, 0 видео / 1 звук, Uint8Array), конец — __fonNative.done(id, error, infoJSON).
+(function (g) {
+  const own = (v) => { const u8 = v instanceof Uint8Array ? v : new Uint8Array(v.buffer, v.byteOffset, v.byteLength); return (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) ? u8 : u8.slice(); };
+  g.__fonSabrVideo = function (job) {
+    const S = FonSabr; const id = job.id; const log = []; let requests = 0; let stopped = false; let finished = false; let open = 2;
+    const done = (error) => { if (finished) return; finished = true; stopped = true; delete g.__fonSabrJobs[id]; __fonNative.done(id, error || '', JSON.stringify({ log: log.slice(0, 30), requests })); };
+    try {
+      const formats = job.formats.map((f) => { try { return S.buildSabrFormat(f); } catch (e) { return null; } }).filter(Boolean);
+      const video = formats.find((f) => f.itag === job.videoItag);
+      const audio = formats.find((f) => f.itag === (job.audioItag || 140)) || formats.find((f) => f.hasAudio && !f.hasVideo && /mp4/.test(f.mimeType || ''));
+      if (!video) return done('нет видео itag ' + job.videoItag + ' (' + formats.length + ' форматов)');
+      if (!audio) return done('нет звуковой дорожки mp4');
+      const fetchFunction = (input, init) => {
+        if (stopped) return Promise.reject(new Error('остановлено'));
+        requests += 1;
+        return new Promise((ok) => setTimeout(ok, requests > 1 ? 50 : 0)).then(() => g.__fonFetch(input, init));
+      };
+      const stream = new S.SabrStream({ videoId: job.videoId, serverAbrStreamingUrl: job.url, videoPlaybackUstreamerConfig: job.config,
+        clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction });
+      stream.on('streamProtectionStatusUpdate', (s) => { if (s.status !== 1) log.push('защита потока: ' + s.status); });
+      stream.on('error', (e) => log.push('ошибка: ' + (e && e.message)));
+      const started = stream.start({ videoFormat: video, audioFormat: audio, enabledTrackTypes: S.EnabledTrackTypes.VIDEO_AND_AUDIO,
+        isPostLiveDvr: false, maxRetries: 6, startTimeMs: job.startTimeMs || 0 });
+      g.__fonSabrJobs[id] = () => { stopped = true; stream.abort().catch(() => {}); done('отменено'); };
+      const pump = (reader, track) => reader.read().then((r) => {
+        if (finished) return;
+        if (r.done) { open -= 1; if (open === 0) done(''); return; }
+        __fonNative.media(id, track, own(r.value));
+        return pump(reader, track);
+      }, (e) => done('чтение: ' + (e && e.message ? e.message : e)));
+      pump(started.videoStream.getReader(), 0);
+      pump(started.audioStream.getReader(), 1);
+    } catch (e) { done('старт: ' + (e && e.message ? e.message : e)); }
+  };
 })(globalThis);

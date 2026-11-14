@@ -58,6 +58,18 @@ enum DirectStream {
         return last
     }
 
+    /// Данные SABR для своего видеоплеера (`SabrVideo`): страница видео со входом, а нет — как без входа и без cookies.
+    static func sabrSource(_ videoID: String) async -> (source: SabrEngine.Source?, title: String?, author: String?, reason: String?) {
+        await YouTubeSession.refreshed()
+        var reasons: [String] = []
+        for cookie in [YouTubeSession.cookieHeader, nil] {
+            let result = await attempt(videoID, cookie: cookie)
+            if let source = result.sabr { return (source, result.title, result.author, nil) }
+            reasons.append(result.reason ?? "нет SABR на странице")
+        }
+        return (nil, nil, nil, reasons.joined(separator: "; "))
+    }
+
     private static func number(in data: Data, after marker: String) -> Int? {
         guard let found = data.range(of: Data(marker.utf8)) else { return nil }
         return Int(String(decoding: data[found.upperBound...].prefix { (0x30...0x39).contains($0) }, as: UTF8.self))

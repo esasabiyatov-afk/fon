@@ -64,6 +64,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private let topTitleLabel = UILabel()
     private let musicButton = UIButton(type: .system)
     private let pipButton = UIButton(type: .system)
+    /// Свой видеоплеер (SABR, просьба владельца после 1.100): качество, скорость, фон, PiP.
+    private let nativeVideoButton = UIButton(type: .system)
+    private var nativeVideoShown = false
     /// ♡ в режиме видео — сохраняет видео в «Понравившиеся» режима музыки (плейлист «Fon — музыка»).
     private let likeButton = UIButton(type: .system)
     /// Полный экран: сверху кнопка выхода и название — показываются вместе с панелью YouTube (просьба владельца после 1.71).
@@ -173,9 +176,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
         likeButton.tintColor = .white
         likeButton.addTarget(self, action: #selector(likeTapped(_:)), for: .touchUpInside)
+        nativeVideoButton.setImage(UIImage(systemName: "play.tv", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)), for: .normal)
+        nativeVideoButton.tintColor = .white
+        nativeVideoButton.accessibilityLabel = tr("Свой плеер")
+        nativeVideoButton.addTarget(self, action: #selector(nativeVideoTapped), for: .touchUpInside)
         updateLikeButton()
         NotificationCenter.default.addObserver(self, selector: #selector(updateLikeButton), name: CloudLikes.didChange, object: nil)
-        [collapseButton, likeButton, pipButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
+        [collapseButton, likeButton, pipButton, nativeVideoButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
         addSubview(topBar)
         fullBar.exitButton.addTarget(self, action: #selector(exitFullTapped), for: .touchUpInside)
         fullBar.alpha = 0
@@ -290,6 +297,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         musicView.isHidden = !nativeMusic
         topBar.isHidden = isMini || nativeMusic || isFullscreen
         pipButton.isHidden = musicMode
+        nativeVideoButton.isHidden = musicMode
         likeButton.isHidden = musicMode // в режиме музыки ♡ — в самом музыкальном плеере
         updateMusicButton()
     }
@@ -433,6 +441,38 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// «Картинка в картинке». Вызов из приложения WebKit считает нажатием пользователя, поэтому PiP разрешён.
     @objc private func pipTapped() {
         command("pip")
+    }
+
+    /// Видео — в свой плеер (SABR) с того же места; веб-страница на паузе, а когда свой заиграл — выгружается
+    /// (два плеера спорили бы за экран блокировки). Закрыли — страница снова с того места, где остановились.
+    @objc private func nativeVideoTapped() {
+        guard !musicMode, !nativeVideoShown, let id = currentVideoID, var top = window?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        let pageURL = webView.url
+        let wasPaused = webPaused
+        var unloaded = false
+        nativeVideoShown = true
+        command("pause")
+        let controller = SabrVideoViewController(videoID: id, title: topTitleLabel.text ?? "", startTime: webTime)
+        controller.onStarted = { [weak self] in
+            unloaded = true
+            self?.webView.load(URLRequest(url: URL(string: "about:blank")!))
+        }
+        controller.onClose = { [weak self] time in
+            guard let self else { return }
+            self.nativeVideoShown = false
+            guard unloaded else {
+                if !wasPaused { self.command("play") }
+                return
+            }
+            // Страница снова — с того места, где остановился свой плеер.
+            var components = URLComponents(string: "https://m.youtube.com/watch")
+            let list = pageURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }?.first { $0.name == "list" }?.value
+            components?.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(Int(time ?? self.webTime))s")]
+                + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
+            if let url = components?.url { self.webView.load(URLRequest(url: url)) }
+        }
+        top.present(controller, animated: true)
     }
 
     func command(_ name: String) {
@@ -707,8 +747,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             collapseButton.frame = CGRect(x: safeAreaInsets.left + 4, y: top, width: 48, height: 44)
             pipButton.frame = CGRect(x: w - safeAreaInsets.right - 100, y: top, width: 48, height: 44)
             likeButton.frame = CGRect(x: w - safeAreaInsets.right - 148, y: top, width: 48, height: 44)
+            nativeVideoButton.frame = CGRect(x: w - safeAreaInsets.right - 196, y: top, width: 48, height: 44)
             musicButton.frame = CGRect(x: w - safeAreaInsets.right - 52, y: top, width: 48, height: 44)
-            topTitleLabel.frame = CGRect(x: safeAreaInsets.left + 56, y: top, width: max(0, w - safeAreaInsets.left - safeAreaInsets.right - 56 - 152), height: 44)
+            topTitleLabel.frame = CGRect(x: safeAreaInsets.left + 56, y: top, width: max(0, w - safeAreaInsets.left - safeAreaInsets.right - 56 - 200), height: 44)
             // Шапку YouTube (логотип, поиск, ⋮; 48 pt) прячем под нашей верхней панелью: страница сдвинута вверх на её высоту.
             // Убирать шапку стилями нельзя — от её высоты считаются прилипающие блоки страницы (вышел зазор над чипами).
             webView.frame = CGRect(x: safeAreaInsets.left, y: topBar.frame.maxY - pageHeaderHeight,

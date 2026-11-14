@@ -1,4 +1,4 @@
-import Foundation
+import UIKit
 
 /// Общие настройки приложения (живут в UserDefaults).
 enum Settings {
@@ -28,6 +28,17 @@ extension Settings {
     static var nativeAudio: Bool {
         get { UserDefaults.standard.object(forKey: "nativeAudio") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "nativeAudio") }
+    }
+
+    /// Свой видеоплеер (SABR): выбранное качество (высота кадра) и скорость — запоминаются.
+    static var sabrVideoHeight: Int {
+        get { UserDefaults.standard.object(forKey: "sabrVideoHeight") as? Int ?? (UIDevice.current.userInterfaceIdiom == .pad ? 1080 : 720) }
+        set { UserDefaults.standard.set(newValue, forKey: "sabrVideoHeight") }
+    }
+
+    static var sabrVideoSpeed: Float {
+        get { UserDefaults.standard.object(forKey: "sabrVideoSpeed") as? Float ?? 1 }
+        set { UserDefaults.standard.set(newValue, forKey: "sabrVideoSpeed") }
     }
 }
 
