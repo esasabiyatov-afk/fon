@@ -21,6 +21,9 @@ final class SettingsViewController: UITableViewController {
 
     @objc private func nativeChanged() {
         Settings.nativeAudio = nativeSwitch.isOn
+        // Переключили — значит, хотят попробовать снова: забываем «только SABR» (иначе ждать до 6 ч).
+        UserDefaults.standard.removeObject(forKey: "sabrOnlyUntil")
+        tableView.reloadSections(IndexSet(integer: 0), with: .none)
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
@@ -39,6 +42,21 @@ final class SettingsViewController: UITableViewController {
             + tr("Только с ним работает ползунок громкости в плеере (музыку можно сделать тише игры). ")
             + tr("Если YouTube не отдаст поток, трек сам включится в обычном плеере. ")
             + tr("Включится со следующего трека, который вы откроете.")
+            + unavailableNote
+    }
+
+    /// YouTube не дал этому телефону обычной ссылки (только свой протокол SABR) — Fon тихо играет обычным плеером.
+    /// Пишем это здесь, чтобы было видно, почему системного плеера нет (жалоба владельца: на iPhone 17 его нет).
+    private var unavailableNote: String {
+        guard Settings.nativeAudio, NativeAudio.shared.sabrOnly,
+              let until = UserDefaults.standard.object(forKey: "sabrOnlyUntil") as? Date else { return "" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        let time = formatter.string(from: until)
+        let reason = UserDefaults.standard.string(forKey: "sabrOnlyReason").map { "\n\n" + $0 } ?? ""
+        return AppLanguage.current == .en
+            ? "\n\nNot available on this device right now: YouTube gives it the stream only in its own format (SABR), so music plays in the regular player. Fon will try again after \(time), or turn the switch off and on to try now." + reason
+            : "\n\nСейчас на этом телефоне недоступен: YouTube отдаёт ему поток только в своём формате (SABR), поэтому музыка играет в обычном плеере. Fon попробует снова после \(time) — или выключите и включите переключатель, чтобы попробовать сейчас." + reason
     }
 
     /// Язык интерфейса: Авто / Русский / English — после перезапуска.
