@@ -66,6 +66,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
     ]
     private let modeTabIndex = 2
     private let libraryTabIndex = 4
+    /// В режиме музыки на месте «Подписок» — «Понравившиеся» (просьба владельца после 1.102).
+    private let subscriptionsTabIndex = 3
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
     override var prefersStatusBarHidden: Bool { playerState == .expanded && playerView.isFullscreen }
@@ -434,13 +436,12 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         homeController().pushViewController(list, animated: true)
     }
 
-    /// «Подписки» в режиме музыки — исполнители и их новые треки.
+    /// Режим музыки: вкладка «Понравившиеся» (вместо «Подписок» — просьба владельца после 1.102).
     private func subscriptionsController() -> UINavigationController {
         if let subscriptionsNav { return subscriptionsNav }
-        let subscriptions = MusicHomeViewController(kind: .subscriptions)
-        subscriptions.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
-        subscriptions.onSearch = { [weak self] in self?.presentSearch(prefill: nil) }
-        let nav = embed(subscriptions)
+        let liked = TrackListViewController(kind: .liked)
+        liked.onPlay = { [weak self] url, source, queue in self?.play(url, source: source, queue: queue) }
+        let nav = embed(liked)
         subscriptionsNav = nav
         return nav
     }
@@ -483,7 +484,7 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         // Режим видео — своя лента «Главной»; веб-страница — когда в неё ушла ссылка (флаг `musicFeedShown` для обоих режимов).
         case .home: return music ? (musicFeedShown ? .web("/#fon-music") : .musicHome) : (musicFeedShown ? .web("/") : .videoHome)
         case .history: return music ? .history : .web("/feed/history")
-        // Подписки в режиме музыки — только исполнители и их музыка.
+        // В режиме музыки на месте «Подписок» — «Понравившиеся».
         case .subscriptions: return music ? .musicSubscriptions : .videoSubscriptions
         case .you: return music ? .library : .web("/feed/library")
         case .mode: return .none
@@ -572,7 +573,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
                 (homeNav?.viewControllers.first as? MusicHomeViewController)?.scrollToTop()
             }
         case .musicSubscriptions:
-            (subscriptionsNav?.viewControllers.first as? MusicHomeViewController)?.scrollToTop()
+            if subscriptionsNav?.viewControllers.count ?? 0 > 1 {
+                subscriptionsNav?.popToRootViewController(animated: true)
+            } else {
+                (subscriptionsNav?.viewControllers.first as? UITableViewController)?.tableView.setContentOffset(.zero, animated: true)
+            }
         case .videoHome:
             (videoHomeNav?.viewControllers.first as? VideoFeedViewController)?.scrollToTop()
         case .videoSubscriptions:
@@ -663,6 +668,8 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
             tabBar.setItem(modeTabIndex, title: tr("Видео"), icon: "play.rectangle")
         }
         tabBar.setItem(libraryTabIndex, title: music ? tr("Медиатека") : tr("Вы"), icon: music ? "square.stack.fill" : "person.crop.circle")
+        tabBar.setItem(subscriptionsTabIndex, title: music ? tr("Понравившиеся") : tr("Подписки"), icon: music ? "heart.fill" : "play.rectangle.on.rectangle")
+        sidebar.setItem(subscriptionsTabIndex, title: music ? tr("Понравившиеся") : tr("Подписки"), icon: music ? "heart.fill" : "play.rectangle.on.rectangle")
         sidebar.setItem(libraryTabIndex, title: tr("Медиатека"), icon: "square.stack.fill")
         tabBar.selectedColor = music ? PlayerView.accent : .white // выбранная вкладка красная, как в Apple Music
         updateNavigationStyle()
