@@ -121,7 +121,10 @@ final class MusicPlayerView: UIView {
         videoButton.accessibilityLabel = tr("Режим видео")
         setup(downloadButton, "arrow.down.circle", 18, #selector(downloadTapped))
         downloadButton.menu = UIMenu(children: [
-            UIAction(title: tr("Скачать трек"), image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in self?.downloadTapped() },
+            UIAction(title: tr("Скачать трек"), image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
+                guard let self, let track = self.track, OfflineStore.shared.state(for: track.id) == .missing else { return }
+                self.downloadTapped() // в меню — только скачать (убрать — обычным нажатием)
+            },
             UIAction(title: tr("Скачать микс по этому треку"), image: UIImage(systemName: "square.stack")) { [weak self] _ in self?.downloadMix() }
         ])
         downloadButton.showsMenuAsPrimaryAction = false // нажатие — трек, долгое нажатие — меню
@@ -504,8 +507,13 @@ final class MusicPlayerView: UIView {
         guard let track else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch OfflineStore.shared.state(for: track.id) {
-        case .downloaded: toast(tr("Уже скачан — есть в «Скачанных»"))
-        case .waiting: toast(tr("Уже качается"))
+        // Одна кнопка — две функции (просьба владельца после 1.102): скачан → убрать, качается → отменить.
+        case .downloaded:
+            OfflineStore.shared.remove(track.id)
+            toast(tr("Удалено из «Скачанных»"))
+        case .waiting:
+            OfflineStore.shared.remove(track.id)
+            toast(tr("Загрузка отменена"))
         case .missing:
             OfflineStore.shared.download([track])
             toast(tr("Скачиваю — появится в «Скачанных»"))
@@ -536,7 +544,7 @@ final class MusicPlayerView: UIView {
         }
         setSymbol(downloadButton, symbol, 18)
         downloadButton.tintColor = state == .downloaded ? PlayerView.accent : .white
-        downloadButton.accessibilityLabel = state == .downloaded ? tr("Скачан") : tr("Скачать")
+        downloadButton.accessibilityLabel = state == .downloaded ? tr("Удалить из «Скачанных»") : tr("Скачать")
     }
     @objc private func queueTapped() { onShowUpNext?() } // «Далее» — и у обычного плеера YouTube (там же «Страница»)
 

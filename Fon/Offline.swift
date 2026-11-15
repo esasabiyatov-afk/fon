@@ -109,7 +109,7 @@ final class OfflineStore {
 
     func state(for id: String) -> State {
         if file(for: id) != nil { return .downloaded }
-        if downloading?.id == id || pending.contains(where: { $0.track.id == id }) { return .waiting }
+        if (downloading?.id == id && !index.blocked.contains(id)) || pending.contains(where: { $0.track.id == id }) { return .waiting }
         return .missing
     }
 
@@ -270,6 +270,13 @@ final class OfflineStore {
                 await MainActor.run {
                     guard let self else { return }
                     self.downloading = nil
+                    // Отменили, пока качался (повторное нажатие ↓) — файл не нужен.
+                    if self.index.blocked.contains(item.track.id) {
+                        try? FileManager.default.removeItem(at: destination)
+                        self.notify()
+                        self.startNext()
+                        return
+                    }
                     if let result {
                         let (size, title) = result
                         var track = item.track
