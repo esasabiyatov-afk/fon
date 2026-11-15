@@ -212,6 +212,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// queue — id треков своего плейлиста: когда YouTube доиграет их и включит что-то своё,
     /// подпись «Играет из» сменится на «Похожие треки».
     func load(_ url: URL, source: String? = nil, queue: [String]? = nil) {
+        Self.hasMedia = true
         queueIDs = queue.map { Set($0) }
         queueOrder = queue
         currentVideoID = Self.videoID(from: url)
@@ -242,6 +243,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     func stop() {
         Self.coversContent = false
+        Self.hasMedia = false
         NativeAudio.shared.deactivate()
         runJS("window.__fon && __fon.cmd('pause')")
         webView.load(URLRequest(url: URL(string: "about:blank")!))
@@ -250,6 +252,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     /// Развёрнутый плеер закрывает ленту (автовоспроизведение в ленте в это время не играет).
     static private(set) var coversContent = false
+    /// Что-то открыто в плеере (и в мини тоже): превью в ленте тогда не играет — иначе мини-плеер вставал (жалоба после 1.102).
+    static private(set) var hasMedia = false
 
     func setMode(_ newMode: Mode) {
         Self.coversContent = newMode == .expanded

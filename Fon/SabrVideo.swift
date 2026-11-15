@@ -19,6 +19,32 @@ final class SabrVideoSession {
 
     let id: String
     let quality: Quality
+    /// Дорожка озвучки (`audioTrack.id`); nil — оригинал.
+    let audioTrack: String?
+
+    struct AudioTrack: Equatable {
+        let id: String
+        let name: String
+        let original: Bool
+    }
+
+    /// Дорожки озвучки видео (оригинал, дубляж, автоперевод YouTube) — оригинал первым. Одна или нет — пусто.
+    static func audioTracks(_ source: SabrEngine.Source) -> [AudioTrack] {
+        var tracks: [AudioTrack] = []
+        for format in source.formats where (format["mimeType"] as? String)?.hasPrefix("audio/mp4") == true {
+            guard let track = format["audioTrack"] as? [String: Any], let id = track["id"] as? String,
+                  !tracks.contains(where: { $0.id == id }) else { continue }
+            // В xtags (protobuf в base64) есть «acont: original» у оригинала.
+            let xtags = (format["xtags"] as? String)?.removingPercentEncoding.flatMap { text -> Data? in
+                var b64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                while b64.count % 4 != 0 { b64 += "=" }
+                return Data(base64Encoded: b64)
+            }
+            let original = xtags.map { $0.range(of: Data("original".utf8)) != nil } ?? false
+            tracks.append(AudioTrack(id: id, name: track["displayName"] as? String ?? id, original: original))
+        }
+        return tracks.count > 1 ? tracks.sorted { $0.original && !$1.original } : []
+    }
     private let video: FragmentedTrack
     private let audio: FragmentedTrack
     private let lock = NSLock()
@@ -64,7 +90,8 @@ final class SabrVideoSession {
         return list.first { $0.height <= wanted } ?? list.last
     }
 
-    init(source: SabrEngine.Source, quality: Quality) {
+    init(source: SabrEngine.Source, quality: Quality, audioTrack: String? = nil) {
+        self.audioTrack = audioTrack
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         self.id = id
         self.quality = quality
@@ -86,7 +113,7 @@ final class SabrVideoSession {
         audio = FragmentedTrack(file: Self.folder.appendingPathComponent("\(id)-a.mp4"))
         LocalHLSServer.shared.add(self)
         Task {
-            let job = await SabrEngine.shared.streamVideo(source, videoItag: quality.itag, onData: { [weak self] track, data in
+            let job = await SabrEngine.shared.streamVideo(source, videoItag: quality.itag, audioTrack: audioTrack, onData: { [weak self] track, data in
                 self?.received(track, data)
             }, onDone: { [weak self] error in
                 self?.ended(error)

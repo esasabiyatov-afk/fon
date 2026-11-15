@@ -85,7 +85,7 @@ final class SabrEngine {
 
     /// Видео + звук двумя дорожками fMP4 (`SabrVideo`). onData(0 — видео / 1 — звук, байты), onDone(nil — всё пришло,
     /// иначе причина). Вызовы — на своей очереди. Возвращает номер для `cancel`.
-    func streamVideo(_ source: Source, videoItag: Int, onData: @escaping (Int, Data) -> Void, onDone: @escaping (String?) -> Void) async -> Int {
+    func streamVideo(_ source: Source, videoItag: Int, audioTrack: String? = nil, onData: @escaping (Int, Data) -> Void, onDone: @escaping (String?) -> Void) async -> Int {
         let source = await solved(source)
         return await withCheckedContinuation { continuation in
             queue.async {
@@ -95,7 +95,7 @@ final class SabrEngine {
                 guard let context = self.prepareContext() else { return onDone("SABR: движок не запустился (\(self.lastException ?? "?"))") }
                 self.videoJobs[id] = VideoJob(onData: onData, onDone: onDone)
                 let job: [String: Any] = ["id": id, "videoId": source.videoID, "url": source.url, "config": source.config, "clientName": source.clientName,
-                                          "clientVersion": source.clientVersion, "videoItag": videoItag, "audioItag": 140, "formats": source.formats]
+                                          "clientVersion": source.clientVersion, "videoItag": videoItag, "audioTrackId": audioTrack ?? "", "formats": source.formats]
                 guard let data = try? JSONSerialization.data(withJSONObject: job), let json = String(data: data, encoding: .utf8) else {
                     return self.complete(id, error: "SABR: форматы не разобрались", info: "")
                 }

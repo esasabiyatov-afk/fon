@@ -120,12 +120,23 @@
 // Скачивание звука по SABR: __fonSabrDownload(job) → куски в __fonNative.chunk(id, b64), конец — __fonNative.done(id, error, infoJSON).
 (function (g) {
   g.__fonSabrJobs = g.__fonSabrJobs || {};
+  // Звук mp4 (AAC 140): выбранная дорожка озвучки, иначе ОРИГИНАЛ — не дубляж и не автоперевод YouTube
+  // (после 1.102: в своём плеере играла озвучка поверх оригинала), без «сжатия громкости» (drc).
+  g.__fonPickAudio = function (formats, trackId) {
+    const audios = formats.filter((f) => f.hasAudio && !f.hasVideo && /mp4/.test(f.mimeType || ''));
+    const plain = audios.filter((f) => !f.isDrc && !f.isVb);
+    const pool = plain.length ? plain : audios;
+    const by140 = (list) => list.find((f) => f.itag === 140) || list[0];
+    if (trackId) { const chosen = pool.filter((f) => f.audioTrackId === trackId); if (chosen.length) return by140(chosen); }
+    const original = pool.filter((f) => f.isOriginal && !f.isDubbed && !f.isAutoDubbed && !f.isSecondary && !f.isDescriptive);
+    return by140(original.length ? original : pool);
+  };
   g.__fonSabrDownload = function (job) {
     const S = FonSabr; const id = job.id; const log = []; let requests = 0; let stopped = false; let finished = false;
     const done = (error) => { if (finished) return; finished = true; stopped = true; delete g.__fonSabrJobs[id]; __fonNative.done(id, error || '', JSON.stringify({ log: log.slice(0, 30), requests })); };
     try {
       const formats = job.formats.map((f) => { try { return S.buildSabrFormat(f); } catch (e) { return null; } }).filter(Boolean);
-      const audio = formats.find((f) => f.itag === (job.itag || 140)) || formats.find((f) => f.hasAudio && !f.hasVideo && /mp4/.test(f.mimeType || ''));
+      const audio = g.__fonPickAudio(formats, job.audioTrackId);
       if (!audio) return done('нет звуковой дорожки mp4 (' + formats.length + ' форматов)');
       const fetchFunction = (input, init) => {
         if (stopped) return Promise.reject(new Error('остановлено'));
@@ -163,7 +174,7 @@
     try {
       const formats = job.formats.map((f) => { try { return S.buildSabrFormat(f); } catch (e) { return null; } }).filter(Boolean);
       const video = formats.find((f) => f.itag === job.videoItag);
-      const audio = formats.find((f) => f.itag === (job.audioItag || 140)) || formats.find((f) => f.hasAudio && !f.hasVideo && /mp4/.test(f.mimeType || ''));
+      const audio = g.__fonPickAudio(formats, job.audioTrackId);
       if (!video) return done('нет видео itag ' + job.videoItag + ' (' + formats.length + ' форматов)');
       if (!audio) return done('нет звуковой дорожки mp4');
       const fetchFunction = (input, init) => {

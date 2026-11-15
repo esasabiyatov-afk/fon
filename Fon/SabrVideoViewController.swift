@@ -24,6 +24,7 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
     private let statusLabel = UILabel()
 
     private var qualities: [SabrVideoSession.Quality] = []
+    private var audioTracks: [SabrVideoSession.AudioTrack] = []
     private var session: SabrVideoSession?
     private var loading: SabrVideoSession?
     private var pending: (time: Double, play: Bool)?
@@ -128,6 +129,7 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
             if let title = info.title, !title.isEmpty { titleLabel.text = title }
             author = info.author ?? ""
             qualities = SabrVideoSession.qualities(source)
+            audioTracks = SabrVideoSession.audioTracks(source)
             guard let quality = SabrVideoSession.preferred(in: qualities) else { return fail(tr("нет видео H.264 (mp4)")) }
             self.source = source
             begin(quality, at: startTime, play: true)
@@ -136,10 +138,11 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
 
     private var source: SabrEngine.Source?
 
-    private func begin(_ quality: SabrVideoSession.Quality, at time: Double, play: Bool) {
+    private func begin(_ quality: SabrVideoSession.Quality, at time: Double, play: Bool, audioTrack: String?? = nil) {
         guard let source else { return }
+        let track = audioTrack ?? (loading ?? session)?.audioTrack
         loading?.close()
-        let next = SabrVideoSession(source: source, quality: quality)
+        let next = SabrVideoSession(source: source, quality: quality, audioTrack: track)
         loading = next
         showLoading(true)
         updateMenu()
@@ -262,7 +265,19 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
         let quality = UIMenu(title: tr("Качество") + (current.map { " · " + $0.label } ?? ""), image: UIImage(systemName: "sparkles.tv"), children: qualityItems)
         let speed = UIMenu(title: tr("Скорость") + " · " + (Settings.sabrVideoSpeed == 1 ? tr("Обычная") : String(format: "%g×", Settings.sabrVideoSpeed)),
                            image: UIImage(systemName: "speedometer"), children: speedItems)
-        settingsButton.menu = UIMenu(children: [quality, speed])
+        var menus = [quality, speed]
+        if !audioTracks.isEmpty {
+            // Оригинал по умолчанию; дубляж/автоперевод YouTube — по выбору (после 1.102: озвучка шла поверх оригинала).
+            let chosen = (loading ?? session)?.audioTrack
+            let items = audioTracks.map { track in
+                let on = chosen == track.id || (chosen == nil && track.original)
+                return UIAction(title: track.name + (track.original ? " · " + tr("оригинал") : ""), state: on ? .on : .off) { [weak self] _ in
+                    self?.chooseAudio(track)
+                }
+            }
+            menus.append(UIMenu(title: tr("Озвучка"), image: UIImage(systemName: "waveform"), children: items))
+        }
+        settingsButton.menu = UIMenu(children: menus)
     }
 
     private func choose(_ quality: SabrVideoSession.Quality) {
@@ -270,6 +285,13 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
         guard quality != session?.quality || loading != nil else { return updateMenu() }
         let time = CMTimeGetSeconds(player.currentTime())
         begin(quality, at: time.isFinite ? time : 0, play: player.timeControlStatus != .paused)
+    }
+
+    private func chooseAudio(_ track: SabrVideoSession.AudioTrack) {
+        let current = (loading ?? session)?.audioTrack
+        guard current != track.id, !(current == nil && track.original), let quality = (loading ?? session)?.quality else { return }
+        let time = CMTimeGetSeconds(player.currentTime())
+        begin(quality, at: time.isFinite ? time : 0, play: player.timeControlStatus != .paused, audioTrack: .some(track.original ? nil : track.id))
     }
 
     private func setSpeed(_ speed: Float) {

@@ -104,7 +104,7 @@ final class VideoFeedViewController: UIViewController, UICollectionViewDataSourc
     /// Лента на экране: окно есть, ни она, ни её вкладка не спрятаны, плеер не развёрнут, Wi-Fi.
     private var canPreview: Bool {
         guard isViewLoaded, view.window != nil, UIApplication.shared.applicationState == .active,
-              !PlayerView.coversContent, OfflineStore.shared.online else { return false }
+              !PlayerView.coversContent, !PlayerView.hasMedia, OfflineStore.shared.online else { return false }
         var current: UIView? = view
         while let v = current {
             if v.isHidden || v.alpha < 0.01 { return false }
