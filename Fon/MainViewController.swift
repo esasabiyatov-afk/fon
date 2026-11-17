@@ -7,6 +7,7 @@ import AVFoundation
 /// страница не перезагружается, а остаётся там же, где её оставили.
 final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     private enum PlayerState { case hidden, mini, expanded }
+    private var resumeChecked = false
 
     private enum TabKind {
         case home, history, subscriptions, you
@@ -229,6 +230,11 @@ final class MainViewController: UIViewController, WKScriptMessageHandler, WKNavi
         override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         Signature.warnIfNeeded(from: self)
+        // Как в стриминговых сервисах: при запуске мини-плеер уже стоит с последним треком (играть — ▶).
+        if !resumeChecked {
+            resumeChecked = true
+            if playerState == .hidden, playerView.prepareResume() { setPlayerState(.mini) }
+        }
     }
 
     // MARK: - Плеер

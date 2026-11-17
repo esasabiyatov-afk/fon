@@ -43,6 +43,10 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private var webPaused = false
     /// Переход видео → музыка: веб-плеер играет, пока системный не заиграет (трек, время веб-плеера, когда).
     private var takeover: (id: String, time: Double, at: Date)?
+    /// Последний трек с прошлого запуска: мини-плеер уже стоит, но ничего не играет, пока не нажмут ▶
+    /// (просьба владельца после 1.110: «как в стриминговых сервисах»).
+    private var pendingResume: LastSession?
+    private var lastSessionSaved = Date.distantPast
 
     // Мини-полоска
     private let titleLabel = UILabel()
@@ -139,6 +143,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         // Нативный музыкальный плеер
         musicView.onCommand = { [weak self] name in self?.command(name) }
         musicView.onSeek = { [weak self] t in
+            if self?.pendingResume != nil { self?.pendingResume?.time = t; return }
             if NativeAudio.shared.active { NativeAudio.shared.seek(t) } else { self?.runJS("window.__fon && __fon.cmd && __fon.cmd('seek', \(t))") }
         }
         musicView.onCollapse = { [weak self] in self?.onCollapse?() }
@@ -252,6 +257,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func stop() {
+        // Закрыли плеер — при следующем запуске мини-плеера с этим треком не будет.
+        pendingResume = nil
+        UserDefaults.standard.removeObject(forKey: Self.lastSessionKey)
         Self.coversContent = false
         Self.hasMedia = false
         NativeAudio.shared.deactivate()
@@ -514,6 +522,11 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func command(_ name: String) {
+        if let resume = pendingResume {
+            startResume(resume, from: name == "next" ? 0 : resume.time)
+            if name == "next" { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.command("next") } }
+            return
+        }
         endTakeover()
         if NativeAudio.shared.active {
             NativeAudio.shared.handle(name)
@@ -854,7 +867,65 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     /// Что играет сейчас (веб-плеер раз в секунду или системный плеер) — мини-полоска, шапка и музыкальный экран.
+    // MARK: - Последний трек при запуске
+
+    struct LastSession: Codable {
+        var id: String
+        var title: String
+        var artist: String
+        var time: Double
+        var duration: Double
+        var queue: [String]?
+        var list: String?
+        var source: String?
+    }
+
+    static let lastSessionKey = "lastSession"
+
+    /// При запуске (режим музыки): последний трек — в мини-плеер на паузе. true — есть что показать.
+    func prepareResume() -> Bool {
+        guard musicMode, currentVideoID == nil,
+              let data = UserDefaults.standard.data(forKey: Self.lastSessionKey),
+              let saved = try? JSONDecoder().decode(LastSession.self, from: data), !saved.id.isEmpty else { return false }
+        pendingResume = saved
+        Self.hasMedia = true
+        queueOrder = saved.queue
+        queueIDs = saved.queue.map { Set($0) }
+        musicView.sourceName = saved.source ?? (saved.list?.hasPrefix("RD") == true ? tr("Микс") : "YouTube")
+        musicView.reset(id: saved.id)
+        musicView.systemPlayer = Settings.nativeAudio && !NativeAudio.shared.sabrOnly
+        AppJournal.add("запуск: в мини-плеере последний трек \(saved.id)")
+        applyState(id: saved.id, title: saved.title, artist: saved.artist, paused: true, time: saved.time, duration: saved.duration, loop: false)
+        updateVisibility()
+        return true
+    }
+
+    /// Нажали ▶ (или ⏭) в мини-плеере с последним треком — включаем его с того же места, тем же списком.
+    private func startResume(_ saved: LastSession, from time: Double) {
+        pendingResume = nil
+        guard var components = URLComponents(string: "https://m.youtube.com/watch") else { return }
+        let list = saved.list ?? (saved.queue == nil ? "RD" + saved.id : nil)
+        components.queryItems = [URLQueryItem(name: "v", value: saved.id), URLQueryItem(name: "t", value: "\(time.safeInt)s")]
+            + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
+        guard let url = components.url else { return }
+        load(url, source: saved.source, queue: saved.queue)
+    }
+
+    /// Что играет — раз в 5 с (и при паузе) в UserDefaults: при следующем запуске мини-плеер покажет этот трек.
+    private func saveSession(id: String, title: String, artist: String, paused: Bool, time: Double, duration: Double) {
+        guard musicMode, pendingResume == nil, !title.isEmpty, title != tr("Загрузка…"), time.isFinite, duration.isFinite else { return }
+        guard Date().timeIntervalSince(lastSessionSaved) > 5 || paused != shownPaused else { return }
+        lastSessionSaved = Date()
+        let list = NativeAudio.shared.active ? NativeAudio.shared.listID
+            : webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "list" }?.value }
+        let near = duration > 0 && time > duration - 5 // почти доиграл — в следующий раз с начала
+        let session = LastSession(id: id, title: title, artist: artist, time: near ? 0 : time, duration: duration,
+                                  queue: queueOrder.map { Array($0.prefix(50)) }, list: list, source: musicView.sourceName)
+        if let data = try? JSONEncoder().encode(session) { UserDefaults.standard.set(data, forKey: Self.lastSessionKey) }
+    }
+
     private func applyState(id: String?, title: String, artist: String, paused: Bool, time: Double, duration: Double, loop: Bool) {
+        if let id { saveSession(id: id, title: title, artist: artist, paused: paused, time: time, duration: duration) }
         let shown = musicMode ? TrackTitle.clean(title: title, artist: artist) : (title: title, artist: artist)
         // Состояние приходит дважды в секунду — подписи и значок трогаем, только если они изменились.
         if titleLabel.text != shown.title { titleLabel.text = shown.title }

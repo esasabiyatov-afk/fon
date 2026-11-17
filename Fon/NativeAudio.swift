@@ -379,6 +379,8 @@ final class NativeAudio: NSObject {
     private var queue: [Track] = []
     private var index = 0
     private var playlistID: String?
+    /// Список, из которого играем (для мини-плеера с последним треком при запуске).
+    var listID: String? { playlistID }
     private var loop = false
     private var candidates: [AudioStream] = []
     /// Откуда играет текущий трек («Скачано» — файл на телефоне, в нём только звук).
@@ -1227,8 +1229,17 @@ final class NativeAudio: NSObject {
         guard artworkID != state.id else { return }
         artworkID = state.id
         let id = state.id
+        var albumShown = false
         ArtworkLoader.shared.load(id, size: .player) { image, _ in
+            guard let image, !albumShown, self.artworkID == id, var info = center.nowPlayingInfo else { return }
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            center.nowPlayingInfo = info
+        }
+        // Обложка альбома (iTunes) — только на экран блокировки, поверх кадра YouTube, если нашлась.
+        guard !state.title.isEmpty, state.title != tr("Загрузка…") else { artworkID = nil; return }
+        AlbumCover.load(id: id, title: state.title, artist: state.artist) { image in
             guard let image, self.artworkID == id, var info = center.nowPlayingInfo else { return }
+            albumShown = true
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             center.nowPlayingInfo = info
         }
