@@ -109,24 +109,14 @@ enum PlayerDiagnostics {
             }
         }
         // Ссылки m.youtube (MWEB — как Safari на этом устройстве): там они есть у всех форматов, и у звука 140.
-        // Играют ли без PO-токена — здесь; с токеном (pot=) — в разделе H.
-        var mwebStreams: [AudioStream] = []
-        await say("   — ссылки m.youtube (MWEB), без PO-токена:")
-        if let response = mweb.response {
-            let jsPath = mobile.data.flatMap { YouTubeStreams.string(in: $0, after: "\"jsUrl\":\"") }
-                ?? main.data.flatMap { YouTubeStreams.string(in: $0, after: "\"jsUrl\":\"") }
-            if let jsPath, let playerURL = URL(string: YouTubeStreams.origin + jsPath.replacingOccurrences(of: "\\/", with: "/")) {
-                let found = await DirectStream.streams(from: response, playerURL: playerURL, agent: realUA)
-                await say("   разбор: \(found.note.isEmpty ? "—" : found.note); код плеера: \(playerURL.path)")
-                mwebStreams = found.streams
-                for stream in found.streams {
-                    await say("   \(stream.client): HTTP " + (await rangeCheck(stream.url, headers: stream.headers)) + "; плеер iOS: " + (await playTest(stream.url, headers: stream.headers)))
-                }
-            } else {
-                await say("   нет ссылки на код плеера")
-            }
-        } else {
-            await say("   ответа плеера m.youtube нет")
+        // В 1.108 на iPhone 17 — 403 (запрос без токена видео и без отметки подписи STS); с 1.109 — как у страницы.
+        await say("   — m.youtube (MWEB) с токеном видео и STS, как страница Safari:")
+        mark = Date()
+        let mobileTry = await DirectStream.mobileAttempt(videoID, fallbackPlayer: nil)
+        await say("   итог (\(seconds(since: mark))): " + (mobileTry.streams.isEmpty ? "не пустили — " : "есть — ") + mobileTry.reason
+                  + "; SABR из ответа: " + (mobileTry.sabr != nil ? "есть" : "нет"))
+        for stream in mobileTry.streams {
+            await say("   \(stream.client): HTTP " + (await rangeCheck(stream.url, headers: stream.headers)) + "; плеер iOS: " + (await playTest(stream.url, headers: stream.headers)))
         }
 
         // H–J. SABR.
@@ -148,13 +138,6 @@ enum PlayerDiagnostics {
             let until = await PoToken.shared.minterValidUntil
             await say("   с нуля: " + (token != nil ? "получен" : "НЕ получен") + " (\(seconds(since: mark))) — \(report)"
                       + (token != nil ? "; годен до \(stamp(until))" : ""))
-            if let token, !mwebStreams.isEmpty {
-                await say("   ссылки m.youtube (MWEB) с PO-токеном (pot=):")
-                for stream in mwebStreams {
-                    let url = DirectStream.adding(poToken: token, to: stream.url)
-                    await say("   \(stream.client): HTTP " + (await rangeCheck(url, headers: stream.headers)) + "; плеер iOS: " + (await playTest(url, headers: stream.headers)))
-                }
-            }
         } else {
             await say("   привязки нет (на странице ни DATASYNC_ID, ни VISITOR_DATA)")
         }
@@ -169,6 +152,20 @@ enum PlayerDiagnostics {
                 await say("   \(label): скачано \(size / 1024) КБ за \(seconds(since: mark)); плеер iOS: " + (await playTest(file, headers: [:])))
             } catch {
                 await say("   \(label): не скачалось (\(seconds(since: mark))): \(error.localizedDescription)")
+            }
+            await say("     " + SabrEngine.shared.lastReport)
+        }
+
+        if var mobileSource = mobileTry.sabr {
+            if let cached = SabrEngine.cached(videoID) { try? FileManager.default.removeItem(at: cached) }
+            mobileSource.poToken = nil
+            mark = Date()
+            do {
+                let file = try await SabrEngine.shared.download(mobileSource, usePoToken: true, timeout: 45)
+                let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? 0
+                await say("   m.youtube (токен видео в запросе плеера): скачано \(size / 1024) КБ за \(seconds(since: mark)); плеер iOS: " + (await playTest(file, headers: [:])))
+            } catch {
+                await say("   m.youtube (токен видео в запросе плеера): не скачалось (\(seconds(since: mark))): \(error.localizedDescription)")
             }
             await say("     " + SabrEngine.shared.lastReport)
         }

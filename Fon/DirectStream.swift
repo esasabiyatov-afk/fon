@@ -1,5 +1,6 @@
 import Foundation
 import JavaScriptCore
+import UIKit
 
 /// Поток трека для системного плеера (решение владельца 29.10.2026, вариант 3; проверено в 1.64): страница
 /// `www.youtube.com/watch?app=desktop` (Safari на iPhone, вход в аккаунт) запросом самого приложения — без окон.
@@ -31,7 +32,7 @@ enum DirectStream {
         var triedSABR = false
         var last = YouTubeStreams.Result()
         for (index, attempt) in attempts.enumerated() {
-            let result = await self.attempt(videoID, cookie: attempt.cookie)
+            var result = await self.attempt(videoID, cookie: attempt.cookie)
             if !result.streams.isEmpty {
                 var found = result
                 if index > 0 { found.reason = "сработало \(attempt.label)" }
@@ -45,6 +46,7 @@ enum DirectStream {
                 let clients: String = mobile.streams.map(\.client).joined(separator: ", ")
                 let outcome: String = mobile.streams.isEmpty ? mobile.reason : "есть (\(clients)) \(mobile.reason)"
                 AppJournal.add("m.youtube \(videoID): " + outcome)
+                if let sabr = mobile.sabr { result.sabr = sabr } // SABR из ответа с токеном видео — как у Safari
                 if !mobile.streams.isEmpty {
                     var found = result
                     found.streams = mobile.streams
@@ -113,15 +115,26 @@ enum DirectStream {
         return "без разбора: signatureCipher \(count("signatureCipher")), videoplayback \(count("videoplayback")), SABR: \(count("serverAbrStreamingUrl") > 0 ? "да" : "нет"), \(data.count / 1024) КБ"
     }
 
+    /// Итог попытки m.youtube: ссылки (если пустили), данные SABR из того же ответа и что произошло.
+    struct Mobile {
+        var streams: [AudioStream] = []
+        var sabr: SabrEngine.Source?
+        var reason = ""
+    }
+
     /// m.youtube (MWEB — то, что открывает Safari на этом телефоне). Диагностика 1.107 на iPhone 17: у www
     /// (app=desktop) ссылок нет ни в одном варианте (0 из 22, только SABR, а свой SABR стоит на «защите потока: 2»
     /// и с PO-токеном), а `youtubei/v1/player` клиентом страницы m.youtube со входом — 26 из 26, и у звука 140.
-    /// Ссылку проверяем первым 1 КБ: не пускают — с PO-токеном (`pot=`), и так нет — дальше как раньше (SABR).
-    private static func mobileAttempt(_ videoID: String, fallbackPlayer: URL?) async -> (streams: [AudioStream], reason: String) {
+    /// 1.108: эти ссылки — 403 и без токена, и с `pot=`. Страница YouTube в Safari кладёт в сам запрос плеера ещё
+    /// и токен **видео** (`serviceIntegrityDimensions.poToken`, привязка — id видео; токен сессии — для googlevideo).
+    /// Поэтому с 1.109 запрос плеера — с токеном видео (если окно проверки может его выдать — на экране), ссылки
+    /// проверяются первым 1 КБ (без `pot=`, затем с токеном сессии), а SABR из этого же ответа уходит дальше (`sabr`).
+    static func mobileAttempt(_ videoID: String, fallbackPlayer: URL?) async -> Mobile {
+        var outcome = Mobile()
         let agent = await MainActor.run { WebViewFactory.safariUserAgent() }
         let origin = "https://m.youtube.com"
         guard let pageURL = URL(string: "\(origin)/watch?v=\(videoID)&hl=ru"),
-              let apiURL = URL(string: "\(origin)/youtubei/v1/player?prettyPrint=false") else { return ([], "плохая ссылка") }
+              let apiURL = URL(string: "\(origin)/youtubei/v1/player?prettyPrint=false") else { outcome.reason = "плохая ссылка"; return outcome }
         var request = URLRequest(url: pageURL, timeoutInterval: 15)
         request.httpShouldHandleCookies = false
         request.setValue(agent, forHTTPHeaderField: "User-Agent")
@@ -129,52 +142,82 @@ enum DirectStream {
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         let cookie = YouTubeSession.cookieHeader
         if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-        guard let (page, _) = try? await URLSession.shared.data(for: request) else { return ([], "страница не ответила") }
+        guard let (page, _) = try? await URLSession.shared.data(for: request) else { outcome.reason = "страница не ответила"; return outcome }
         guard let context = YouTubeStreams.jsonObject(in: page, after: "\"INNERTUBE_CONTEXT\":"),
-              let client = context["client"] as? [String: Any] else { return ([], "на странице нет клиента") }
+              let client = context["client"] as? [String: Any] else { outcome.reason = "на странице нет клиента"; return outcome }
         let jsPath = YouTubeStreams.string(in: page, after: "\"jsUrl\":\"") ?? YouTubeStreams.string(in: page, after: "\"PLAYER_JS_URL\":\"")
         guard let playerURL = jsPath.flatMap({ URL(string: YouTubeStreams.origin + $0.replacingOccurrences(of: "\\/", with: "/")) }) ?? fallbackPlayer else {
-            return ([], "нет кода плеера")
+            outcome.reason = "нет кода плеера"
+            return outcome
         }
-        // Запрос плеера — как его делает сама страница m.youtube.
-        let body: [String: Any] = ["context": context, "videoId": videoID, "contentCheckOk": true, "racyCheckOk": true,
-                                   "playbackContext": ["contentPlaybackContext": ["html5Preference": "HTML5_PREF_WANTS"]]]
-        guard let json = try? JSONSerialization.data(withJSONObject: body) else { return ([], "?") }
+        // Привязка токена сессии: со входом — DATASYNC_ID до «||», без входа — VISITOR_DATA.
+        let unescape = { (text: String) in text.replacingOccurrences(of: "\\u003d", with: "=").replacingOccurrences(of: "\\u0026", with: "&") }
+        let loggedIn = page.range(of: Data("\"LOGGED_IN\":true".utf8)) != nil
+        let sync = YouTubeStreams.string(in: page, after: "\"DATASYNC_ID\":\"").map(unescape)?.components(separatedBy: "||").first { !$0.isEmpty }
+        let visitor = YouTubeStreams.string(in: page, after: "\"VISITOR_DATA\":\"").map(unescape)
+        let binding = loggedIn ? (sync ?? visitor) : visitor
+        // Токен видео — только на экране (окно проверки в фоне может не ответить); готовый из кэша — всегда.
+        var videoToken = PoToken.cached(for: videoID)
+        if videoToken == nil, await MainActor.run(body: { UIApplication.shared.applicationState != .background }) {
+            videoToken = await PoToken.shared.token(for: videoID)
+        }
+        var playback: [String: Any] = ["contentPlaybackContext": ["html5Preference": "HTML5_PREF_WANTS"]]
+        // Отметка версии подписи: без неё YouTube шифрует ссылки под другую версию плеера, и расшифровка даёт
+        // неверную подпись (403) — вероятная причина 403 в 1.108. Страница отдаёт её в ytcfg (`STS`).
+        let sts = number(in: page, after: "\"STS\":") ?? number(in: page, after: "\"signatureTimestamp\":")
+        if let sts { playback["contentPlaybackContext"] = ["html5Preference": "HTML5_PREF_WANTS", "signatureTimestamp": sts] }
+        var body: [String: Any] = ["context": context, "videoId": videoID, "contentCheckOk": true, "racyCheckOk": true, "playbackContext": playback]
+        if let videoToken { body["serviceIntegrityDimensions"] = ["poToken": videoToken] }
+        guard let json = try? JSONSerialization.data(withJSONObject: body) else { outcome.reason = "?"; return outcome }
         var api = URLRequest(url: apiURL, timeoutInterval: 15)
         api.httpMethod = "POST"
         api.httpBody = json
         api.httpShouldHandleCookies = false
         api.setValue("application/json", forHTTPHeaderField: "Content-Type")
         api.setValue(agent, forHTTPHeaderField: "User-Agent")
-        api.setValue(String(number(in: page, after: "\"INNERTUBE_CONTEXT_CLIENT_NAME\":") ?? 2), forHTTPHeaderField: "X-Youtube-Client-Name")
-        api.setValue(client["clientVersion"] as? String ?? "", forHTTPHeaderField: "X-Youtube-Client-Version")
+        let clientNumber = number(in: page, after: "\"INNERTUBE_CONTEXT_CLIENT_NAME\":") ?? 2
+        let clientVersion = client["clientVersion"] as? String ?? ""
+        api.setValue(String(clientNumber), forHTTPHeaderField: "X-Youtube-Client-Name")
+        api.setValue(clientVersion, forHTTPHeaderField: "X-Youtube-Client-Version")
         api.setValue(origin, forHTTPHeaderField: "Origin")
-        api.setValue(origin + "/", forHTTPHeaderField: "Referer")
-        if let visitor = client["visitorData"] as? String { api.setValue(visitor, forHTTPHeaderField: "X-Goog-Visitor-Id") }
+        api.setValue(origin + "/watch?v=" + videoID, forHTTPHeaderField: "Referer")
+        if let visitorID = client["visitorData"] as? String { api.setValue(visitorID, forHTTPHeaderField: "X-Goog-Visitor-Id") }
         if let cookie { api.setValue(cookie, forHTTPHeaderField: "Cookie") }
         if let auth = YouTubeSession.authorization(origin: origin) {
             api.setValue(auth, forHTTPHeaderField: "Authorization")
             YouTubeAccount.headers.forEach { api.setValue($0.value, forHTTPHeaderField: $0.key) }
         }
+        let tokenNote: String = (videoToken != nil ? "токен видео: да" : "токен видео: нет") + (sts != nil ? ", STS \(sts!)" : ", STS нет")
         guard let (data, _) = try? await URLSession.shared.data(for: api),
-              let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ([], "плеер не ответил") }
+              let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { outcome.reason = "плеер не ответил (\(tokenNote))"; return outcome }
         let playability = response["playabilityStatus"] as? [String: Any] ?? [:]
         let status = playability["status"] as? String ?? "?"
-        guard status == "OK" else { return ([], "\(status) \(((playability["reason"] as? String) ?? "").prefix(60))") }
+        guard status == "OK" else {
+            outcome.reason = "\(status) \(((playability["reason"] as? String) ?? "").prefix(60)) (\(tokenNote))"
+            return outcome
+        }
+        // SABR из этого же ответа — на случай, если ссылки не пустят.
+        let streaming = response["streamingData"] as? [String: Any] ?? [:]
+        if let sabrURL = streaming["serverAbrStreamingUrl"] as? String,
+           let config = (((response["playerConfig"] as? [String: Any])?["mediaCommonConfig"] as? [String: Any])?["mediaUstreamerRequestConfig"] as? [String: Any])?["videoPlaybackUstreamerConfig"] as? String {
+            var source = SabrEngine.Source(videoID: videoID, url: sabrURL, config: config, clientName: clientNumber,
+                                           clientVersion: clientVersion, formats: streaming["adaptiveFormats"] as? [[String: Any]] ?? [],
+                                           playerURL: playerURL)
+            source.poBinding = binding
+            source.duration = Double((response["videoDetails"] as? [String: Any])?["lengthSeconds"] as? String ?? "") ?? 0
+            if videoToken != nil { outcome.sabr = source } // без токена видео он не лучше SABR со страницы www
+        }
         let found = await streams(from: response, playerURL: playerURL, agent: agent)
-        guard let first = found.streams.first else { return ([], found.note) }
-        if await opens(first) { return (found.streams, "") }
-        // Не пускают — с PO-токеном (со входом — DATASYNC_ID до «||», без входа — VISITOR_DATA).
-        let unescape = { (text: String) in text.replacingOccurrences(of: "\\u003d", with: "=").replacingOccurrences(of: "\\u0026", with: "&") }
-        let loggedIn = page.range(of: Data("\"LOGGED_IN\":true".utf8)) != nil
-        let sync = YouTubeStreams.string(in: page, after: "\"DATASYNC_ID\":\"").map(unescape)?.components(separatedBy: "||").first { !$0.isEmpty }
-        let visitor = YouTubeStreams.string(in: page, after: "\"VISITOR_DATA\":\"").map(unescape)
-        guard let binding = loggedIn ? (sync ?? visitor) : visitor, let token = await SabrEngine.poToken(for: binding) else {
-            return ([], "ссылки не пускают, PO-токена нет")
+        guard let first = found.streams.first else { outcome.reason = found.note + " (\(tokenNote))"; return outcome }
+        if await opens(first) { outcome.streams = found.streams; outcome.reason = tokenNote; return outcome }
+        guard let binding, let token = await SabrEngine.poToken(for: binding) else {
+            outcome.reason = "ссылки не пускают, токена сессии нет (\(tokenNote))"
+            return outcome
         }
         let signed = found.streams.map { AudioStream(url: adding(poToken: token, to: $0.url), headers: $0.headers, client: $0.client) }
-        if await opens(signed[0]) { return (signed, "с PO-токеном") }
-        return ([], "ссылки не пускают (и с PO-токеном)")
+        if await opens(signed[0]) { outcome.streams = signed; outcome.reason = "с pot, " + tokenNote; return outcome }
+        outcome.reason = "ссылки не пускают и с pot (\(tokenNote))"
+        return outcome
     }
 
     /// Первый 1 КБ ссылки: пускает ли googlevideo (200/206).
