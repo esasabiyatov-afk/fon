@@ -19,6 +19,23 @@ enum PlayerDiagnostics {
             lines.append("Отметка «только SABR» до \(clock(until)): \(UserDefaults.standard.string(forKey: "sabrOnlyReason") ?? "?")")
         }
 
+        // 0. Варианты запроса страницы — какой из них YouTube отдаёт со ссылками (iPhone 17 после 1.105).
+        lines.append("0. Варианты запроса (со входом):")
+        let realUA = WebViewFactory.safariUserAgent()
+        let macUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+        let cookie = YouTubeSession.cookieHeader
+        let variants: [(String, String, Bool, String)] = [
+            ("как сейчас (iPhone iOS 18.6)", "www.youtube.com", true, YouTubeStreams.iPhoneSafariUserAgent),
+            ("настоящая iOS \(device.systemVersion)", "www.youtube.com", true, realUA),
+            ("как Safari на iPad (Mac)", "www.youtube.com", true, macUA),
+            ("Mac без app=desktop", "www.youtube.com", false, macUA),
+            ("m.youtube, настоящая iOS", "m.youtube.com", false, realUA)
+        ]
+        for (label, host, desktop, agent) in variants {
+            lines.append("   \(label): " + (await DirectStream.probe(videoID, host: host, desktop: desktop, userAgent: agent, cookie: cookie)))
+        }
+        lines.append("   встроенный браузер (как Safari): " + (await webProbe(videoID)))
+
         // 1. Обычные ссылки.
         var started = Date()
         let plain = await DirectStream.find(videoID, sabr: false)
@@ -62,6 +79,33 @@ enum PlayerDiagnostics {
             lines.append("3. SABR видео (\(seconds(since: started))): не вышло — \(video.reason ?? "?")")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Та же страница запросом из скрытого окна m.youtube (WebKit, cookies окна, как в Safari) — подсчёт по тексту.
+    @MainActor
+    private static func webProbe(_ videoID: String) async -> String {
+        let expression = """
+        (async () => { const r = await fetch('/watch?v=' + vid + '&hl=ru', { credentials: 'include' }); const t = await r.text();
+          const c = (w) => t.split(w).length - 1;
+          return r.status + ', signatureCipher ' + c('signatureCipher') + ', videoplayback ' + c('videoplayback') +
+            ', SABR: ' + (c('serverAbrStreamingUrl') > 0 ? 'да' : 'нет') + ', ' + Math.round(t.length / 1024) + ' КБ'; })()
+        """
+        return await withCheckedContinuation { continuation in
+            let once = Once()
+            HiddenPage.youtube.call(expression, { ["vid": videoID] }) { result in
+                guard once.first() else { return }
+                switch result {
+                case .success(let value): continuation.resume(returning: (value as? String) ?? "пустой ответ")
+                case .failure(let error): continuation.resume(returning: "ошибка: \(error.localizedDescription)")
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { if once.first() { continuation.resume(returning: "нет ответа за 20 с") } }
+        }
+    }
+
+    private final class Once: @unchecked Sendable {
+        private var done = false
+        func first() -> Bool { if done { return false }; done = true; return true }
     }
 
     /// Беззвучная проба: заиграл ли AVPlayer (до 12 с).

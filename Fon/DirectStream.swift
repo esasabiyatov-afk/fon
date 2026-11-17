@@ -83,6 +83,36 @@ enum DirectStream {
         return (nil, nil, nil, reasons.joined(separator: "; "))
     }
 
+    /// Проба одного варианта запроса страницы (диагностика, iPhone 17 после 1.105: «запрос надо делать как на iPad»).
+    /// Ответ: статус плеера, форматы (со ссылками / всего), есть ли SABR.
+    static func probe(_ videoID: String, host: String, desktop: Bool, userAgent: String, cookie: String?) async -> String {
+        guard let url = URL(string: "https://\(host)/watch?\(desktop ? "app=desktop&" : "")v=\(videoID)&hl=ru") else { return "плохая ссылка" }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpShouldHandleCookies = false
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return "нет ответа (сеть)" }
+        let final = (reply as? HTTPURLResponse)?.url
+        if let final, final.path.hasPrefix("/sorry") { return "капча" }
+        return summary(of: data) + (final?.host != url.host ? " [→ \(final?.host ?? "?")]" : "")
+    }
+
+    /// Что в странице видео: разбор ytInitialPlayerResponse, а не нашёлся (m.youtube) — подсчёт по тексту.
+    static func summary(of data: Data) -> String {
+        if let response = YouTubeStreams.jsonObject(in: data, after: "ytInitialPlayerResponse = ") {
+            let status = (response["playabilityStatus"] as? [String: Any])?["status"] as? String ?? "?"
+            let streaming = response["streamingData"] as? [String: Any] ?? [:]
+            let all = (streaming["formats"] as? [[String: Any]] ?? []) + (streaming["adaptiveFormats"] as? [[String: Any]] ?? [])
+            let linked = all.filter { $0["url"] != nil || $0["signatureCipher"] != nil || $0["cipher"] != nil }.count
+            return "\(status), ссылки \(linked) из \(all.count), SABR: \(streaming["serverAbrStreamingUrl"] != nil ? "да" : "нет")"
+        }
+        let text = String(decoding: data, as: UTF8.self)
+        func count(_ word: String) -> Int { text.components(separatedBy: word).count - 1 }
+        return "без разбора: signatureCipher \(count("signatureCipher")), videoplayback \(count("videoplayback")), SABR: \(count("serverAbrStreamingUrl") > 0 ? "да" : "нет"), \(data.count / 1024) КБ"
+    }
+
     private static func number(in data: Data, after marker: String) -> Int? {
         guard let found = data.range(of: Data(marker.utf8)) else { return nil }
         return Int(String(decoding: data[found.upperBound...].prefix { (0x30...0x39).contains($0) }, as: UTF8.self))
