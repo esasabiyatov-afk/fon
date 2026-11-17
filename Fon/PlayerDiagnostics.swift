@@ -697,7 +697,6 @@ enum PlayerDiagnostics {
     private final class Once: @unchecked Sendable {
         private let lock = NSLock()
         private var done = false
-    private var work: Task<Void, Never>?
         func first() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
     }
 
