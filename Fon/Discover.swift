@@ -283,7 +283,7 @@ final class Discover {
                     guard parts.count == 3, !parts[0].isEmpty else { continue }
                     let track = Track(id: parts[0], title: parts[1].isEmpty ? song.title : parts[1],
                                       artist: parts[2].isEmpty ? song.artist : parts[2])
-                    if profile.ok(track), used.insert(id).inserted { out.append(track) }
+                    if profile.ok(track), used.insert(track.id).inserted { out.append(track) }
                 } else if y < yt.count {
                     let track = yt[y]
                     y += 1

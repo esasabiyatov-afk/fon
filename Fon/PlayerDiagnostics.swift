@@ -190,7 +190,7 @@ enum PlayerDiagnostics {
         let video = await SabrMusicVideo.start(source)
         if let url = video.url {
             await say("   начало за \(seconds(since: mark)); плеер iOS: " + (await playTest(url, headers: [:])))
-            SabrMusicVideo.stop(videoID) // проверили — не качаем видео дальше
+            await SabrMusicVideo.stop(videoID) // проверили — не качаем видео дальше
         } else {
             await say("   не вышло (\(seconds(since: mark))): \(video.reason ?? "?")")
         }
@@ -715,6 +715,7 @@ final class DiagnosticsViewController: UIViewController {
     private let textView = UITextView()
     private var text = ""
     private var done = false
+    private var work: Task<Void, Never>?
 
     init(videoID: String) {
         self.videoID = videoID
