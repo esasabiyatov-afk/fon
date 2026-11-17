@@ -211,7 +211,7 @@ final class SabrVideoSession {
         case _ where name.hasPrefix("s"):
             guard let index = Int(name.dropFirst().dropLast(5)), captions.indices.contains(index), duration > 0 else { return nil }
             let length = String(format: "%.3f", duration)
-            return "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:\(Int(duration.rounded(.up)))\n#EXT-X-MEDIA-SEQUENCE:0\n"
+            return "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:\(duration.rounded(.up).safeInt)\n#EXT-X-MEDIA-SEQUENCE:0\n"
                 + "#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:\(length),\ns\(index).vtt\n#EXT-X-ENDLIST\n"
         case "v.m3u8": return video.playlist(media: "v.mp4", finished: finished)
         case "a.m3u8": return audio.playlist(media: "a.mp4", finished: finished)
@@ -358,7 +358,7 @@ final class FragmentedTrack {
 
     func playlist(media: String, finished: Bool) -> String? {
         guard initLength > 0 else { return nil }
-        let target = max(10, Int((segments.map(\.duration).max() ?? 0).rounded(.up)))
+        let target = max(10, (segments.map(\.duration).max() ?? 0).rounded(.up).safeInt)
         var lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:\(target)", "#EXT-X-MEDIA-SEQUENCE:0",
                      "#EXT-X-PLAYLIST-TYPE:EVENT", "#EXT-X-INDEPENDENT-SEGMENTS",
                      "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES",
@@ -640,7 +640,7 @@ enum Subtitles {
     }
 
     private static func stamp(_ ms: Double) -> String {
-        let total = Int(ms.rounded())
+        let total = max(0, ms.rounded().safeInt)
         return String(format: "%02d:%02d:%02d.%03d", total / 3_600_000, total / 60_000 % 60, total / 1000 % 60, total % 1000)
     }
 }

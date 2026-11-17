@@ -610,7 +610,7 @@ private struct Storyboard {
     }
 
     func frame(at time: Double, duration: Double) -> (url: URL, rect: CGRect)? {
-        let i = min(count - 1, max(0, Int(time / duration * Double(count))))
+        let i = min(count - 1, max(0, (time / duration * Double(count)).safeInt))
         let perSheet = cols * rows
         guard let url = URL(string: template.replacingOccurrences(of: "$M", with: String(i / perSheet))) else { return nil }
         let pos = i % perSheet

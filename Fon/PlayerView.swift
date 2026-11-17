@@ -351,7 +351,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             // (владелец: «после переключения на ютуб и обратно системный плеер пропадает»).
             let list = webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }?
                 .first { $0.name == "list" }?.value
-            components.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(Int(webTime))s")]
+            components.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(webTime.safeInt)s")]
                 + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
             if let url = components.url {
                 webView.load(URLRequest(url: URL(string: "about:blank")!))
@@ -476,7 +476,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             // Страница снова — с того места, где остановился свой плеер.
             var components = URLComponents(string: "https://m.youtube.com/watch")
             let list = pageURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }?.first { $0.name == "list" }?.value
-            components?.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(Int(time ?? self.webTime))s")]
+            components?.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\((time ?? self.webTime).safeInt)s")]
                 + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
             if let url = components?.url { self.webView.load(URLRequest(url: url)) }
         }

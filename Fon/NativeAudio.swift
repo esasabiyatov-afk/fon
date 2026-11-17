@@ -5,6 +5,12 @@ import UIKit
 import WebKit
 
 /// Ссылка на поток трека и с какими заголовками её открывать.
+/// Время/длина в целые секунды без вылета: `Int(.nan)` роняет приложение (отчёт iOS после 1.110: переход в
+/// режим видео, пока трек ещё грузился, — у AVPlayer время было NaN, `handoverURL` упал).
+extension Double {
+    var safeInt: Int { isFinite ? Int(max(-9e15, min(9e15, self))) : 0 }
+}
+
 struct AudioStream {
     let url: URL
     let headers: [String: String]
@@ -1008,7 +1014,7 @@ final class NativeAudio: NSObject {
         guard let track = currentTrack else { return nil }
         var components = URLComponents(string: "https://m.youtube.com/watch")!
         components.queryItems = [URLQueryItem(name: "v", value: track.id),
-                                 URLQueryItem(name: "t", value: "\(Int(player.currentTime().seconds))s")]
+                                 URLQueryItem(name: "t", value: "\(player.currentTime().seconds.safeInt)s")]
             + (playlistID.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
         return components.url
     }
@@ -1093,7 +1099,7 @@ final class NativeAudio: NSObject {
         let command = MPRemoteCommandCenter.shared().likeCommand
         let liked = CloudLikes.shared.isLiked(state.id)
         if command.isActive != liked { command.isActive = liked }
-        let signature = "\(state.id)|\(state.title)|\(state.artist)|\(state.paused)|\(Int(state.duration))"
+        let signature = "\(state.id)|\(state.title)|\(state.artist)|\(state.paused)|\(state.duration.safeInt)"
         let now = CFAbsoluteTimeGetCurrent()
         var drift = Double.infinity
         if let last = nowPlayingStamp { drift = abs((state.paused ? last.time : last.time + (now - last.at)) - state.time) }
