@@ -39,6 +39,21 @@ enum DirectStream {
             }
             reasons.append(attempt.label.isEmpty ? (result.reason ?? "?") : "\(attempt.label): \(result.reason ?? "?")")
             AppJournal.add("страница \(videoID)\(attempt.label.isEmpty ? "" : " (\(attempt.label))"): \(result.reason ?? "?")")
+            // www без ссылок (iPhone 17, iPad) — страница m.youtube, как у Safari на этом телефоне: до SABR.
+            if index == 0, result.noLinks {
+                let mobile = await mobileAttempt(videoID, fallbackPlayer: result.sabr?.playerURL)
+                let clients: String = mobile.streams.map(\.client).joined(separator: ", ")
+                let outcome: String = mobile.streams.isEmpty ? mobile.reason : "есть (\(clients)) \(mobile.reason)"
+                AppJournal.add("m.youtube \(videoID): " + outcome)
+                if !mobile.streams.isEmpty {
+                    var found = result
+                    found.streams = mobile.streams
+                    found.noLinks = false
+                    found.reason = "сработало m.youtube" + (mobile.reason.isEmpty ? "" : " (\(mobile.reason))")
+                    return found
+                }
+                reasons.append("m.youtube: \(mobile.reason)")
+            }
             // Обычных ссылок нет (iPad, iPhone 17) — звук по SABR внутри приложения (с 1.100; проба 1.99 — работает).
             if allowSABR, !triedSABR, result.noLinks, let source = result.sabr {
                 triedSABR = true // один раз: повтор с другими cookies SABR не поможет, а ждать долго
@@ -98,6 +113,80 @@ enum DirectStream {
         return "без разбора: signatureCipher \(count("signatureCipher")), videoplayback \(count("videoplayback")), SABR: \(count("serverAbrStreamingUrl") > 0 ? "да" : "нет"), \(data.count / 1024) КБ"
     }
 
+    /// m.youtube (MWEB — то, что открывает Safari на этом телефоне). Диагностика 1.107 на iPhone 17: у www
+    /// (app=desktop) ссылок нет ни в одном варианте (0 из 22, только SABR, а свой SABR стоит на «защите потока: 2»
+    /// и с PO-токеном), а `youtubei/v1/player` клиентом страницы m.youtube со входом — 26 из 26, и у звука 140.
+    /// Ссылку проверяем первым 1 КБ: не пускают — с PO-токеном (`pot=`), и так нет — дальше как раньше (SABR).
+    private static func mobileAttempt(_ videoID: String, fallbackPlayer: URL?) async -> (streams: [AudioStream], reason: String) {
+        let agent = await MainActor.run { WebViewFactory.safariUserAgent() }
+        let origin = "https://m.youtube.com"
+        guard let pageURL = URL(string: "\(origin)/watch?v=\(videoID)&hl=ru"),
+              let apiURL = URL(string: "\(origin)/youtubei/v1/player?prettyPrint=false") else { return ([], "плохая ссылка") }
+        var request = URLRequest(url: pageURL, timeoutInterval: 15)
+        request.httpShouldHandleCookies = false
+        request.setValue(agent, forHTTPHeaderField: "User-Agent")
+        request.setValue("ru-RU,ru;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        let cookie = YouTubeSession.cookieHeader
+        if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        guard let (page, _) = try? await URLSession.shared.data(for: request) else { return ([], "страница не ответила") }
+        guard let context = YouTubeStreams.jsonObject(in: page, after: "\"INNERTUBE_CONTEXT\":"),
+              let client = context["client"] as? [String: Any] else { return ([], "на странице нет клиента") }
+        let jsPath = YouTubeStreams.string(in: page, after: "\"jsUrl\":\"") ?? YouTubeStreams.string(in: page, after: "\"PLAYER_JS_URL\":\"")
+        guard let playerURL = jsPath.flatMap({ URL(string: YouTubeStreams.origin + $0.replacingOccurrences(of: "\\/", with: "/")) }) ?? fallbackPlayer else {
+            return ([], "нет кода плеера")
+        }
+        // Запрос плеера — как его делает сама страница m.youtube.
+        let body: [String: Any] = ["context": context, "videoId": videoID, "contentCheckOk": true, "racyCheckOk": true,
+                                   "playbackContext": ["contentPlaybackContext": ["html5Preference": "HTML5_PREF_WANTS"]]]
+        guard let json = try? JSONSerialization.data(withJSONObject: body) else { return ([], "?") }
+        var api = URLRequest(url: apiURL, timeoutInterval: 15)
+        api.httpMethod = "POST"
+        api.httpBody = json
+        api.httpShouldHandleCookies = false
+        api.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        api.setValue(agent, forHTTPHeaderField: "User-Agent")
+        api.setValue(String(number(in: page, after: "\"INNERTUBE_CONTEXT_CLIENT_NAME\":") ?? 2), forHTTPHeaderField: "X-Youtube-Client-Name")
+        api.setValue(client["clientVersion"] as? String ?? "", forHTTPHeaderField: "X-Youtube-Client-Version")
+        api.setValue(origin, forHTTPHeaderField: "Origin")
+        api.setValue(origin + "/", forHTTPHeaderField: "Referer")
+        if let visitor = client["visitorData"] as? String { api.setValue(visitor, forHTTPHeaderField: "X-Goog-Visitor-Id") }
+        if let cookie { api.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        if let auth = YouTubeSession.authorization(origin: origin) {
+            api.setValue(auth, forHTTPHeaderField: "Authorization")
+            YouTubeAccount.headers.forEach { api.setValue($0.value, forHTTPHeaderField: $0.key) }
+        }
+        guard let (data, _) = try? await URLSession.shared.data(for: api),
+              let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ([], "плеер не ответил") }
+        let playability = response["playabilityStatus"] as? [String: Any] ?? [:]
+        let status = playability["status"] as? String ?? "?"
+        guard status == "OK" else { return ([], "\(status) \(((playability["reason"] as? String) ?? "").prefix(60))") }
+        let found = await streams(from: response, playerURL: playerURL, agent: agent)
+        guard let first = found.streams.first else { return ([], found.note) }
+        if await opens(first) { return (found.streams, "") }
+        // Не пускают — с PO-токеном (со входом — DATASYNC_ID до «||», без входа — VISITOR_DATA).
+        let unescape = { (text: String) in text.replacingOccurrences(of: "\\u003d", with: "=").replacingOccurrences(of: "\\u0026", with: "&") }
+        let loggedIn = page.range(of: Data("\"LOGGED_IN\":true".utf8)) != nil
+        let sync = YouTubeStreams.string(in: page, after: "\"DATASYNC_ID\":\"").map(unescape)?.components(separatedBy: "||").first { !$0.isEmpty }
+        let visitor = YouTubeStreams.string(in: page, after: "\"VISITOR_DATA\":\"").map(unescape)
+        guard let binding = loggedIn ? (sync ?? visitor) : visitor, let token = await SabrEngine.poToken(for: binding) else {
+            return ([], "ссылки не пускают, PO-токена нет")
+        }
+        let signed = found.streams.map { AudioStream(url: adding(poToken: token, to: $0.url), headers: $0.headers, client: $0.client) }
+        if await opens(signed[0]) { return (signed, "с PO-токеном") }
+        return ([], "ссылки не пускают (и с PO-токеном)")
+    }
+
+    /// Первый 1 КБ ссылки: пускает ли googlevideo (200/206).
+    private static func opens(_ stream: AudioStream) async -> Bool {
+        var request = URLRequest(url: stream.url, timeoutInterval: 10)
+        stream.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        request.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
+        guard let (_, reply) = try? await URLSession.shared.data(for: request) else { return false }
+        let code = (reply as? HTTPURLResponse)?.statusCode ?? 0
+        return code == 200 || code == 206
+    }
+
     /// Для диагностики: звук 140 и файл 18 из готового ответа плеера (например, m.youtube — MWEB отдаёт ссылки всем
     /// форматам, диагностика 1.107 на телефоне владельца: 26 из 26) — расшифровать так же, как обычные.
     static func streams(from response: [String: Any], playerURL: URL, agent: String) async -> (streams: [AudioStream], note: String) {
@@ -117,7 +206,7 @@ enum DirectStream {
                                                                 n: Array(Set(links.compactMap(\.n))),
                                                                 signatures: links.compactMap(\.signature))
             let streams = links.compactMap { link in
-                link.url(solved).map { AudioStream(url: $0, headers: ["User-Agent": agent], client: link.audioOnly ? "звук 140" : "файл 18") }
+                link.url(solved).map { AudioStream(url: $0, headers: ["User-Agent": agent], client: link.audioOnly ? "Прямо звук" : "Прямо файл") }
             }
             return (streams, note)
         } catch {

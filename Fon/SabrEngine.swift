@@ -144,7 +144,7 @@ final class SabrEngine {
     }
 
     /// PO-токен: в фоне — только готовый (скрытое окно там может не ответить), на экране — получить.
-    private static func poToken(for binding: String) async -> String? {
+    static func poToken(for binding: String) async -> String? {
         if let token = PoToken.cached(for: binding) { return token }
         let active = await MainActor.run { UIApplication.shared.applicationState != .background }
         guard active else { return nil }
