@@ -271,14 +271,18 @@ final class Discover {
                 if takeDeezer {
                     let song = dz[d]
                     d += 1
-                    let key = String(song.id)
-                    var videoID = cache[key]
-                    if videoID == nil {
-                        videoID = await Deezer.findVideo(song) ?? ""
-                        cache[key] = videoID
+                    // Название и исполнитель — с YouTube (у Deezer бывают чужие: «Hybe Labels» вместо aespa).
+                    // Запись: «id\tназвание\tисполнитель»; ключ «v2-» — старые записи (только id) не берём.
+                    let key = "v2-\(song.id)"
+                    var entry = cache[key]
+                    if entry == nil {
+                        entry = await Deezer.findVideo(song).map { [$0.id, $0.title, $0.artist].joined(separator: "\t") } ?? ""
+                        cache[key] = entry
                     }
-                    guard let id = videoID, !id.isEmpty else { continue }
-                    let track = Track(id: id, title: song.title, artist: song.artist)
+                    let parts = (entry ?? "").components(separatedBy: "\t")
+                    guard parts.count == 3, !parts[0].isEmpty else { continue }
+                    let track = Track(id: parts[0], title: parts[1].isEmpty ? song.title : parts[1],
+                                      artist: parts[2].isEmpty ? song.artist : parts[2])
                     if profile.ok(track), used.insert(id).inserted { out.append(track) }
                 } else if y < yt.count {
                     let track = yt[y]
@@ -594,7 +598,7 @@ fileprivate enum Deezer {
 
     /// Видео YouTube для трека Deezer: поиск без входа, название совпадает, исполнитель или длительность — тоже;
     /// лучше — канал «- Topic» (звук альбома) или подтверждённый канал.
-    static func findVideo(_ song: Song) async -> String? {
+    static func findVideo(_ song: Song) async -> Track? {
         let videos = await YouTubeStreams.searchVideos("\(song.artist) \(song.title)", params: "EgIQAQ==")
         let name = normalized(song.title.replacingOccurrences(of: #"\s*[\(\[].*?[\)\]]"#, with: "", options: .regularExpression))
         let artistKeys = Taste.artistKeys(song.artist)
@@ -612,7 +616,7 @@ fileprivate enum Deezer {
             return sameArtist || sameLength
         }
         let best = matches.first { $0.channel.hasSuffix(" - Topic") } ?? matches.first { $0.verified } ?? matches.first
-        return best?.track.id
+        return best?.track
     }
 
     private static func normalized(_ text: String) -> String {
