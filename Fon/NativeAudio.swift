@@ -471,7 +471,8 @@ final class NativeAudio: NSObject {
         let time = player.currentTime().seconds
         let length = player.currentItem?.duration.seconds ?? 0
         let status = ["пауза", "ждёт", "играет"][min(2, player.timeControlStatus.rawValue)]
-        return "активен: \(active ? "да" : "нет"), трек \(currentTrack?.id ?? "—") (\(index + 1) из \(queue.count)), поток: \(currentClient.isEmpty ? "—" : currentClient), "
+        let position: String = queue.isEmpty ? "очереди нет" : "\(index + 1) из \(queue.count)"
+        return "активен: \(active ? "да" : "нет"), трек \(currentTrack?.id ?? "—") (\(position)), поток: \(currentClient.isEmpty ? "—" : currentClient), "
             + "\(status), \(time.isFinite ? Int(time) : 0)/\(length.isFinite ? Int(length) : 0) с, громкость \(Int(player.volume * 100))%, "
             + "неудач подряд \(failuresInRow), заранее найдено \(prefetched.count), ожидание: \(player.reasonForWaitingToPlay?.rawValue ?? "—")"
             + (lastReason.map { ", последняя причина: \($0)" } ?? "")

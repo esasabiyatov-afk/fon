@@ -98,6 +98,42 @@ enum DirectStream {
         return "без разбора: signatureCipher \(count("signatureCipher")), videoplayback \(count("videoplayback")), SABR: \(count("serverAbrStreamingUrl") > 0 ? "да" : "нет"), \(data.count / 1024) КБ"
     }
 
+    /// Для диагностики: звук 140 и файл 18 из готового ответа плеера (например, m.youtube — MWEB отдаёт ссылки всем
+    /// форматам, диагностика 1.107 на телефоне владельца: 26 из 26) — расшифровать так же, как обычные.
+    static func streams(from response: [String: Any], playerURL: URL, agent: String) async -> (streams: [AudioStream], note: String) {
+        let streaming = response["streamingData"] as? [String: Any] ?? [:]
+        let formats = streaming["formats"] as? [[String: Any]] ?? []
+        let adaptive = streaming["adaptiveFormats"] as? [[String: Any]] ?? []
+        var picked: [[String: Any]] = []
+        if let audio = adaptive.first(where: { ($0["itag"] as? Int) == 140 }) { picked.append(audio) }
+        if let file = formats.first(where: { ($0["itag"] as? Int) == 18 }) { picked.append(file) }
+        let links = picked.compactMap(Link.init)
+        guard !links.isEmpty else { return ([], "у форматов 140/18 нет ссылок") }
+        let note = links.map { link in
+            "\(link.itag): подпись \(link.signature != nil ? "да" : "нет"), n \(link.n != nil ? "да" : "нет")"
+        }.joined(separator: "; ")
+        do {
+            let solved = try await ChallengeSolver.shared.solve(playerURL: playerURL,
+                                                                n: Array(Set(links.compactMap(\.n))),
+                                                                signatures: links.compactMap(\.signature))
+            let streams = links.compactMap { link in
+                link.url(solved).map { AudioStream(url: $0, headers: ["User-Agent": agent], client: link.audioOnly ? "звук 140" : "файл 18") }
+            }
+            return (streams, note)
+        } catch {
+            return ([], note + "; решатель: " + String(String(describing: error).prefix(80)))
+        }
+    }
+
+    /// Ссылка с PO-токеном (`pot=`), как её дополняет плеер YouTube в браузере.
+    static func adding(poToken token: String, to url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var items = (components.percentEncodedQueryItems ?? []).filter { $0.name != "pot" }
+        items.append(URLQueryItem(name: "pot", value: encode(token)))
+        components.percentEncodedQueryItems = items
+        return components.url ?? url
+    }
+
     private static func number(in data: Data, after marker: String) -> Int? {
         guard let found = data.range(of: Data(marker.utf8)) else { return nil }
         return Int(String(decoding: data[found.upperBound...].prefix { (0x30...0x39).contains($0) }, as: UTF8.self))

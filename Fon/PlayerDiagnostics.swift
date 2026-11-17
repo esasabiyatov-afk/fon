@@ -86,8 +86,9 @@ enum PlayerDiagnostics {
         await say("   — отдельная сетевая сессия (новое соединение, без кэша и HTTP/3):")
         await say("   как сейчас: " + short(await fetchPage(videoID, host: "www.youtube.com", desktop: true, agent: YouTubeStreams.iPhoneSafariUserAgent, cookie: login, ephemeral: true)))
         await say("   — API плеера тем же клиентом, что дала страница (так делает сама страница YouTube):")
-        await say("   www (\(clientLabel(main))): " + (await playerAPI(videoID, page: main, origin: "https://www.youtube.com", agent: YouTubeStreams.iPhoneSafariUserAgent)))
-        await say("   m.youtube (\(clientLabel(mobile))): " + (await playerAPI(videoID, page: mobile, origin: "https://m.youtube.com", agent: realUA)))
+        await say("   www (\(clientLabel(main))): " + (await playerAPI(videoID, page: main, origin: "https://www.youtube.com", agent: YouTubeStreams.iPhoneSafariUserAgent)).text)
+        let mweb = await playerAPI(videoID, page: mobile, origin: "https://m.youtube.com", agent: realUA)
+        await say("   m.youtube (\(clientLabel(mobile))): " + mweb.text)
 
         // F. Настоящий WebKit.
         await say("F. Встроенный браузер (WebKit — как Safari на этом устройстве)")
@@ -106,6 +107,26 @@ enum PlayerDiagnostics {
             for stream in plain.streams {
                 await say("   \(stream.client): HTTP " + (await rangeCheck(stream.url, headers: stream.headers)) + "; плеер iOS: " + (await playTest(stream.url, headers: stream.headers)))
             }
+        }
+        // Ссылки m.youtube (MWEB — как Safari на этом устройстве): там они есть у всех форматов, и у звука 140.
+        // Играют ли без PO-токена — здесь; с токеном (pot=) — в разделе H.
+        var mwebStreams: [AudioStream] = []
+        await say("   — ссылки m.youtube (MWEB), без PO-токена:")
+        if let response = mweb.response {
+            let jsPath = mobile.data.flatMap { YouTubeStreams.string(in: $0, after: "\"jsUrl\":\"") }
+                ?? main.data.flatMap { YouTubeStreams.string(in: $0, after: "\"jsUrl\":\"") }
+            if let jsPath, let playerURL = URL(string: YouTubeStreams.origin + jsPath.replacingOccurrences(of: "\\/", with: "/")) {
+                let found = await DirectStream.streams(from: response, playerURL: playerURL, agent: realUA)
+                await say("   разбор: \(found.note.isEmpty ? "—" : found.note); код плеера: \(playerURL.path)")
+                mwebStreams = found.streams
+                for stream in found.streams {
+                    await say("   \(stream.client): HTTP " + (await rangeCheck(stream.url, headers: stream.headers)) + "; плеер iOS: " + (await playTest(stream.url, headers: stream.headers)))
+                }
+            } else {
+                await say("   нет ссылки на код плеера")
+            }
+        } else {
+            await say("   ответа плеера m.youtube нет")
         }
 
         // H–J. SABR.
@@ -127,6 +148,13 @@ enum PlayerDiagnostics {
             let until = await PoToken.shared.minterValidUntil
             await say("   с нуля: " + (token != nil ? "получен" : "НЕ получен") + " (\(seconds(since: mark))) — \(report)"
                       + (token != nil ? "; годен до \(stamp(until))" : ""))
+            if let token, !mwebStreams.isEmpty {
+                await say("   ссылки m.youtube (MWEB) с PO-токеном (pot=):")
+                for stream in mwebStreams {
+                    let url = DirectStream.adding(poToken: token, to: stream.url)
+                    await say("   \(stream.client): HTTP " + (await rangeCheck(url, headers: stream.headers)) + "; плеер iOS: " + (await playTest(url, headers: stream.headers)))
+                }
+            }
         } else {
             await say("   привязки нет (на странице ни DATASYNC_ID, ни VISITOR_DATA)")
         }
@@ -226,6 +254,10 @@ enum PlayerDiagnostics {
         let caches = manager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         func size(_ url: URL) -> (files: Int, bytes: Int64) {
+            // Отдельный файл (likes.json, journal.txt…) — его размер; в 1.107 такие показывались «0 ф. 0 КБ».
+            if let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), values.isRegularFile == true {
+                return (1, Int64(values.fileSize ?? 0))
+            }
             guard let items = manager.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return (0, 0) }
             var files = 0, bytes: Int64 = 0
             for case let item as URL in items {
@@ -467,13 +499,13 @@ enum PlayerDiagnostics {
     }
 
     /// youtubei/v1/player тем же клиентом и версией, что дала страница (со входом, как запрос страницы YouTube).
-    private static func playerAPI(_ videoID: String, page: Page, origin: String, agent: String) async -> String {
+    private static func playerAPI(_ videoID: String, page: Page, origin: String, agent: String) async -> (text: String, response: [String: Any]?) {
         let context = context(page)
-        guard !context.isEmpty, let client = context["client"] as? [String: Any] else { return "нет контекста клиента на странице" }
-        guard let url = URL(string: "\(origin)/youtubei/v1/player?prettyPrint=false") else { return "?" }
+        guard !context.isEmpty, let client = context["client"] as? [String: Any] else { return ("нет контекста клиента на странице", nil) }
+        guard let url = URL(string: "\(origin)/youtubei/v1/player?prettyPrint=false") else { return ("?", nil) }
         let body: [String: Any] = ["context": context, "videoId": videoID, "contentCheckOk": true, "racyCheckOk": true,
                                    "playbackContext": ["contentPlaybackContext": ["html5Preference": "HTML5_PREF_WANTS"]]]
-        guard let json = try? JSONSerialization.data(withJSONObject: body) else { return "?" }
+        guard let json = try? JSONSerialization.data(withJSONObject: body) else { return ("?", nil) }
         var request = URLRequest(url: url, timeoutInterval: 15)
         request.httpMethod = "POST"
         request.httpBody = json
@@ -491,14 +523,18 @@ enum PlayerDiagnostics {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
             YouTubeAccount.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         }
-        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return "нет ответа" }
+        guard let (data, reply) = try? await URLSession.shared.data(for: request) else { return ("нет ответа", nil) }
         let status = (reply as? HTTPURLResponse)?.statusCode ?? 0
-        guard let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "HTTP \(status), не JSON" }
+        guard let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ("HTTP \(status), не JSON", nil) }
         let playability = response["playabilityStatus"] as? [String: Any] ?? [:]
         let streaming = response["streamingData"] as? [String: Any] ?? [:]
         let formats = (streaming["formats"] as? [[String: Any]] ?? []) + (streaming["adaptiveFormats"] as? [[String: Any]] ?? [])
         let linked = formats.filter { $0["url"] != nil || $0["signatureCipher"] != nil || $0["cipher"] != nil }.count
-        return "HTTP \(status), \(playability["status"] as? String ?? "?") \((playability["reason"] as? String).map { "(\($0.prefix(60)))" } ?? ""), ссылки \(linked) из \(formats.count), SABR: \(streaming["serverAbrStreamingUrl"] != nil ? "да" : "нет")"
+        let state = playability["status"] as? String ?? "?"
+        let why = (playability["reason"] as? String).map { " (\($0.prefix(60)))" } ?? ""
+        let sabr = streaming["serverAbrStreamingUrl"] != nil ? "да" : "нет"
+        let text: String = "HTTP \(status), \(state)\(why), ссылки \(linked) из \(formats.count), SABR: \(sabr)"
+        return (text, response)
     }
 
     // MARK: - F. WebKit
