@@ -376,7 +376,7 @@ final class SabrEngine {
     }
 
     /// Держим последние 40 треков (~130 МБ) — свежие нужны для «назад» и повтора.
-    private static func cleanUp() {
+    static func cleanUp() {
         let keys: [URLResourceKey] = [.contentModificationDateKey]
         guard let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys) else { return }
         let sorted = files.sorted {

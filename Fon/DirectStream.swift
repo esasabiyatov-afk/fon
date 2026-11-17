@@ -209,15 +209,75 @@ enum DirectStream {
         }
         let found = await streams(from: response, playerURL: playerURL, agent: agent)
         guard let first = found.streams.first else { outcome.reason = found.note + " (\(tokenNote))"; return outcome }
-        if await opens(first) { outcome.streams = found.streams; outcome.reason = tokenNote; return outcome }
+        if await opens(first) {
+            outcome.streams = await asFiles(found.streams, videoID: videoID)
+            outcome.reason = tokenNote
+            return outcome
+        }
         guard let binding, let token = await SabrEngine.poToken(for: binding) else {
             outcome.reason = "ссылки не пускают, токена сессии нет (\(tokenNote))"
             return outcome
         }
         let signed = found.streams.map { AudioStream(url: adding(poToken: token, to: $0.url), headers: $0.headers, client: $0.client) }
-        if await opens(signed[0]) { outcome.streams = signed; outcome.reason = "с pot, " + tokenNote; return outcome }
+        if await opens(signed[0]) {
+            outcome.streams = await asFiles(signed, videoID: videoID)
+            outcome.reason = "с pot, " + tokenNote
+            return outcome
+        }
         outcome.reason = "ссылки не пускают и с pot (\(tokenNote))"
         return outcome
+    }
+
+    /// Звук 140 по ссылке — файлом (диагностика 1.109 на iPhone 17: плеер iOS видел у потока 346 с вместо 173 —
+    /// в moov дорожки уже стоит длина трека, и AVPlayer прибавлял к ней фрагменты, как у SABR в 1.104). Трек
+    /// ~3 МБ качается за 1–2 с кусками по 4 МБ, длины в moov обнуляются (`SabrEngine.zeroMoovDurations`), файл —
+    /// в `Caches/sabr` (как у SABR: «Скачанные» его копируют). Не скачался — ссылка без звука убирается, остаётся файл 360p.
+    private static func asFiles(_ streams: [AudioStream], videoID: String) async -> [AudioStream] {
+        var result: [AudioStream] = []
+        for stream in streams {
+            guard stream.client == "Прямо звук" else { result.append(stream); continue }
+            if let file = SabrEngine.cached(videoID) { result.append(AudioStream(url: file, headers: [:], client: stream.client)); continue }
+            if let file = await downloadAudio(stream, videoID: videoID) {
+                result.append(AudioStream(url: file, headers: [:], client: stream.client))
+            } else {
+                AppJournal.add("m.youtube \(videoID): звук не скачался файлом — играет файл 360p")
+            }
+        }
+        return result
+    }
+
+    private static func downloadAudio(_ stream: AudioStream, videoID: String) async -> URL? {
+        let manager = FileManager.default
+        let file = SabrEngine.folder.appendingPathComponent(videoID + ".m4a")
+        let temp = file.appendingPathExtension("direct")
+        manager.createFile(atPath: temp.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: temp) else { return nil }
+        let chunk: Int64 = 4 * 1024 * 1024
+        var offset: Int64 = 0
+        var total: Int64?
+        while total.map({ offset < $0 }) ?? true {
+            var request = URLRequest(url: stream.url, timeoutInterval: 20)
+            stream.headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+            request.setValue("bytes=\(offset)-\(offset + chunk - 1)", forHTTPHeaderField: "Range")
+            guard let (data, reply) = try? await URLSession.shared.data(for: request),
+                  let http = reply as? HTTPURLResponse, (200...299).contains(http.statusCode), !data.isEmpty else {
+                try? handle.close()
+                try? manager.removeItem(at: temp)
+                return nil
+            }
+            handle.write(data)
+            offset += Int64(data.count)
+            if http.statusCode == 200 { total = offset; break } // отдали целиком
+            total = http.value(forHTTPHeaderField: "Content-Range")?.components(separatedBy: "/").last.flatMap { Int64($0) } ?? offset
+            if offset > 80 * 1024 * 1024 { break }
+        }
+        try? handle.close()
+        guard offset > 10_000, offset == total else { try? manager.removeItem(at: temp); return nil }
+        _ = SabrEngine.zeroMoovDurations(temp)
+        try? manager.removeItem(at: file)
+        guard (try? manager.moveItem(at: temp, to: file)) != nil else { try? manager.removeItem(at: temp); return nil }
+        SabrEngine.cleanUp()
+        return file
     }
 
     /// Первый 1 КБ ссылки: пускает ли googlevideo (200/206).
