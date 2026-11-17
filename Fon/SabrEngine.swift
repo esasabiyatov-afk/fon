@@ -186,11 +186,15 @@ final class SabrEngine {
         guard let job = jobs.removeValue(forKey: id) else { return }
         try? job.handle.close()
         let parsed = (try? JSONSerialization.jsonObject(with: Data(info.utf8))) as? [String: Any]
-        report = "запросов \(parsed?["requests"] as? Int ?? 0), байт \(job.bytes)"
-            + (error.isEmpty ? "" : ", ошибка: \(error)")
-            + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(30).joined(separator: " | ") } ?? "")
-            + (lastException.map { "; JS: \($0.prefix(120))" } ?? "")
-            + (poNote.isEmpty ? "" : "; " + poNote)
+        // По частям: одним выражением компилятор не успевал разобрать типы (сборка 1.106 упала).
+        let requests: Int = parsed?["requests"] as? Int ?? 0
+        let log: [String] = parsed?["log"] as? [String] ?? []
+        var parts: [String] = ["запросов \(requests), байт \(job.bytes)"]
+        if !error.isEmpty { parts.append("ошибка: \(error)") }
+        if !log.isEmpty { parts.append("журнал: " + log.prefix(30).joined(separator: " | ")) }
+        if let exception = lastException { parts.append("JS: " + String(exception.prefix(120))) }
+        if !poNote.isEmpty { parts.append(poNote) }
+        report = parts.joined(separator: "; ")
         AppJournal.add("SABR звук: " + (error.isEmpty ? "готово" : error) + "; " + report)
         if error.isEmpty, job.bytes > 10_000 {
             // Длина в moov YouTube + длина фрагментов — AVPlayer показывал двойную длину (iPad, 1.104: 406 с при 203).
