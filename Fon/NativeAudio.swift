@@ -55,6 +55,19 @@ enum YouTubeSession {
         return "cookies: \(cookies.count), вход: \(signedIn ? "да" : "нет")"
     }
 
+    /// Диагностика: имена cookies (без значений) и значение одной (PREF — настройки, не секрет).
+    static var cookieNames: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return cookies.map(\.name).sorted()
+    }
+
+    static func cookieValue(_ name: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return cookies.first { $0.name == name }?.value
+    }
+
     static var cookieHeader: String? { cookieHeaderWithout([]) }
 
     static func cookieHeaderWithout(_ names: Set<String>) -> String? {
@@ -732,12 +745,11 @@ final class NativeAudio: NSObject {
     /// На обложке включили видео, а играет скачанный файл (в нём только звук; владелец после 1.88: «не играет видео
     /// по нажатию на сохранённых») — с сетью переходим на поток с видео с того же места, пауза сохраняется.
     func videoWanted() {
-        // «SABR» — звук по SABR файлом (iPhone 17): видео по SABR берётся тем же поиском.
-        guard active, currentClient == "Скачано" || currentClient == "SABR", OfflineStore.shared.online, let track = currentTrack else { return }
+        guard active, currentClient == "Скачано", OfflineStore.shared.online, let track = currentTrack else { return }
         let was = currentClient
         let current = token
         Task { [weak self] in
-            let found = await DirectStream.find(track.id, sabrVideo: Settings.videoArtwork)
+            let found = await DirectStream.find(track.id)
             await MainActor.run {
                 guard let self, self.token == current, self.currentClient == was else { return }
                 let video = found.streams.filter { $0.client != "Прямо звук" && $0.client != "SABR" }
@@ -760,7 +772,7 @@ final class NativeAudio: NSObject {
         triedDirect = true
         let current = token
         Task { [weak self] in
-            let found = await DirectStream.find(track.id, sabrVideo: Settings.videoArtwork)
+            let found = await DirectStream.find(track.id)
             await MainActor.run {
                 guard let self, self.token == current, self.active else { return }
                 self.use(found, for: track)
@@ -807,7 +819,7 @@ final class NativeAudio: NSObject {
         beginBackgroundTask()
         let current = token
         Task { [weak self] in
-            let found = await DirectStream.find(track.id, sabrVideo: Settings.videoArtwork)
+            let found = await DirectStream.find(track.id)
             await MainActor.run {
                 guard let self else { return }
                 self.refreshingStream = false
@@ -1002,7 +1014,7 @@ final class NativeAudio: NSObject {
         guard prefetched[id] == nil, !prefetching.contains(id) else { return }
         prefetching.insert(id)
         Task { [weak self] in
-            let result = await DirectStream.find(id, sabrVideo: Settings.videoArtwork)
+            let result = await DirectStream.find(id)
             await MainActor.run {
                 guard let self else { return }
                 self.prefetching.remove(id)

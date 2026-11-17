@@ -63,19 +63,10 @@ final class SettingsViewController: UITableViewController {
     /// потом текст с кнопкой «Скопировать» — владелец присылает его.
     private func runSabrProbe() {
         let videoID = NativeAudio.shared.currentTrack?.id ?? Library.shared.history.first?.id ?? "dQw4w9WgXcQ"
-        let waiting = UIAlertController(title: "Диагностика…", message: "До минуты. Не закрывайте экран.", preferredStyle: .alert)
-        present(waiting, animated: true)
-        Task { [weak self] in
-            let text = await PlayerDiagnostics.run(videoID: videoID)
-            await MainActor.run {
-                waiting.dismiss(animated: true) {
-                    let alert = UIAlertController(title: "Диагностика системного плеера", message: text, preferredStyle: .alert)
-                    alert.addAction(UIAlertAction(title: tr("Скопировать"), style: .default) { _ in UIPasteboard.general.string = text })
-                    alert.addAction(UIAlertAction(title: "OK", style: .cancel))
-                    self?.present(alert, animated: true)
-                }
-            }
-        }
+        // Полный снимок (после 1.105) — несколько минут, строки видны по ходу.
+        let screen = UINavigationController(rootViewController: DiagnosticsViewController(videoID: videoID))
+        screen.modalPresentationStyle = .fullScreen
+        present(screen, animated: true)
     }
 
     /// Язык интерфейса: Авто / Русский / English — после перезапуска.

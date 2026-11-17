@@ -81,13 +81,14 @@ final class SabrEngine {
     }
 
     /// Трек целиком в файл. n в адресе — решателем (как у обычных ссылок).
-    func download(_ source: Source) async throws -> URL {
+    /// `usePoToken: false` — без PO-токена (диагностика: сравнить «с токеном» и «без»).
+    func download(_ source: Source, usePoToken: Bool = true, timeout: Double = 90) async throws -> URL {
         if let file = Self.cached(source.videoID) { return file }
-        let source = await solved(source)
+        let source = await solved(source, usePoToken: usePoToken)
         Self.cleanUp()
         let file = Self.folder.appendingPathComponent(source.videoID + ".m4a")
         return try await withCheckedThrowingContinuation { continuation in
-            queue.async { self.start(source, file: file) { continuation.resume(with: $0) } }
+            queue.async { self.start(source, file: file, timeout: timeout) { continuation.resume(with: $0) } }
         }
     }
 
@@ -121,9 +122,11 @@ final class SabrEngine {
     }
 
     /// n в адресе — решателем (как у обычных ссылок).
-    private func solved(_ source: Source) async -> Source {
+    private func solved(_ source: Source, usePoToken: Bool = true) async -> Source {
         var source = source
-        if let binding = source.poBinding, !binding.isEmpty {
+        if !usePoToken {
+            queue.sync { poNote = "PO-токен: не использован (проба без него)" }
+        } else if let binding = source.poBinding, !binding.isEmpty {
             source.poToken = await Self.poToken(for: binding)
             let detail = PoToken.cached(for: binding) != nil && source.poToken != nil ? await PoToken.shared.lastReport : "в фоне — только готовый"
             let note = source.poToken != nil ? "PO-токен: есть (\(detail))" : "PO-токен: нет (\(await PoToken.shared.lastReport))"
@@ -151,7 +154,7 @@ final class SabrEngine {
 
     // MARK: - На своей очереди
 
-    private func start(_ source: Source, file: URL, finish: @escaping (Result<URL, Error>) -> Void) {
+    private func start(_ source: Source, file: URL, timeout: Double, finish: @escaping (Result<URL, Error>) -> Void) {
         guard let context = prepareContext() else { return finish(.failure(Failure.message("SABR: движок не запустился (\(lastException ?? "?"))"))) }
         let id = nextID
         nextID += 1
@@ -167,7 +170,7 @@ final class SabrEngine {
         }
         context.evaluateScript("__fonSabrDownload(\(json))")
         // Обычно трек приходит за секунды; повис — не ждём вечно.
-        queue.asyncAfter(deadline: .now() + 90) { [weak self] in
+        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self, self.jobs[id] != nil else { return }
             context.evaluateScript("__fonSabrCancel(\(id))")
             self.complete(id, error: "SABR: слишком долго", info: "")
@@ -185,7 +188,7 @@ final class SabrEngine {
         let parsed = (try? JSONSerialization.jsonObject(with: Data(info.utf8))) as? [String: Any]
         report = "запросов \(parsed?["requests"] as? Int ?? 0), байт \(job.bytes)"
             + (error.isEmpty ? "" : ", ошибка: \(error)")
-            + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(8).joined(separator: " | ") } ?? "")
+            + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(30).joined(separator: " | ") } ?? "")
             + (lastException.map { "; JS: \($0.prefix(120))" } ?? "")
             + (poNote.isEmpty ? "" : "; " + poNote)
         if error.isEmpty, job.bytes > 10_000 {

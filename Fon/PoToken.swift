@@ -68,6 +68,19 @@ final class PoToken: NSObject, WKNavigationDelegate {
         return token
     }
 
+    /// Диагностика: новый токен с полной проверкой (кэш и «чеканщик» сбрасываются).
+    func fresh(for binding: String) async -> String? {
+        if let working { _ = await working.value }
+        var all = (UserDefaults.standard.data(forKey: Self.storeKey).flatMap { try? JSONDecoder().decode([String: Stored].self, from: $0) }) ?? [:]
+        all[binding] = nil
+        if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: Self.storeKey) }
+        minterUntil = .distantPast
+        return await refresh(binding)
+    }
+
+    /// До какого времени окно умеет чеканить токены (диагностика).
+    var minterValidUntil: Date { minterUntil }
+
     /// Токен для привязки: из кэша, иначе проверка (до ~20 с). nil — не вышло (причина — `lastReport`).
     func token(for binding: String) async -> String? {
         if let token = Self.cached(for: binding) { lastReport = "из кэша"; return token }

@@ -133,7 +133,13 @@
   };
   g.__fonSabrDownload = function (job) {
     const S = FonSabr; const id = job.id; const log = []; let requests = 0; let stopped = false; let finished = false;
-    const done = (error) => { if (finished) return; finished = true; stopped = true; delete g.__fonSabrJobs[id]; __fonNative.done(id, error || '', JSON.stringify({ log: log.slice(0, 30), requests })); };
+    // Для диагностики: сколько раз пришёл каждый статус защиты потока и когда впервые; сколько байт и кусков.
+    const t0 = Date.now(); const statuses = {}; let bytes = 0; let pieces = 0; let firstByte = -1; let lastByte = -1;
+    const sec = () => ((Date.now() - t0) / 1000).toFixed(1);
+    const summary = () => 'статусы: ' + (Object.keys(statuses).map((k) => k + '×' + statuses[k].n + ' с ' + statuses[k].at + ' с').join(', ') || 'нет')
+      + '; кусков ' + pieces + ', ' + Math.round(bytes / 1024) + ' КБ, первый байт ' + firstByte + ' с, последний ' + lastByte + ' с, всего ' + sec() + ' с';
+    const done = (error) => { if (finished) return; finished = true; stopped = true; delete g.__fonSabrJobs[id]; log.push(summary());
+      __fonNative.done(id, error || '', JSON.stringify({ log: log.slice(0, 30), requests })); };
     try {
       const formats = job.formats.map((f) => { try { return S.buildSabrFormat(f); } catch (e) { return null; } }).filter(Boolean);
       const audio = g.__fonPickAudio(formats, job.audioTrackId);
@@ -146,9 +152,9 @@
       };
       const stream = new S.SabrStream({ videoId: job.videoId, serverAbrStreamingUrl: job.url, videoPlaybackUstreamerConfig: job.config,
         clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction, poToken: job.poToken || undefined });
-      stream.on('streamProtectionStatusUpdate', (s) => { if (s.status !== 1) log.push('защита потока: ' + s.status); });
+      stream.on('streamProtectionStatusUpdate', (s) => { const k = String(s.status); if (!statuses[k]) { statuses[k] = { n: 0, at: sec() }; log.push('защита потока: ' + k + ' (' + sec() + ' с)'); } statuses[k].n += 1; });
       stream.on('error', (e) => log.push('ошибка: ' + (e && e.message)));
-      log.push('звук itag ' + audio.itag + (audio.audioTrackId ? ' ' + audio.audioTrackId : ''));
+      log.push('звук itag ' + audio.itag + (audio.audioTrackId ? ' ' + audio.audioTrackId : '') + ', PO-токен в запросе: ' + (job.poToken ? 'да' : 'нет'));
       const started = stream.start({ audioFormat: audio, enabledTrackTypes: S.EnabledTrackTypes.AUDIO_ONLY, isPostLiveDvr: false, maxRetries: 4 });
       const reader = started.audioStream.getReader();
       g.__fonSabrJobs[id] = () => { stopped = true; stream.abort().catch(() => {}); done('отменено'); };
@@ -156,6 +162,7 @@
         if (finished) return;
         if (r.done) return done('');
         const v = r.value; const u8 = v instanceof Uint8Array ? v : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+        pieces += 1; bytes += u8.byteLength; if (firstByte < 0) firstByte = sec(); lastByte = sec();
         __fonNative.chunk(id, g.__fonB64(u8));
         return pump();
       }, (e) => done('чтение: ' + (e && e.message ? e.message : e)));
