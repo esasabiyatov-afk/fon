@@ -52,6 +52,15 @@ enum PlayerDiagnostics {
             lines.append("   не скачалось (\(seconds(since: started))): \(error.localizedDescription)")
             lines.append("   \(SabrEngine.shared.lastReport)")
         }
+
+        // 3. SABR с видео — как видео на обложке музыкального плеера (iPhone 17 после 1.105).
+        started = Date()
+        let video = await SabrMusicVideo.start(source)
+        if let url = video.url {
+            lines.append("3. SABR видео: начало за \(seconds(since: started)); плеер iOS: " + (await playTest(url, headers: [:])))
+        } else {
+            lines.append("3. SABR видео (\(seconds(since: started))): не вышло — \(video.reason ?? "?")")
+        }
         return lines.joined(separator: "\n")
     }
 

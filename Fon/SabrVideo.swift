@@ -644,3 +644,48 @@ enum Subtitles {
         return String(format: "%02d:%02d:%02d.%03d", total / 3_600_000, total / 60_000 % 60, total / 1000 % 60, total % 1000)
     }
 }
+
+/// Видео на обложке музыкального плеера по SABR (iPhone 17 после 1.105: «сделай как у меня и на планшете, сразу
+/// с видео» — обычных ссылок YouTube ему не даёт). Как свой видеоплеер: самое лёгкое качество от 360p + звук
+/// (оригинальная дорожка) → `LocalHLSServer` → системный плеер. Держим 3 последних трека (текущий и заранее
+/// найденный следующий), старые закрываются и стираются.
+@MainActor
+enum SabrMusicVideo {
+    private static var sessions: [(id: String, session: SabrVideoSession)] = []
+
+    private final class Once: @unchecked Sendable {
+        private var done = false
+        func first() -> Bool { if done { return false }; done = true; return true }
+    }
+
+    /// Адрес master.m3u8, когда пришло начало видео и звука (до 30 с), или причина.
+    static func start(_ source: SabrEngine.Source) async -> (url: URL?, reason: String?) {
+        guard await LocalHLSServer.shared.start() != nil else { return (nil, "сервер внутри приложения не запустился") }
+        if let index = sessions.firstIndex(where: { $0.id == source.videoID }) {
+            let old = sessions.remove(at: index)
+            if old.session.failure == nil, let url = old.session.masterURL {
+                sessions.append(old)
+                return (url, nil)
+            }
+            old.session.close()
+        }
+        let list = SabrVideoSession.qualities(source)
+        guard let quality = list.last(where: { $0.height >= 360 }) ?? list.last else { return (nil, "нет видео H.264 (mp4)") }
+        let session = SabrVideoSession(source: source, quality: quality)
+        sessions.append((source.videoID, session))
+        while sessions.count > 3 { sessions.removeFirst().session.close() }
+        let error: String? = await withCheckedContinuation { continuation in
+            let once = Once()
+            session.onReady = { error in if once.first() { continuation.resume(returning: error) } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                if once.first() { continuation.resume(returning: "30 с нет начала видео") }
+            }
+        }
+        if let error {
+            sessions.removeAll { $0.session === session }
+            session.close()
+            return (nil, error)
+        }
+        return (session.masterURL, nil)
+    }
+}

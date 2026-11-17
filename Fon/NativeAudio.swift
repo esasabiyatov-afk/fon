@@ -732,13 +732,15 @@ final class NativeAudio: NSObject {
     /// На обложке включили видео, а играет скачанный файл (в нём только звук; владелец после 1.88: «не играет видео
     /// по нажатию на сохранённых») — с сетью переходим на поток с видео с того же места, пауза сохраняется.
     func videoWanted() {
-        guard active, currentClient == "Скачано", OfflineStore.shared.online, let track = currentTrack else { return }
+        // «SABR» — звук по SABR файлом (iPhone 17): видео по SABR берётся тем же поиском.
+        guard active, currentClient == "Скачано" || currentClient == "SABR", OfflineStore.shared.online, let track = currentTrack else { return }
+        let was = currentClient
         let current = token
         Task { [weak self] in
-            let found = await DirectStream.find(track.id)
+            let found = await DirectStream.find(track.id, sabrVideo: Settings.videoArtwork)
             await MainActor.run {
-                guard let self, self.token == current, self.currentClient == "Скачано" else { return }
-                let video = found.streams.filter { $0.client != "Прямо звук" }
+                guard let self, self.token == current, self.currentClient == was else { return }
+                let video = found.streams.filter { $0.client != "Прямо звук" && $0.client != "SABR" }
                 guard !video.isEmpty else { return }
                 if let title = found.title { self.rawTitles[track.id] = title }
                 if let spec = found.storyboard { self.storyboards[track.id] = spec }
@@ -758,7 +760,7 @@ final class NativeAudio: NSObject {
         triedDirect = true
         let current = token
         Task { [weak self] in
-            let found = await DirectStream.find(track.id)
+            let found = await DirectStream.find(track.id, sabrVideo: Settings.videoArtwork)
             await MainActor.run {
                 guard let self, self.token == current, self.active else { return }
                 self.use(found, for: track)
@@ -805,7 +807,7 @@ final class NativeAudio: NSObject {
         beginBackgroundTask()
         let current = token
         Task { [weak self] in
-            let found = await DirectStream.find(track.id)
+            let found = await DirectStream.find(track.id, sabrVideo: Settings.videoArtwork)
             await MainActor.run {
                 guard let self else { return }
                 self.refreshingStream = false
@@ -1000,7 +1002,7 @@ final class NativeAudio: NSObject {
         guard prefetched[id] == nil, !prefetching.contains(id) else { return }
         prefetching.insert(id)
         Task { [weak self] in
-            let result = await DirectStream.find(id)
+            let result = await DirectStream.find(id, sabrVideo: Settings.videoArtwork)
             await MainActor.run {
                 guard let self else { return }
                 self.prefetching.remove(id)

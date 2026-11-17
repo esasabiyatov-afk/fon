@@ -11,7 +11,9 @@ enum DirectStream {
     /// посетителю/аккаунту YouTube включил только свой протокол (SABR). Тогда пробуем ещё раз без cookies экспериментов
     /// посетителя (VISITOR_INFO1_LIVE, PREF…), а затем совсем без cookies — пока не найдётся обычная ссылка.
     /// `sabr: false` — нужен файл с видео (предпросмотр в ленте), звук по SABR не подходит.
-    static func find(_ videoID: String, sabr allowSABR: Bool = true) async -> YouTubeStreams.Result {
+    /// `sabrVideo` — по SABR не только звук, а видео 360p со звуком (для видео на обложке; iPhone 17 после 1.105:
+    /// «сделай как у меня и на планшете, сразу с видео»); не вышло — звук файлом, как раньше.
+    static func find(_ videoID: String, sabr allowSABR: Bool = true, sabrVideo: Bool = false) async -> YouTubeStreams.Result {
         await YouTubeSession.refreshed()
         let visitor: Set<String> = ["VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "__Secure-ROLLOUT_TOKEN", "PREF", "YSC", "__Secure-YEC"]
         // Cookies входа: без них запрос выглядит как Safari без аккаунта, но со своим посетителем (после 1.98: на iPhone 17
@@ -39,6 +41,17 @@ enum DirectStream {
             // Обычных ссылок нет (iPad, iPhone 17) — звук по SABR внутри приложения (с 1.100; проба 1.99 — работает).
             if allowSABR, !triedSABR, result.noLinks, let source = result.sabr {
                 triedSABR = true // один раз: повтор с другими cookies SABR не поможет, а ждать долго
+                if sabrVideo {
+                    let video = await SabrMusicVideo.start(source)
+                    if let url = video.url {
+                        var found = result
+                        found.streams = [AudioStream(url: url, headers: [:], client: "SABR видео")]
+                        found.noLinks = false
+                        found.reason = nil
+                        return found
+                    }
+                    reasons.append("SABR видео: \(video.reason ?? "?")")
+                }
                 do {
                     let file = try await SabrEngine.shared.download(source)
                     var found = result
