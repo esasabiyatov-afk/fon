@@ -164,6 +164,8 @@ final class SabrEngine {
             + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(8).joined(separator: " | ") } ?? "")
             + (lastException.map { "; JS: \($0.prefix(120))" } ?? "")
         if error.isEmpty, job.bytes > 10_000 {
+            // Длина в moov YouTube + длина фрагментов — AVPlayer показывал двойную длину (iPad, 1.104: 406 с при 203).
+            if let note = Self.zeroMoovDurations(job.temp) { report += "; moov: " + note }
             try? FileManager.default.removeItem(at: job.file)
             do {
                 try FileManager.default.moveItem(at: job.temp, to: job.file)
@@ -177,6 +179,78 @@ final class SabrEngine {
             let text = error.isEmpty ? "SABR: звук не пришёл (\(job.bytes) байт)" : (error.hasPrefix("SABR") ? error : "SABR: " + error)
             job.finish(.failure(Failure.message(([text] + log.prefix(3)).joined(separator: "; "))))
         }
+    }
+
+    /// Обнуляет длительности в moov фрагментированного файла (mvhd, tkhd, mdhd, mehd): тогда длина трека —
+    /// только сумма фрагментов. Возвращает, что было (для диагностики), или nil, если moov не нашёлся.
+    static func zeroMoovDurations(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forUpdating: url) else { return nil }
+        defer { try? handle.close() }
+        guard var data = try? handle.read(upToCount: 512 * 1024), data.count > 16 else { return nil }
+        func u32(_ o: Int) -> Int { data[o..<o + 4].reduce(0) { $0 << 8 | Int($1) } }
+        func u64(_ o: Int) -> Int { data[o..<o + 8].reduce(0) { $0 << 8 | Int($1) } }
+        func zero(_ o: Int, _ n: Int) { for i in o..<o + n { data[i] = 0 } }
+        var notes: [String] = []
+        var movieScale = 0
+        /// Обходит боксы в [start, end); для контейнеров — внутрь.
+        func walk(_ start: Int, _ end: Int) {
+            var o = start
+            while o + 8 <= end {
+                var size = u32(o)
+                let type = String(decoding: data[o + 4..<o + 8], as: UTF8.self)
+                var header = 8
+                if size == 1, o + 16 <= end { size = u64(o + 8); header = 16 }
+                if size == 0 { size = end - o }
+                guard size >= header, o + size <= end else { return }
+                let body = o + header
+                let v1 = body < data.count && data[body] == 1
+                switch type {
+                case "moov", "trak", "mdia", "mvex":
+                    walk(body, o + size)
+                case "mvhd" where o + size >= body + (v1 ? 32 : 20):
+                    movieScale = v1 ? u32(body + 20) : u32(body + 12)
+                    let d = v1 ? u64(body + 24) : u32(body + 16)
+                    notes.append("mvhd \(movieScale > 0 ? "\(d / movieScale) с" : "\(d)")")
+                    zero(v1 ? body + 24 : body + 16, v1 ? 8 : 4)
+                case "tkhd" where o + size >= body + (v1 ? 36 : 24):
+                    let d = v1 ? u64(body + 28) : u32(body + 20)
+                    notes.append("tkhd \(movieScale > 0 ? "\(d / movieScale) с" : "\(d)")")
+                    zero(v1 ? body + 28 : body + 20, v1 ? 8 : 4)
+                case "mdhd" where o + size >= body + (v1 ? 32 : 20):
+                    let scale = v1 ? u32(body + 20) : u32(body + 12)
+                    let d = v1 ? u64(body + 24) : u32(body + 16)
+                    notes.append("mdhd \(scale > 0 ? "\(d / scale) с" : "\(d)")")
+                    zero(v1 ? body + 24 : body + 16, v1 ? 8 : 4)
+                case "mehd" where o + size >= body + (v1 ? 12 : 8):
+                    let d = v1 ? u64(body + 4) : u32(body + 4)
+                    notes.append("mehd \(movieScale > 0 ? "\(d / movieScale) с" : "\(d)")")
+                    zero(body + 4, v1 ? 8 : 4)
+                default:
+                    break
+                }
+                o += size
+            }
+        }
+        // moov ищем только на верхнем уровне (ftyp, moov, затем фрагменты).
+        var o = 0
+        while o + 8 <= data.count {
+            var size = u32(o)
+            let type = String(decoding: data[o + 4..<o + 8], as: UTF8.self)
+            if size == 1, o + 16 <= data.count { size = u64(o + 8) }
+            guard size >= 8 else { return nil }
+            if type == "moov" {
+                guard o + size <= data.count else { return nil }
+                walk(o, o + size)
+                guard !notes.isEmpty else { return "без длительностей" }
+                do {
+                    try handle.seek(toOffset: UInt64(o))
+                    try handle.write(contentsOf: data[o..<o + size])
+                } catch { return "не записалось" }
+                return notes.joined(separator: ", ") + " → 0"
+            }
+            o += size
+        }
+        return nil
     }
 
     private func prepareContext() -> JSContext? {
