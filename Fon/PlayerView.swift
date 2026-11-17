@@ -41,6 +41,8 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// Где веб-плеер и на паузе ли — чтобы при возврате в режим музыки передать трек системному плееру.
     private var webTime: Double = 0
     private var webPaused = false
+    /// Переход видео → музыка: веб-плеер играет, пока системный не заиграет (трек, время веб-плеера, когда).
+    private var takeover: (id: String, time: Double, at: Date)?
 
     // Мини-полоска
     private let titleLabel = UILabel()
@@ -150,11 +152,18 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         addSubview(musicView)
 
         // Системный плеер (настройка): его состояние показываем так же, как сообщения веб-плеера.
+        NativeAudio.shared.liveWebTime = { [weak self] id in
+            guard let takeover = self?.takeover, takeover.id == id else { return nil }
+            return takeover.time + Date().timeIntervalSince(takeover.at) + 0.2
+        }
         NativeAudio.shared.onState = { [weak self] s in
+            // Системный плеер заиграл — веб-плеер, игравший при переходе из режима видео, гасим.
+            if let takeover = self?.takeover, NativeAudio.shared.isPlaying, s.id == takeover.id { self?.endTakeover() }
             self?.applyState(id: s.id, title: s.title, artist: s.artist, paused: s.paused, time: s.time, duration: s.duration, loop: s.loop)
         }
         NativeAudio.shared.onFallback = { [weak self] url, reason in
             guard let self else { return }
+            self.takeover = nil
             self.musicView.systemPlayer = false
             self.webView.load(URLRequest(url: url))
             // Неожиданная причина — окном с кнопкой «Скопировать»; «только SABR» (iPad) и простой таймаут — тихо.
@@ -340,8 +349,13 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     func musicModeDidChange() {
         AppJournal.add("режим: \(musicMode ? "музыка" : "видео"); системный плеер \(NativeAudio.shared.active ? "играл" : "не играл"), трек \(currentVideoID ?? "—")")
         // Режим видео — картинку показывает только веб-плеер: передаём ему трек с того же места.
-        if !musicMode, NativeAudio.shared.active, let url = NativeAudio.shared.handoverURL() {
+        if !musicMode, NativeAudio.shared.active, takeover != nil {
+            // Веб-плеер ещё играет этот трек (системный не успел заиграть) — просто остаёмся на нём.
+            takeover = nil
             NativeAudio.shared.deactivate()
+            musicView.systemPlayer = false
+        } else if !musicMode, NativeAudio.shared.active, let url = NativeAudio.shared.handOver() {
+            // Звук системного плеера играет, пока страница грузится (`finishHandover` по первому «играет»).
             musicView.systemPlayer = false
             webView.load(URLRequest(url: url))
         } else if musicMode, Settings.nativeAudio, !NativeAudio.shared.active, !NativeAudio.shared.sabrOnly, let id = currentVideoID,
@@ -351,12 +365,21 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             // (владелец: «после переключения на ютуб и обратно системный плеер пропадает»).
             let list = webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }?
                 .first { $0.name == "list" }?.value
-            components.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(webTime.safeInt)s")]
+            // Вернулись, пока страница видео ещё грузилась, — звук всё ещё у системного плеера: его место, без паузы.
+            let handover = NativeAudio.shared.handoverSeconds
+            let time = handover ?? webTime
+            let paused = handover == nil && webPaused
+            components.queryItems = [URLQueryItem(name: "v", value: id), URLQueryItem(name: "t", value: "\(time.safeInt)s")]
                 + (list.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
             if let url = components.url {
-                webView.load(URLRequest(url: URL(string: "about:blank")!))
+                // Играет — веб-плеер не гасим, пока не заиграет системный (без тишины между ними); на паузе — сразу.
+                if paused || handover != nil {
+                    webView.load(URLRequest(url: URL(string: "about:blank")!))
+                } else {
+                    takeover = (id, webTime, Date())
+                }
                 musicView.systemPlayer = true
-                NativeAudio.shared.start(url: url, queue: queueOrder?.contains(id) == true ? queueOrder : nil, paused: webPaused)
+                NativeAudio.shared.start(url: url, queue: queueOrder?.contains(id) == true ? queueOrder : nil, paused: paused)
             }
         }
         UIView.transition(with: self, duration: 0.25, options: [.transitionCrossDissolve, .allowUserInteraction]) {
@@ -483,7 +506,15 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         top.present(controller, animated: true)
     }
 
+    /// Веб-плеер замолкает: системный плеер заиграл (или владелец что-то нажал, пока он грузился).
+    private func endTakeover() {
+        guard takeover != nil else { return }
+        takeover = nil
+        webView.load(URLRequest(url: URL(string: "about:blank")!))
+    }
+
     func command(_ name: String) {
+        endTakeover()
         if NativeAudio.shared.active {
             NativeAudio.shared.handle(name)
         } else {
@@ -866,6 +897,18 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
         case "state":
+            let webTimeNow = (body["time"] as? NSNumber)?.doubleValue ?? 0
+            let webPlaying = body["active"] as? Bool == true && body["paused"] as? Bool == false
+            // Режим видео: страница заиграла — звук системного плеера, игравший всё это время, выключаем;
+            // угадали с загрузкой неточно (>1,5 с) — веб-плеер догоняет.
+            if NativeAudio.shared.handingOver, webPlaying, webTimeNow > 0.2,
+               let native = NativeAudio.shared.finishHandover(webID: body["id"] as? String), abs(native - webTimeNow) > 1.5 {
+                runJS("window.__fon && __fon.cmd && __fon.cmd('seek', \(native))")
+            }
+            // Режим музыки: веб-плеер ещё играет, пока системный ищет поток, — запоминаем, где он.
+            if let current = takeover, NativeAudio.shared.active {
+                if webPlaying, body["id"] as? String == current.id { takeover = (current.id, webTimeNow, Date()) } else { endTakeover() }
+            }
             guard body["active"] as? Bool == true, !NativeAudio.shared.active else { return }
             applyState(id: body["id"] as? String, title: body["title"] as? String ?? "", artist: body["artist"] as? String ?? "",
                        paused: body["paused"] as? Bool ?? true, time: (body["time"] as? NSNumber)?.doubleValue ?? 0,

@@ -255,11 +255,23 @@ enum DirectStream {
     /// в moov дорожки уже стоит длина трека, и AVPlayer прибавлял к ней фрагменты, как у SABR в 1.104). Трек
     /// ~3 МБ качается за 1–2 с кусками по 4 МБ, длины в moov обнуляются (`SabrEngine.zeroMoovDurations`), файл —
     /// в `Caches/sabr` (как у SABR: «Скачанные» его копируют). Не скачался — ссылка без звука убирается, остаётся файл 360p.
+    /// С 1.111 главный — файл 360p (`NativeAudio.ordered`): если он есть, звук качается в фоне и не задерживает старт
+    /// (владелец: «чтобы летало» — ждали 1–2 с на каждом треке); не заиграет 360p — плеер возьмёт скачанный звук.
     private static func asFiles(_ streams: [AudioStream], videoID: String) async -> [AudioStream] {
         var result: [AudioStream] = []
+        let hasVideo = streams.contains { $0.client != "Прямо звук" }
         for stream in streams {
             guard stream.client == "Прямо звук" else { result.append(stream); continue }
             if let file = SabrEngine.cached(videoID) { result.append(AudioStream(url: file, headers: [:], client: stream.client)); continue }
+            if hasVideo {
+                if startDownload(videoID) {
+                    Task.detached(priority: .utility) {
+                        _ = await downloadAudio(stream, videoID: videoID)
+                        finishDownload(videoID)
+                    }
+                }
+                continue
+            }
             if let file = await downloadAudio(stream, videoID: videoID) {
                 result.append(AudioStream(url: file, headers: [:], client: stream.client))
             } else {
@@ -267,6 +279,22 @@ enum DirectStream {
             }
         }
         return result
+    }
+
+    private static let downloadsLock = NSLock()
+    private static var downloading = Set<String>()
+
+    /// Один фоновый download на трек (поиск заранее и сам старт могут прийти одновременно).
+    private static func startDownload(_ id: String) -> Bool {
+        downloadsLock.lock()
+        defer { downloadsLock.unlock() }
+        return downloading.insert(id).inserted
+    }
+
+    private static func finishDownload(_ id: String) {
+        downloadsLock.lock()
+        downloading.remove(id)
+        downloadsLock.unlock()
     }
 
     private static func downloadAudio(_ stream: AudioStream, videoID: String) async -> URL? {

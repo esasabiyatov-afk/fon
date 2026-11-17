@@ -13,7 +13,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     var onOpenFeed: (() -> Void)?
     var onSearch: (() -> Void)?
 
-    fileprivate enum Style { case quick, large, small, round, rows, list, message }
+    /// `playlists` — карусель плейлистов: обложка «стопкой», как у плейлистов YouTube, и число треков.
+    fileprivate enum Style { case quick, large, small, round, rows, list, playlists, message }
 
     fileprivate struct Item {
         var title: String
@@ -28,6 +29,8 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         /// Долгое нажатие — «Скачать трек» / «Скачать микс» (без интернета; просьба владельца после 1.83).
         var downloadTrack: Track? = nil
         var downloadMixSeed: String? = nil
+        /// Плейлист: подпись на обложке («24», «Микс»).
+        var badge: String? = nil
 
         /// Меню долгого нажатия: скачать трек/микс, отписаться.
         var menuActions: [UIAction] {
@@ -201,6 +204,9 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             quick.append(mixItem(track))
         }
         result.append(Section(title: tr("Главная"), style: .quick, items: quick)) // крупный заголовок, как в Apple Music
+        // Владелец после 1.110: «больше плейлистов, не одной обложкой, а в строку; остальное — карточками в своём
+        // формате, и вбок, и вниз — богатые рекомендации».
+        if let playlists = playlistSection(history: history, likes: likes) { result.append(playlists) }
         result += discoverSections()
 
         if shelves.isEmpty {
@@ -225,21 +231,64 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         return result
     }
 
-    /// «Открытия» (`Discover`): микс дня, новое, ниша, тренды — под быстрым доступом (просьба владельца после 1.83).
+    private static func tracksText(_ count: Int) -> String {
+        if AppLanguage.current == .en { return count == 1 ? "1 track" : "\(count) tracks" }
+        let tens = count % 100, ones = count % 10
+        let word = (11...14).contains(tens) ? "треков" : ones == 1 ? "трек" : (2...4).contains(ones) ? "трека" : "треков"
+        return "\(count) \(word)"
+    }
+
+    /// Плейлисты одной каруселью: «Открытия дня», новое/ниша/тренды целиком, «Мой микс», миксы любимых исполнителей.
+    private func playlistSection(history: [Track], likes: [Track]) -> Section? {
+        let shelves = Discover.shared.shelves
+        var items: [Item] = []
+        func list(_ title: String, _ subtitle: String, _ tracks: [Track]) {
+            guard let first = tracks.first else { return }
+            let ids = tracks.map(\.id)
+            var item = Item(title: title, subtitle: subtitle.isEmpty ? Self.tracksText(ids.count) : "\(Self.tracksText(ids.count)) · \(subtitle)",
+                            artworkID: first.id) { [weak self] in
+                if let url = YouTubeLinks.queue(Array(ids.prefix(50))) { self?.onPlay?(url, title, Array(ids.prefix(50))) }
+            }
+            item.badge = "\(ids.count)"
+            items.append(item)
+        }
+        let en = AppLanguage.current == .en
+        list(tr("Открытия дня"), en ? "new, niche and trending" : "новое, ниша и тренды", shelves.daily)
+        list(tr("Новое в вашем вкусе"), "", shelves.fresh)
+        list(tr("Ниша"), "", shelves.niche)
+        list(tr("В тренде"), "", shelves.trending)
+        if let seed = history.first ?? likes.first {
+            var item = Item(title: tr("Мой микс"), subtitle: en ? "Mix · YouTube" : "Микс · YouTube", artworkID: seed.id) { [weak self] in
+                if let url = YouTubeLinks.myMix(seed: seed.id) { self?.onPlay?(url, tr("Мой микс"), nil) }
+            }
+            item.badge = tr("Микс")
+            items.append(item)
+        }
+        // Миксы по разным любимым исполнителям (история и лайки).
+        var artists = Set<String>()
+        for seed in history.prefix(60) + likes.prefix(60) where artists.count < 12 {
+            let key = seed.artist.lowercased()
+            guard !key.isEmpty, artists.insert(key).inserted else { continue }
+            var item = Item(title: "\(tr("Микс")): \(seed.artist)", subtitle: "\(seed.title)" + (en ? " and similar" : " и похожие"), artworkID: seed.id) { [weak self] in
+                if let url = YouTubeLinks.mix(seed.id) { self?.onPlay?(url, "\(tr("Микс")): \(seed.artist)", nil) }
+            }
+            item.badge = tr("Микс")
+            item.downloadMixSeed = seed.id
+            items.append(item)
+        }
+        return items.isEmpty ? nil : Section(title: tr("Плейлисты для вас"), style: .playlists, items: items)
+    }
+
+    /// «Открытия» (`Discover`): новое, ниша, тренды — под плейлистами (просьба владельца после 1.83), в разном виде:
+    /// новое — столбиками по 4 (листаются вбок), ниша — небольшие карточки, тренды — большие.
     private func discoverSections() -> [Section] {
         let shelves = Discover.shared.shelves
         var result: [Section] = []
-        if let first = shelves.daily.first {
-            let ids = shelves.daily.map(\.id)
-            let item = Item(title: tr("Открытия дня"), subtitle: AppLanguage.current == .en ? "\(ids.count) tracks · new, niche and trending" : "\(ids.count) треков · новое, ниша и тренды", artworkID: first.id) { [weak self] in
-                if let url = YouTubeLinks.queue(ids) { self?.onPlay?(url, tr("Открытия дня"), ids) }
-            }
-            result.append(Section(title: tr("Открытия дня"), style: .large, items: [item]))
-        }
-        for (title, tracks) in [(tr("Новое в вашем вкусе"), shelves.fresh), (tr("Ниша"), shelves.niche), (tr("В тренде"), shelves.trending)]
+        for (title, tracks, style) in [(tr("Новое в вашем вкусе"), shelves.fresh, Style.rows), (tr("Ниша"), shelves.niche, .small),
+                                       (tr("В тренде"), shelves.trending, .large)]
         where !tracks.isEmpty {
             let ids = tracks.map(\.id)
-            result.append(Section(title: title, style: .small, items: tracks.enumerated().map { index, track in
+            result.append(Section(title: title, style: style, items: tracks.enumerated().map { index, track in
                 var item = Item(title: track.title, subtitle: track.artist, artworkID: track.id) { [weak self] in
                     // Нажатый и следующие за ним — одной очередью.
                     let queue = Array(ids[index...])
@@ -256,24 +305,7 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
     /// Свои подборки — пока не пришли подборки YouTube Music (или если они недоступны).
     private func localSections(history: [Track], likes: [Track]) -> [Section] {
         var result: [Section] = []
-        // Зёрна для миксов: разные исполнители из истории и лайков.
-        var seeds: [Track] = []
-        var artists = Set<String>()
-        for track in history.prefix(40) + likes.prefix(40) where seeds.count < 10 {
-            let key = track.artist.lowercased()
-            guard !key.isEmpty, !artists.contains(key) else { continue }
-            artists.insert(key)
-            seeds.append(track)
-        }
-        if !seeds.isEmpty {
-            result.append(Section(title: tr("Миксы для вас"), style: .large, items: seeds.map { seed in
-                var item = Item(title: "\(tr("Микс")): \(seed.artist)", subtitle: "\(seed.title)" + (AppLanguage.current == .en ? " and similar" : " и похожие"), artworkID: seed.id) { [weak self] in
-                    if let url = YouTubeLinks.mix(seed.id) { self?.onPlay?(url, "\(tr("Микс")): \(seed.artist)", nil) }
-                }
-                item.downloadMixSeed = seed.id
-                return item
-            }))
-        }
+        // Миксы по исполнителям — в карусели «Плейлисты для вас» (`playlistSection`).
         if !history.isEmpty {
             result.append(Section(title: tr("Недавно слушали"), style: .small, items: history.prefix(20).map(mixItem)))
         }
@@ -314,20 +346,24 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                                   items: videos.prefix(tileCount).map { musicItem($0, source: tr("Лента YouTube")) }))
         }
         if !mixes.isEmpty {
-            result.append(Section(title: onHome ? tr("Миксы YouTube") : tr("Миксы для вас"), style: .large, items: mixes.map { musicItem($0, source: $0.title) }))
+            result.append(Section(title: onHome ? tr("Миксы YouTube") : tr("Миксы для вас"), style: .playlists, items: mixes.map {
+                var item = musicItem($0, source: $0.title)
+                item.badge = tr("Микс")
+                return item
+            }))
         }
         let rest = Array(videos.dropFirst(tileCount))
         if onHome {
-            // На «Главной» не один длинный список (владелец после 1.86: «скучно — свайпы, большие обложки, смешай»):
-            // по очереди карусель больших карточек и короткий список.
+            // На «Главной» не один длинный список (владелец после 1.86: «скучно — свайпы, большие обложки, смешай»;
+            // после 1.110: «и вбок, и вниз»): по кругу большие карточки, столбики по 4 вбок, короткий список, малые карточки.
             let titles = [tr("Рекомендации YouTube"), tr("Ещё для вас"), tr("Вам может понравиться"), tr("Послушайте ещё"), tr("Ещё рекомендации")]
+            let cycle: [(Style, Int)] = [(.large, 8), (.rows, 12), (.list, 5), (.small, 10)]
             var start = 0, part = 0
             while start < rest.count {
-                let carousel = part % 2 == 0
-                let size = carousel ? 8 : 5
+                let (style, size) = cycle[part % cycle.count]
                 let chunk = rest[start..<min(rest.count, start + size)]
                 let title = titles[min(part, titles.count - 1)]
-                result.append(Section(title: title, style: carousel ? .large : .list,
+                result.append(Section(title: title, style: style,
                                       items: chunk.map { musicItem($0, source: tr("Лента YouTube")) }))
                 start += size
                 part += 1
@@ -462,11 +498,11 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
                 section = NSCollectionLayoutSection(group: group)
                 section.interGroupSpacing = 8
                 section.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 24, trailing: 12)
-            case .large, .small, .round:
-                // Карточки 16:9; исполнители — круглые аватары, как у каналов YouTube.
+            case .large, .small, .round, .playlists:
+                // Карточки 16:9; исполнители — круглые аватары, как у каналов YouTube; плейлисты — «стопкой» (+8 сверху).
                 let scale: CGFloat = wide ? 1.3 : 1 // на iPad карточки крупнее
-                let side: CGFloat = (style == .large ? 240 : (style == .round ? 120 : 190)) * scale
-                let artHeight = style == .round ? side : (side * 9 / 16).rounded()
+                let side: CGFloat = (style == .large ? 240 : style == .round ? 120 : style == .playlists ? 220 : 190) * scale
+                let artHeight = style == .round ? side : (side * 9 / 16).rounded() + (style == .playlists ? CardCell.stackInset : 0)
                 let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .fractionalHeight(1)))
                 let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .absolute(side), heightDimension: .absolute(artHeight + 46)), subitems: [item])
                 section = NSCollectionLayoutSection(group: group)
@@ -531,9 +567,9 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as! MessageCell
             cell.configure(item.title)
             return cell
-        case .large, .small, .round:
+        case .large, .small, .round, .playlists:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "card", for: indexPath) as! CardCell
-            cell.configure(item, large: section.style == .large)
+            cell.configure(item, large: section.style == .large || section.style == .playlists, playlist: section.style == .playlists)
             return cell
         }
     }
@@ -687,9 +723,29 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
         private let subtitleLabel = UILabel()
         private var artworkKey: String?
         private var round = false
+        /// Плейлист: две полоски «стопки» над обложкой и подпись с числом треков, как у плейлистов YouTube.
+        static let stackInset: CGFloat = 8
+        private var playlist = false
+        private let stackBack = UIView()
+        private let stackMiddle = UIView()
+        private let badge = UILabel()
+        private let badgeBox = UIView()
 
         override init(frame: CGRect) {
             super.init(frame: frame)
+            stackBack.backgroundColor = UIColor(white: 1, alpha: 0.14)
+            stackMiddle.backgroundColor = UIColor(white: 1, alpha: 0.26)
+            [stackBack, stackMiddle].forEach {
+                $0.layer.cornerRadius = 5
+                $0.isHidden = true
+                contentView.addSubview($0)
+            }
+            badgeBox.backgroundColor = UIColor(white: 0, alpha: 0.7)
+            badgeBox.layer.cornerRadius = 5
+            badgeBox.isHidden = true
+            badge.font = .systemFont(ofSize: 12, weight: .semibold)
+            badge.textColor = .white
+            badgeBox.addSubview(badge)
             artwork.contentMode = .scaleAspectFill
             artwork.clipsToBounds = true
             artwork.backgroundColor = UIColor(white: 0.16, alpha: 1)
@@ -699,13 +755,25 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             titleLabel.textColor = .white
             subtitleLabel.font = .systemFont(ofSize: 12)
             subtitleLabel.textColor = UIColor(white: 0.65, alpha: 1)
-            [artwork, placeholder, titleLabel, subtitleLabel].forEach { contentView.addSubview($0) }
+            [artwork, placeholder, titleLabel, subtitleLabel, badgeBox].forEach { contentView.addSubview($0) }
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        fileprivate func configure(_ item: Item, large: Bool) {
+        fileprivate func configure(_ item: Item, large: Bool, playlist: Bool = false) {
             menu.attach(to: self, item: item)
+            self.playlist = playlist
+            stackBack.isHidden = !playlist
+            stackMiddle.isHidden = !playlist
+            if playlist, let text = item.badge {
+                let line = NSMutableAttributedString(attachment: NSTextAttachment(image: UIImage(systemName: "list.bullet",
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .bold))!.withTintColor(.white, renderingMode: .alwaysOriginal)))
+                line.append(NSAttributedString(string: " " + text))
+                badge.attributedText = line
+                badgeBox.isHidden = false
+            } else {
+                badgeBox.isHidden = true
+            }
             titleLabel.text = item.title
             subtitleLabel.text = item.subtitle
             round = item.round
@@ -727,11 +795,20 @@ final class MusicHomeViewController: UIViewController, UICollectionViewDataSourc
             super.layoutSubviews()
             let w = contentView.bounds.width
             let artHeight = round ? w : (w * 9 / 16).rounded() // карточки 16:9, исполнители — круг
-            artwork.frame = CGRect(x: 0, y: 0, width: w, height: artHeight)
+            let top = playlist ? Self.stackInset : 0
+            artwork.frame = CGRect(x: 0, y: top, width: w, height: artHeight)
             artwork.layer.cornerRadius = round ? w / 2 : 8
             placeholder.frame = artwork.frame
-            titleLabel.frame = CGRect(x: 0, y: artHeight + 6, width: w, height: 18)
-            subtitleLabel.frame = CGRect(x: 0, y: artHeight + 25, width: w, height: 16)
+            stackBack.frame = CGRect(x: 16, y: 0, width: max(0, w - 32), height: 8)
+            stackMiddle.frame = CGRect(x: 8, y: 4, width: max(0, w - 16), height: 8)
+            if !badgeBox.isHidden {
+                badge.sizeToFit()
+                let size = CGSize(width: badge.bounds.width + 12, height: 20)
+                badgeBox.frame = CGRect(x: w - size.width - 6, y: artwork.frame.maxY - size.height - 6, width: size.width, height: size.height)
+                badge.frame = CGRect(x: 6, y: 0, width: badge.bounds.width, height: 20)
+            }
+            titleLabel.frame = CGRect(x: 0, y: artwork.frame.maxY + 6, width: w, height: 18)
+            subtitleLabel.frame = CGRect(x: 0, y: artwork.frame.maxY + 25, width: w, height: 16)
         }
     }
 

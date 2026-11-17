@@ -87,6 +87,7 @@ enum L10nTable {
         "Ниша": "Niche",
         "В тренде": "Trending",
         "Миксы для вас": "Mixes for you",
+        "Плейлисты для вас": "Playlists for you",
         "Недавно слушали": "Recently played",
         "Загружаем подборки…": "Loading collections…",
         "Потяните вниз, чтобы повторить.": "Pull down to retry.",

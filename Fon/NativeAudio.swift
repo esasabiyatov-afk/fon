@@ -40,6 +40,7 @@ enum YouTubeSession {
             .filter { seen.insert($0.name).inserted }
             lock.lock()
             cookies = youtube
+            refreshedAt = Date()
             lock.unlock()
             completion?()
         }
@@ -47,7 +48,14 @@ enum YouTubeSession {
 
     /// Свежая копия перед каждым поиском потока: Google время от времени обновляет cookies входа, и за час-другой
     /// игры старая копия могла устареть (страница видео отвечала бы как без входа).
+    private static var refreshedAt = Date.distantPast
+
     static func refreshed() async {
+        // Копия моложе 20 с — свежая (поиск заранее и старт трека шли подряд, каждый ждал WebKit).
+        lock.lock()
+        let fresh = Date().timeIntervalSince(refreshedAt) < 20 && !cookies.isEmpty
+        lock.unlock()
+        if fresh { return }
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             DispatchQueue.main.async { refresh { done.resume() } }
         }
@@ -402,6 +410,7 @@ final class NativeAudio: NSObject {
     private var watchdog: Timer?
     private var waitingSince: Date?
     private var refreshingStream = false
+    private var triedCachedAudio = false
     /// Передача из веб-плеера (возврат в режим музыки): с какого места и на паузе ли.
     private var pendingStart: Double?
     private var pendingPaused = false
@@ -417,6 +426,21 @@ final class NativeAudio: NSObject {
     /// Потоки следующего трека, найденные заранее (за ~25 с до конца текущего) — без паузы между треками.
     private var prefetched: [String: YouTubeStreams.Result] = [:]
     private var prefetching = Set<String>()
+    /// Потоки недавно сыгранных треков (ссылки живут часами): «назад» и возврат из режима видео — без нового поиска.
+    private var recent: [String: (result: YouTubeStreams.Result, at: Date)] = [:]
+    /// Следующий трек заранее открыт (AVURLAsset загрузил начало файла) — переход без ожидания.
+    private var preparedAssets: [URL: AVURLAsset] = [:]
+    /// Переход в режим видео без тишины (владелец после 1.110: «чтобы летало»): звук играет, пока не заиграет
+    /// веб-плеер (`finishHandover`), но не дольше 20 с.
+    private(set) var handingOver = false
+    private var handoverID: String?
+    private var handoverStarted = Date()
+    private var handoverTimer: Timer?
+    /// Сколько грузится страница видео (по прошлым переходам): ссылка веб-плееру — на столько впереди.
+    private var handoverLead: Double = UserDefaults.standard.object(forKey: "handoverLead") as? Double ?? 2.5
+    /// Обратный переход (видео → музыка): веб-плеер играет, пока системный ищет поток; его живое время —
+    /// чтобы системный начал ровно с того места, где сейчас веб.
+    var liveWebTime: ((String) -> Double?)?
     /// Пока ищем поток, звука нет — без фоновой задачи iOS усыпила бы приложение между треками.
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -574,13 +598,9 @@ final class NativeAudio: NSObject {
     func start(url: URL, queue ids: [String]?, paused: Bool = false) {
         activate()
         pendingPaused = paused
-        // Свежий вход в аккаунт (cookies WebKit) — дальше запросы идут без WebKit, в том числе в фоне.
-        YouTubeSession.refresh { [weak self] in
-            DispatchQueue.main.async {
-                guard let self, self.active else { return }
-                self.begin(url: url, queue: ids)
-            }
-        }
+        // Cookies входа копирует сам поиск потока (`DirectStream.find` → `YouTubeSession.refreshed`) — здесь не ждём,
+        // а скачанный трек и найденный раньше поток играют сразу.
+        begin(url: url, queue: ids)
     }
 
     private func begin(url: URL, queue ids: [String]?) {
@@ -656,6 +676,7 @@ final class NativeAudio: NSObject {
         pendingPaused = false
         candidates = []
         triedDirect = false
+        triedCachedAudio = false
         userPaused = false
         stallTimer?.invalidate()
         player.replaceCurrentItem(with: nil)
@@ -685,7 +706,7 @@ final class NativeAudio: NSObject {
             return
         }
         // Поток следующего трека найден заранее — сразу его; иначе прямой путь (без окна), потом окно.
-        if let ready = prefetched.removeValue(forKey: track.id) {
+        if let ready = prefetched.removeValue(forKey: track.id) ?? recentResult(track.id) {
             use(ready, for: track)
             tryNextCandidate()
         } else {
@@ -693,8 +714,21 @@ final class NativeAudio: NSObject {
         }
     }
 
+    /// Поток трека, найденный за последний час (ссылки googlevideo живут ~6 ч; не заиграет — поищем заново).
+    private func recentResult(_ id: String) -> YouTubeStreams.Result? {
+        guard let entry = recent[id], Date().timeIntervalSince(entry.at) < 3600 else { return nil }
+        return entry.result
+    }
+
+    private func remember(_ result: YouTubeStreams.Result, for id: String) {
+        guard !result.streams.isEmpty else { return }
+        recent[id] = (result, Date())
+        if recent.count > 30, let oldest = recent.min(by: { $0.value.at < $1.value.at })?.key { recent[oldest] = nil }
+    }
+
     /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
+        remember(result, for: track.id)
         AppJournal.add("поток \(track.id): " + (result.streams.isEmpty ? "нет — \(result.reason ?? "?")" : result.streams.map(\.client).joined(separator: ", ") + (result.reason.map { " (\($0))" } ?? "")))
         if let title = result.title { rawTitles[track.id] = title }
         if let id = result.channelID { channels[track.id] = (id, result.author ?? track.artist) }
@@ -722,13 +756,20 @@ final class NativeAudio: NSObject {
     /// Следующий из найденных потоков; ни один не заиграл — трек не получился.
     private func tryNextCandidate() {
         guard active else { return }
+        // Звук 140 качается файлом в фоне (`DirectStream.asFiles`) — если файл 360p не заиграл, он запасной.
+        if candidates.isEmpty, !triedCachedAudio, let track = currentTrack, let file = SabrEngine.cached(track.id), currentClient != "Прямо звук" {
+            triedCachedAudio = true
+            candidates = [AudioStream(url: file, headers: [:], client: "Прямо звук")]
+        }
         guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : trackFailed() }
         let stream = candidates.removeFirst()
         currentClient = stream.client
         AppJournal.add("играем: \(stream.client)")
         // Поток оборвался посреди трека (например, отдельная звуковая дорожка) — следующий с того же места.
+        let first = !playedOnceCurrent
         let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : startAt
-        let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+        let asset = preparedAssets.removeValue(forKey: stream.url)
+            ?? AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
         let item = AVPlayerItem(asset: asset)
         let current = token
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -736,14 +777,21 @@ final class NativeAudio: NSObject {
                 guard let self, self.token == current, item === self.player.currentItem else { return }
                 switch item.status {
                 case .readyToPlay:
-                    if let resumeAt { self.player.seek(to: resumeAt) }
+                    // Переход из режима видео: веб-плеер всё это время играл — начинаем с его текущего места.
+                    if first, resumeAt != nil, let id = self.currentTrack?.id, let live = self.liveWebTime?(id) {
+                        self.player.seek(to: CMTime(seconds: live, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                    } else if let resumeAt {
+                        self.player.seek(to: resumeAt)
+                    }
                     if self.startPaused {
                         self.startPaused = false
                         self.deadline?.invalidate()
                         self.stallTimer?.invalidate()
                         self.pause()
                     } else {
-                        self.player.play()
+                        // Сразу, не дожидаясь «запаса» буфера (иначе ~1 с тишины в начале трека); дальше AVPlayer
+                        // ведёт себя как обычно и при нехватке данных сам подождёт.
+                        self.player.playImmediately(atRate: 1)
                     }
                 case .failed:
                     let text = (item.error as NSError?)?.localizedDescription ?? "?"
@@ -925,6 +973,9 @@ final class NativeAudio: NSObject {
 
     /// Время для ползунка: настоящее время плеера, а пока идёт перемотка — место, куда перематываем
     /// (сразу после `seek` плеер ещё сообщает старое время — ползунок отпрыгивал назад и обратно).
+    /// Звук действительно идёт (не «ждёт данных»).
+    var isPlaying: Bool { active && player.timeControlStatus == .playing }
+
     var displayTime: Double {
         if let target = seekingTo, Date().timeIntervalSince(seekStarted) < 4 { return target }
         let t = player.currentTime().seconds
@@ -1009,12 +1060,59 @@ final class NativeAudio: NSObject {
         }
     }
 
-    /// Ссылка для веб-плеера с текущего места — при переходе в режим видео.
-    func handoverURL() -> URL? {
-        guard let track = currentTrack else { return nil }
+    /// Переход в режим видео: ссылка для веб-плеера и системный плеер выключается. Если звук идёт — он играет,
+    /// пока веб-плеер грузит страницу (`finishHandover`), а ссылка — на время загрузки впереди: без тишины.
+    func handOver() -> URL? {
+        guard active, let track = currentTrack else { return nil }
+        let playing = player.timeControlStatus == .playing && playedOnceCurrent
+        let now = playedOnceCurrent ? player.currentTime().seconds : (startAt?.seconds ?? 0)
+        let duration = player.currentItem?.duration.seconds ?? 0
+        var at = now + (playing ? handoverLead : 0)
+        if duration.isFinite, duration > 0, at > duration - 3 { at = now }
+        let url = handoverURL(id: track.id, time: at)
+        deactivate(keepSound: playing)
+        if playing {
+            handingOver = true
+            handoverID = track.id
+            handoverStarted = Date()
+            let timer = Timer(timeInterval: 20, repeats: false) { [weak self] _ in _ = self?.finishHandover() }
+            RunLoop.main.add(timer, forMode: .common)
+            handoverTimer = timer
+        }
+        return url
+    }
+
+    /// Веб-плеер заиграл (или прошло 20 с) — звук системного плеера выключается. Возвращает его время, чтобы веб-плеер
+    /// догнал, если угадали с загрузкой неточно.
+    func finishHandover(webID: String? = nil) -> Double? {
+        guard handingOver else { return nil }
+        if let webID, let handoverID, webID != handoverID { return nil }
+        handingOver = false
+        handoverTimer?.invalidate()
+        handoverTimer = nil
+        let time = player.currentTime().seconds
+        if webID != nil {
+            // Время загрузки страницы — на следующий раз (плавно, в пределах 1–6 с).
+            let took = Date().timeIntervalSince(handoverStarted)
+            handoverLead = min(6, max(1, handoverLead * 0.5 + took * 0.5))
+            UserDefaults.standard.set(handoverLead, forKey: "handoverLead")
+        }
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        return time.isFinite ? time : nil
+    }
+
+    /// Время звука, который ещё играет при переходе в режим видео (nil — перехода нет).
+    var handoverSeconds: Double? {
+        guard handingOver else { return nil }
+        let time = player.currentTime().seconds
+        return time.isFinite ? time : nil
+    }
+
+    private func handoverURL(id: String, time: Double) -> URL? {
         var components = URLComponents(string: "https://m.youtube.com/watch")!
-        components.queryItems = [URLQueryItem(name: "v", value: track.id),
-                                 URLQueryItem(name: "t", value: "\(player.currentTime().seconds.safeInt)s")]
+        components.queryItems = [URLQueryItem(name: "v", value: id),
+                                 URLQueryItem(name: "t", value: "\(time.safeInt)s")]
             + (playlistID.map { [URLQueryItem(name: "list", value: $0)] } ?? [])
         return components.url
     }
@@ -1060,7 +1158,15 @@ final class NativeAudio: NSObject {
             await MainActor.run {
                 guard let self else { return }
                 self.prefetching.remove(id)
-                if !result.streams.isEmpty { self.prefetched[id] = result }
+                guard !result.streams.isEmpty else { return }
+                self.prefetched[id] = result
+                // Первый поток открываем заранее: AVPlayer получит уже загруженное начало файла.
+                if let stream = Self.ordered(result.streams).first, self.preparedAssets[stream.url] == nil {
+                    let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+                    asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {}
+                    if self.preparedAssets.count >= 3 { self.preparedAssets.removeAll() }
+                    self.preparedAssets[stream.url] = asset
+                }
             }
         }
     }
@@ -1129,6 +1235,7 @@ final class NativeAudio: NSObject {
     }
 
     private func activate() {
+        if handingOver { _ = finishHandover() } // снова в музыку, пока веб-плеер ещё грузился
         guard !active else { return }
         active = true
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -1162,7 +1269,7 @@ final class NativeAudio: NSObject {
     }
 
     /// Отдать звук веб-плееру: остановиться и убрать свои кнопки с экрана блокировки (иначе спорим с WebKit).
-    func deactivate() {
+    func deactivate(keepSound: Bool = false) {
         guard active else { return }
         active = false
         token = UUID()
@@ -1170,8 +1277,10 @@ final class NativeAudio: NSObject {
         deadline?.invalidate()
         watchdog?.invalidate()
         refreshingStream = false
-        player.pause()
-        player.replaceCurrentItem(with: nil)
+        if !keepSound {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
         commandTargets.forEach { $0.0.removeTarget($0.1) }
         commandTargets = []
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
