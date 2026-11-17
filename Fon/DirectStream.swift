@@ -28,6 +28,18 @@ enum DirectStream {
             ("без cookies посетителя", YouTubeSession.cookieHeaderWithout(visitor)),
             ("без входа", nil)
         ]
+        // Устройство, где у www ссылок нет, а m.youtube работает (iPhone 17 после 1.109), — сразу m.youtube: на ~1 с
+        // быстрее (владелец: «задержка при перелистывании, а у меня на телефоне сразу»). Не вышло — как обычно.
+        if (UserDefaults.standard.object(forKey: Self.mobileFirstKey) as? Date ?? .distantPast) > Date() {
+            let mobile = await mobileAttempt(videoID, fallbackPlayer: nil)
+            if !mobile.streams.isEmpty {
+                var found = mobile.details
+                found.streams = mobile.streams
+                found.reason = "сразу m.youtube (\(mobile.reason))"
+                return found
+            }
+            AppJournal.add("m.youtube сразу \(videoID): \(mobile.reason) — как обычно")
+        }
         var reasons: [String] = []
         var triedSABR = false
         var last = YouTubeStreams.Result()
@@ -48,6 +60,7 @@ enum DirectStream {
                 AppJournal.add("m.youtube \(videoID): " + outcome)
                 if let sabr = mobile.sabr { result.sabr = sabr } // SABR из ответа с токеном видео — как у Safari
                 if !mobile.streams.isEmpty {
+                    UserDefaults.standard.set(Date().addingTimeInterval(6 * 3600), forKey: Self.mobileFirstKey)
                     var found = result
                     found.streams = mobile.streams
                     found.noLinks = false
@@ -115,11 +128,15 @@ enum DirectStream {
         return "без разбора: signatureCipher \(count("signatureCipher")), videoplayback \(count("videoplayback")), SABR: \(count("serverAbrStreamingUrl") > 0 ? "да" : "нет"), \(data.count / 1024) КБ"
     }
 
+    static let mobileFirstKey = "mobileFirstUntil"
+
     /// Итог попытки m.youtube: ссылки (если пустили), данные SABR из того же ответа и что произошло.
     struct Mobile {
         var streams: [AudioStream] = []
         var sabr: SabrEngine.Source?
         var reason = ""
+        /// Название, исполнитель, канал и миниатюры кадров — из того же ответа (когда страницу www не спрашивали).
+        var details = YouTubeStreams.Result()
     }
 
     /// m.youtube (MWEB — то, что открывает Safari на этом телефоне). Диагностика 1.107 на iPhone 17: у www
@@ -196,6 +213,12 @@ enum DirectStream {
             outcome.reason = "\(status) \(((playability["reason"] as? String) ?? "").prefix(60)) (\(tokenNote))"
             return outcome
         }
+        if let info = response["videoDetails"] as? [String: Any] {
+            outcome.details.title = info["title"] as? String
+            outcome.details.author = info["author"] as? String
+            outcome.details.channelID = info["channelId"] as? String
+        }
+        outcome.details.storyboard = ((response["storyboards"] as? [String: Any])?["playerStoryboardSpecRenderer"] as? [String: Any])?["spec"] as? String
         // SABR из этого же ответа — на случай, если ссылки не пустят.
         let streaming = response["streamingData"] as? [String: Any] ?? [:]
         if let sabrURL = streaming["serverAbrStreamingUrl"] as? String,

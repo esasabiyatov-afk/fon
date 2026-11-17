@@ -1043,7 +1043,9 @@ final class NativeAudio: NSObject {
 
     private func prefetchNextIfNeeded(time: Double) {
         let duration = player.currentItem?.duration.seconds ?? 0
-        guard duration.isFinite, duration - time < 25, index + 1 < queue.count else { return }
+        // Заранее — уже после 5 с игры, а не за 25 с до конца: «следующий» по нажатию тоже сразу (iPhone 17 после
+        // 1.109: на каждом переходе ждал поиска ссылки; там же двойная длина 140 не давала дойти до «за 25 с»).
+        guard duration.isFinite, duration - time < 25 || time > 5, index + 1 < queue.count else { return }
         let id = queue[index + 1].id
         guard prefetched[id] == nil, !prefetching.contains(id) else { return }
         prefetching.insert(id)
