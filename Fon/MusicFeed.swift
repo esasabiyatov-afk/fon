@@ -209,6 +209,7 @@ final class MusicFeed {
                 }
             case .failure(let error):
                 self.feedError = "Лента не загрузилась (\(Self.message(error)))."
+                AppJournal.add("лента YouTube (музыка): \(Self.message(error))")
             }
             let completions = self.feedCompletions ?? []
             self.feedCompletions = nil
@@ -224,6 +225,7 @@ final class MusicFeed {
             save()
         }
         homeError = error
+        AppJournal.add("главная музыки: " + (error.map { "ошибка — \($0)" } ?? "полок \(cache.shelves.count)"))
         let completions = homeCompletions ?? []
         homeCompletions = nil
         notify()

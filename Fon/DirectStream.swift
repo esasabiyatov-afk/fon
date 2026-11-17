@@ -38,6 +38,7 @@ enum DirectStream {
                 return found
             }
             reasons.append(attempt.label.isEmpty ? (result.reason ?? "?") : "\(attempt.label): \(result.reason ?? "?")")
+            AppJournal.add("страница \(videoID)\(attempt.label.isEmpty ? "" : " (\(attempt.label))"): \(result.reason ?? "?")")
             // Обычных ссылок нет (iPad, iPhone 17) — звук по SABR внутри приложения (с 1.100; проба 1.99 — работает).
             if allowSABR, !triedSABR, result.noLinks, let source = result.sabr {
                 triedSABR = true // один раз: повтор с другими cookies SABR не поможет, а ждать долго

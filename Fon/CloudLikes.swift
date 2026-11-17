@@ -91,6 +91,7 @@ final class CloudLikes {
                 self.migrateLegacyLikes()
             case .failure(let error):
                 self.lastError = Self.describe(error)
+                AppJournal.add("«Понравившиеся» (облако): ошибка — \(Self.describe(error))")
             }
             NotificationCenter.default.post(name: Self.didChange, object: nil)
             let completions = self.refreshCompletions ?? []
@@ -120,6 +121,7 @@ final class CloudLikes {
             case .failure(let error):
                 self.tracks = before
                 self.lastError = Self.describe(error)
+                AppJournal.add("«Понравившиеся» (облако): ошибка — \(Self.describe(error))")
                 NotificationCenter.default.post(name: Self.didChange, object: nil)
                 NotificationCenter.default.post(name: Self.didFail, object: self.lastError)
             }

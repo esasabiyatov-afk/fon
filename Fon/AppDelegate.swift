@@ -12,6 +12,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024, diskCapacity: 512 * 1024 * 1024, directory: nil)
         // PO-токен для SABR (iPhone 17 — «защита потока: 2») обновляется заранее, при открытии приложения.
         PoToken.shared.startWarmUp()
+        AppJournal.startWatching()
         // Журнал отладки убран в 1.69 — стираем его следы (тексты попыток и токен GitHub в Keychain).
         UserDefaults.standard.removeObject(forKey: "nativeAudioLog")
         UserDefaults.standard.removeObject(forKey: "nativeAudioLogHistory")

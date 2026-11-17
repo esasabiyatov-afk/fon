@@ -191,6 +191,7 @@ final class SabrEngine {
             + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(30).joined(separator: " | ") } ?? "")
             + (lastException.map { "; JS: \($0.prefix(120))" } ?? "")
             + (poNote.isEmpty ? "" : "; " + poNote)
+        AppJournal.add("SABR звук: " + (error.isEmpty ? "готово" : error) + "; " + report)
         if error.isEmpty, job.bytes > 10_000 {
             // Длина в moov YouTube + длина фрагментов — AVPlayer показывал двойную длину (iPad, 1.104: 406 с при 203).
             if let note = Self.zeroMoovDurations(job.temp) { report += "; moov: " + note }

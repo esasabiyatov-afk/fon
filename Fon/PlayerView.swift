@@ -213,6 +213,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     /// подпись «Играет из» сменится на «Похожие треки».
     func load(_ url: URL, source: String? = nil, queue: [String]? = nil) {
         Self.hasMedia = true
+        AppJournal.add("плеер: открыть \(url.path)?\(url.query?.prefix(60) ?? "") — \(Settings.musicMode ? "музыка" : "видео")\(source.map { ", из «\($0)»" } ?? "")")
         queueIDs = queue.map { Set($0) }
         queueOrder = queue
         currentVideoID = Self.videoID(from: url)
@@ -381,6 +382,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     private func showFallbackReason(_ reason: String) {
+        AppJournal.add("окно причины: \(reason)")
         guard var top = window?.rootViewController else { return }
         while let presented = top.presentedViewController { top = presented }
         let device = UIDevice.current
@@ -934,6 +936,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        AppJournal.add("iOS выгрузила страницу плеера из памяти — грузим снова")
         if let url = webView.url { webView.load(URLRequest(url: url)) }
     }
 }

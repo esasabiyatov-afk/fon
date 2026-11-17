@@ -466,6 +466,17 @@ final class NativeAudio: NSObject {
 
     var currentTrack: Track? { queue.indices.contains(index) ? queue[index] : nil }
 
+    /// Для диагностики: что сейчас у системного плеера.
+    var debugState: String {
+        let time = player.currentTime().seconds
+        let length = player.currentItem?.duration.seconds ?? 0
+        let status = ["пауза", "ждёт", "играет"][min(2, player.timeControlStatus.rawValue)]
+        return "активен: \(active ? "да" : "нет"), трек \(currentTrack?.id ?? "—") (\(index + 1) из \(queue.count)), поток: \(currentClient.isEmpty ? "—" : currentClient), "
+            + "\(status), \(time.isFinite ? Int(time) : 0)/\(length.isFinite ? Int(length) : 0) с, громкость \(Int(player.volume * 100))%, "
+            + "неудач подряд \(failuresInRow), заранее найдено \(prefetched.count), ожидание: \(player.reasonForWaitingToPlay?.rawValue ?? "—")"
+            + (lastReason.map { ", последняя причина: \($0)" } ?? "")
+    }
+
     // MARK: - Очередь «Далее» (свайп вверх по плееру, просьба владельца после 1.69)
 
     static let queueDidChange = Notification.Name("FonNativeQueueDidChange")
@@ -624,6 +635,7 @@ final class NativeAudio: NSObject {
 
     private func playCurrent() {
         guard let track = currentTrack else { return }
+        AppJournal.add("системный плеер: трек \(track.id) «\(track.title.prefix(40))» (\(index + 1) из \(queue.count))")
         let current = UUID()
         token = current
         // Место и пауза из веб-плеера — только для первого трека после передачи.
@@ -672,6 +684,7 @@ final class NativeAudio: NSObject {
 
     /// Найденные потоки — в очередь попыток; название — треку, если его ещё не было.
     private func use(_ result: YouTubeStreams.Result, for track: Track) {
+        AppJournal.add("поток \(track.id): " + (result.streams.isEmpty ? "нет — \(result.reason ?? "?")" : result.streams.map(\.client).joined(separator: ", ") + (result.reason.map { " (\($0))" } ?? "")))
         if let title = result.title { rawTitles[track.id] = title }
         if let id = result.channelID { channels[track.id] = (id, result.author ?? track.artist) }
         if let spec = result.storyboard { storyboards[track.id] = spec }
@@ -701,6 +714,7 @@ final class NativeAudio: NSObject {
         guard !candidates.isEmpty else { return !triedDirect ? tryDirect() : trackFailed() }
         let stream = candidates.removeFirst()
         currentClient = stream.client
+        AppJournal.add("играем: \(stream.client)")
         // Поток оборвался посреди трека (например, отдельная звуковая дорожка) — следующий с того же места.
         let resumeAt: CMTime? = playedOnceCurrent ? player.currentTime() : startAt
         let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
@@ -723,6 +737,7 @@ final class NativeAudio: NSObject {
                 case .failed:
                     let text = (item.error as NSError?)?.localizedDescription ?? "?"
                     self.lastReason = "плеер iOS: " + String(text.prefix(70))
+                    AppJournal.add("плеер iOS не смог (\(stream.client)): \(text.prefix(120))")
                     self.tryNextCandidate()
                 default:
                     break
@@ -788,6 +803,7 @@ final class NativeAudio: NSObject {
     /// там пропускаем трек, а после трёх неудач подряд (скорее всего, нет сети) встаём на паузу: ▶ попробует снова.
     private func trackFailed() {
         failuresInRow += 1
+        AppJournal.add("трек не заиграл (подряд \(failuresInRow)), на экране: \(UIApplication.shared.applicationState == .active ? "да" : "нет"); \(lastReason ?? "")")
         if UIApplication.shared.applicationState == .active {
             if !playedOnce || failuresInRow >= 2 { fallBackToWeb() } else { next() }
         } else if failuresInRow < 3 {
@@ -816,6 +832,7 @@ final class NativeAudio: NSObject {
         guard Date().timeIntervalSince(since) > 10, let track = currentTrack else { return }
         waitingSince = nil
         refreshingStream = true
+        AppJournal.add("поток «грузится» >10 с — ищем новую ссылку")
         beginBackgroundTask()
         let current = token
         Task { [weak self] in
@@ -834,6 +851,7 @@ final class NativeAudio: NSObject {
     /// Трек — в обычный веб-плеер (системный не справился).
     private func fallBackToWeb() {
         guard let track = currentTrack else { return }
+        AppJournal.add("переход в обычный плеер YouTube: \(track.id)")
         let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
         let reason = lastReason
         lastReason = nil

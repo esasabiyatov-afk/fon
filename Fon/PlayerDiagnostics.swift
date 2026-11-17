@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import Network
 import UIKit
 import WebKit
@@ -156,7 +157,99 @@ enum PlayerDiagnostics {
         // K. Настройки Fon.
         await say("K. Настройки Fon")
         for line in settingsLines() { await say("   " + line) }
+        await appSections(say)
         return finish(all, started: started)
+    }
+
+    /// L–N: как работает само приложение (состояние, данные, кэши, система) и журнал событий — для доработок.
+    private static func appSections(_ say: (String) async -> Void) async {
+        await say("L. Приложение сейчас")
+        for line in await appLines() { await say("   " + line) }
+        await say("M. Хранилище и кэши")
+        for line in storageLines() { await say("   " + line) }
+        let journal = AppJournal.all
+        await say("N. Журнал событий (последние \(journal.count))")
+        for line in journal { await say("   " + line) }
+    }
+
+    @MainActor
+    private static func appLines() -> [String] {
+        var lines: [String] = []
+        let process = ProcessInfo.processInfo
+        let thermal = ["норма", "тёплый", "горячий", "перегрев"][min(3, process.thermalState.rawValue)]
+        let memory = os_proc_available_memory()
+        lines.append(String(format: "работает %.0f мин, температура: %@, доступно памяти: %ld МБ, ядер: %ld", Date().timeIntervalSince(AppJournal.launchedAt) / 60,
+                            thermal, Int(memory / 1_048_576), process.activeProcessorCount))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene?.windows.first { $0.isKeyWindow }
+        let traits = window?.traitCollection
+        let orientation: String = {
+            switch scene?.interfaceOrientation {
+            case .portrait?: return "вертикально"
+            case .portraitUpsideDown?: return "вверх ногами"
+            case .landscapeLeft?, .landscapeRight?: return "горизонтально"
+            default: return "?"
+            }
+        }()
+        lines.append("окно \(Int(window?.bounds.width ?? 0))×\(Int(window?.bounds.height ?? 0)), \(orientation), безопасная область "
+                     + "\(Int(window?.safeAreaInsets.top ?? 0))/\(Int(window?.safeAreaInsets.bottom ?? 0)), тема \(traits?.userInterfaceStyle == .dark ? "тёмная" : "светлая"), "
+                     + "размер шрифта \(traits?.preferredContentSizeCategory.rawValue ?? "?"), сцен \(UIApplication.shared.connectedScenes.count)")
+        lines.append("доступность: VoiceOver \(UIAccessibility.isVoiceOverRunning ? "вкл" : "выкл"), меньше движения \(UIAccessibility.isReduceMotionEnabled ? "вкл" : "выкл"), "
+                     + "меньше прозрачности \(UIAccessibility.isReduceTransparencyEnabled ? "вкл" : "выкл"), жирный шрифт \(UIAccessibility.isBoldTextEnabled ? "вкл" : "выкл")")
+        let audio = AVAudioSession.sharedInstance()
+        let outputs = audio.currentRoute.outputs.map { "\($0.portType.rawValue) «\($0.portName)»" }.joined(separator: ", ")
+        lines.append("звук: \(audio.category.rawValue), \(audio.mode.rawValue), выход: \(outputs.isEmpty ? "нет" : outputs), громкость телефона \(Int(audio.outputVolume * 100))%, "
+                     + "другой звук играет: \(audio.isOtherAudioPlaying ? "да" : "нет")")
+        lines.append("системный плеер: " + NativeAudio.shared.debugState)
+        lines.append("плеер на экране: что-то открыто \(PlayerView.hasMedia ? "да" : "нет"), развёрнут \(PlayerView.coversContent ? "да" : "нет")")
+        let likes = CloudLikes.shared
+        lines.append("«Понравившиеся» (облако): загружены \(likes.loaded ? "да" : "нет"), треков \(likes.tracks.count)" + (likes.lastError.map { ", ошибка: \($0)" } ?? "")
+                     + "; старые локальные: \(Library.shared.legacyLiked.count)")
+        lines.append("«Недавно слушали»: \(Library.shared.history.count); поиск — недавних запросов: \((UserDefaults.standard.stringArray(forKey: "searchHistory") ?? []).count)")
+        let offline = OfflineStore.shared
+        lines.append("«Скачанные»: \(offline.tracks.count) треков, \(offline.totalSize / 1_048_576) МБ, в очереди \(offline.waitingCount), качается: \(offline.downloading?.id ?? "—"), "
+                     + "сеть: \(offline.online ? (offline.onWiFi ? "Wi-Fi" : "сотовая") : "нет"), ждёт Wi-Fi: \(offline.waitsForWiFi ? "да" : "нет")")
+        let feed = MusicFeed.shared
+        lines.append("главная музыки: полок \(feed.shelves.count) (\(feed.shelves.map { "\($0.title.prefix(20))·\($0.items.count)" }.prefix(8).joined(separator: ", "))), "
+                     + "исполнителей \(feed.artists.count), лента: миксов \(feed.feedMixes.count), видео \(feed.feedVideos.count), не вошёл: \(feed.signedOut ? "да" : "нет")"
+                     + (feed.homeError.map { ", ошибка главной: \($0)" } ?? "") + (feed.feedError.map { ", ошибка ленты: \($0)" } ?? ""))
+        let shelves = Discover.shared.shelves
+        lines.append("«Открытия»: дня \(shelves.daily.count), новое \(shelves.fresh.count), ниша \(shelves.niche.count), тренды \(shelves.trending.count), собраны \(shelves.built.map(stamp) ?? "никогда")")
+        lines.append("вкус: исполнителей с оценкой \(Taste.shared.artistScores.count), обычно пропускаемых треков \(Taste.shared.dislikedIDs.count)")
+        lines.append("оформление: фон \(Settings.backdropStyle), подложка \(Settings.panelStyle), ореол \(Settings.artworkGlow ? "вкл" : "выкл"), живой фон везде \(Settings.ambientEverywhere ? "вкл" : "выкл"), "
+                     + "громкость YouTube \(Int(Settings.youtubeVolume * 100))%; свой видеоплеер: \(Settings.sabrVideoHeight)p, ×\(Settings.sabrVideoSpeed), субтитры \(Settings.sabrSubtitles ?? "выкл")")
+        return lines
+    }
+
+    private static func storageLines() -> [String] {
+        let manager = FileManager.default
+        let caches = manager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        func size(_ url: URL) -> (files: Int, bytes: Int64) {
+            guard let items = manager.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return (0, 0) }
+            var files = 0, bytes: Int64 = 0
+            for case let item as URL in items {
+                let values = try? item.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                guard values?.isRegularFile == true else { continue }
+                files += 1
+                bytes += Int64(values?.fileSize ?? 0)
+            }
+            return (files, bytes)
+        }
+        func folder(_ url: URL) -> String {
+            let children = ((try? manager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []).sorted { $0.lastPathComponent < $1.lastPathComponent }
+            return children.map { child in
+                let info = size(child)
+                return "\(child.lastPathComponent) \(info.files) ф. \(info.bytes / 1024) КБ"
+            }.joined(separator: "; ")
+        }
+        let cache = URLCache.shared
+        return [
+            "Caches: " + folder(caches),
+            "Application Support: " + folder(support),
+            "кэш сети: память \(cache.currentMemoryUsage / 1_048_576)/\(cache.memoryCapacity / 1_048_576) МБ, диск \(cache.currentDiskUsage / 1_048_576)/\(cache.diskCapacity / 1_048_576) МБ",
+            "ключи настроек: " + UserDefaults.standard.dictionaryRepresentation().keys.filter { !$0.hasPrefix("Apple") && !$0.hasPrefix("NS") && !$0.hasPrefix("com.apple") && !$0.hasPrefix("AK") }.sorted().joined(separator: ", ")
+        ]
     }
 
     private static func finish(_ lines: [String], started: Date) -> String {

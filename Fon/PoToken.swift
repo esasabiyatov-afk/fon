@@ -97,10 +97,12 @@ final class PoToken: NSObject, WKNavigationDelegate {
             guard token.count > 20 else { throw Failure("пустой токен") }
             Self.store(token, for: binding, until: minterUntil)
             lastReport = String(format: "получен за %.1f с (длина %d)", Date().timeIntervalSince(started), token.count)
+            AppJournal.add("PO-токен " + lastReport)
             return token
         } catch {
             lastReport = String(format: "не получен за %.1f с: %@", Date().timeIntervalSince(started), (error as? Failure)?.text ?? error.localizedDescription)
             minterUntil = .distantPast
+            AppJournal.add("PO-токен " + lastReport)
             return nil
         }
     }
