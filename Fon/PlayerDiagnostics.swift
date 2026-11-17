@@ -91,12 +91,14 @@ enum PlayerDiagnostics {
         await say("   m.youtube (\(clientLabel(mobile))): " + mweb.text)
 
         // F. Настоящий WebKit.
+        if Task.isCancelled { return finish(all + ["(диагностику закрыли — остановлена)"], started: started) }
         await say("F. Встроенный браузер (WebKit — как Safari на этом устройстве)")
         await say("   запрос из окна m.youtube: " + (await webFetch(videoID)))
         await say("   страница www (app=desktop) в окне: " + (await webPage("https://www.youtube.com/watch?app=desktop&v=\(videoID)")))
         await say("   страница m.youtube в окне: " + (await webPage("https://m.youtube.com/watch?v=\(videoID)")))
 
         // G. Обычные ссылки — как у плеера.
+        if Task.isCancelled { return finish(all + ["(диагностику закрыли — остановлена)"], started: started) }
         await say("G. Обычные ссылки (как ищет системный плеер, все попытки)")
         var mark = Date()
         let plain = await DirectStream.find(videoID, sabr: false)
@@ -120,6 +122,7 @@ enum PlayerDiagnostics {
         }
 
         // H–J. SABR.
+        if Task.isCancelled { return finish(all + ["(диагностику закрыли — остановлена)"], started: started) }
         await say("H. PO-токен")
         let info = await DirectStream.sabrSource(videoID)
         guard let source = info.source else {
@@ -142,7 +145,13 @@ enum PlayerDiagnostics {
             await say("   привязки нет (на странице ни DATASYNC_ID, ни VISITOR_DATA)")
         }
 
+        if Task.isCancelled { return finish(all + ["(диагностику закрыли — остановлена)"], started: started) }
         await say("I. Свой SABR (звук)")
+        // Файл этого трека может сейчас играть (с 1.110 звук m.youtube — тоже файл в Caches/sabr): откладываем его
+        // на время проверок и возвращаем после (раньше проверка его удаляла — плеер терял трек).
+        let keptFile = SabrEngine.folder.appendingPathComponent(videoID + ".m4a.keep")
+        try? FileManager.default.removeItem(at: keptFile)
+        let hadFile = SabrEngine.cached(videoID).map { (try? FileManager.default.moveItem(at: $0, to: keptFile)) != nil } ?? false
         for (label, usePo) in [("без PO-токена", false), ("с PO-токеном", true)] {
             if let cached = SabrEngine.cached(videoID) { try? FileManager.default.removeItem(at: cached) }
             mark = Date()
@@ -170,11 +179,18 @@ enum PlayerDiagnostics {
             await say("     " + SabrEngine.shared.lastReport)
         }
 
+        if hadFile {
+            let file = SabrEngine.folder.appendingPathComponent(videoID + ".m4a")
+            try? FileManager.default.removeItem(at: file)
+            try? FileManager.default.moveItem(at: keptFile, to: file)
+        }
+        if Task.isCancelled { return finish(all + ["(диагностику закрыли — остановлена)"], started: started) }
         await say("J. SABR с видео (360p + звук через свой поток; в музыке не используется)")
         mark = Date()
         let video = await SabrMusicVideo.start(source)
         if let url = video.url {
             await say("   начало за \(seconds(since: mark)); плеер iOS: " + (await playTest(url, headers: [:])))
+            SabrMusicVideo.stop(videoID) // проверили — не качаем видео дальше
         } else {
             await say("   не вышло (\(seconds(since: mark))): \(video.reason ?? "?")")
         }
@@ -681,6 +697,7 @@ enum PlayerDiagnostics {
     private final class Once: @unchecked Sendable {
         private let lock = NSLock()
         private var done = false
+    private var work: Task<Void, Never>?
         func first() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
     }
 
@@ -726,7 +743,9 @@ final class DiagnosticsViewController: UIViewController {
             UIBarButtonItem(title: tr("Скопировать"), style: .done, target: self, action: #selector(copyText))
         ]
         UIApplication.shared.isIdleTimerDisabled = true // экран не гаснет, пока идёт проверка (до нескольких минут)
-        Task { [weak self] in
+        // Закрыли раньше конца — проверка останавливается (раньше шла дальше в фоне несколько минут: страницы, SABR,
+        // видео — и могла тормозить плеер; владелец после 1.110: «задержка из-за диагностики?»).
+        work = Task { [weak self] in
             guard let self else { return }
             let result = await PlayerDiagnostics.run(videoID: self.videoID) { [weak self] line in self?.append(line) }
             self.text = result
@@ -755,6 +774,7 @@ final class DiagnosticsViewController: UIViewController {
     }
 
     @objc private func close() {
+        work?.cancel()
         UIApplication.shared.isIdleTimerDisabled = false
         dismiss(animated: true)
     }

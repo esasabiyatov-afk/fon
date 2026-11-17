@@ -659,6 +659,11 @@ enum SabrMusicVideo {
     }
 
     /// Адрес master.m3u8, когда пришло начало видео и звука (до 30 с), или причина.
+    /// Закрыть загрузку трека (диагностика после своей проверки — чтобы видео не качалось дальше в фоне).
+    static func stop(_ videoID: String) {
+        while let index = sessions.firstIndex(where: { $0.id == videoID }) { sessions.remove(at: index).session.close() }
+    }
+
     static func start(_ source: SabrEngine.Source) async -> (url: URL?, reason: String?) {
         guard await LocalHLSServer.shared.start() != nil else { return (nil, "сервер внутри приложения не запустился") }
         if let index = sessions.firstIndex(where: { $0.id == source.videoID }) {
