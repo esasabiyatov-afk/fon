@@ -341,6 +341,10 @@ final class NativeAudio: NSObject {
 
     var onState: ((State) -> Void)?
     var onFallback: ((URL, String?) -> Void)?
+    /// Трек, который системный плеер не смог сыграть и отдал веб-плееру: при возврате из режима видео в музыку
+    /// его не забираем снова (жалоба после 1.108 на iPhone 17: переход музыка ↔ видео перезапускал трек — системный
+    /// плеер пробовал заново, ~30 с не играл и опять перезагружал страницу).
+    var fellBackID: String?
     /// Последняя причина, по которой системному плееру не удалось включить трек.
     private var lastReason: String?
 
@@ -853,6 +857,7 @@ final class NativeAudio: NSObject {
     private func fallBackToWeb() {
         guard let track = currentTrack else { return }
         AppJournal.add("переход в обычный плеер YouTube: \(track.id)")
+        fellBackID = track.id
         let url = YouTubeLinks.watch(track.id, list: playlistID) ?? YouTubeLinks.mix(track.id)
         let reason = lastReason
         lastReason = nil

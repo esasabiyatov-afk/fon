@@ -344,6 +344,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
             musicView.systemPlayer = false
             webView.load(URLRequest(url: url))
         } else if musicMode, Settings.nativeAudio, !NativeAudio.shared.active, !NativeAudio.shared.sabrOnly, let id = currentVideoID,
+                  NativeAudio.shared.fellBackID != id,
                   var components = URLComponents(string: "https://m.youtube.com/watch") {
             // Обратно в режим музыки — тот же трек снова в системный плеер, с того же места
             // (владелец: «после переключения на ютуб и обратно системный плеер пропадает»).
