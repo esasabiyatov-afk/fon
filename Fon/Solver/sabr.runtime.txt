@@ -148,6 +148,7 @@
         clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction });
       stream.on('streamProtectionStatusUpdate', (s) => { if (s.status !== 1) log.push('защита потока: ' + s.status); });
       stream.on('error', (e) => log.push('ошибка: ' + (e && e.message)));
+      log.push('звук itag ' + audio.itag + (audio.audioTrackId ? ' ' + audio.audioTrackId : ''));
       const started = stream.start({ audioFormat: audio, enabledTrackTypes: S.EnabledTrackTypes.AUDIO_ONLY, isPostLiveDvr: false, maxRetries: 4 });
       const reader = started.audioStream.getReader();
       g.__fonSabrJobs[id] = () => { stopped = true; stream.abort().catch(() => {}); done('отменено'); };

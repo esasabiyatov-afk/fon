@@ -59,17 +59,17 @@ final class SettingsViewController: UITableViewController {
             : "\n\nСейчас на этом телефоне недоступен: YouTube отдаёт ему поток только в своём формате (SABR), поэтому музыка играет в обычном плеере. Fon попробует снова после \(time) — или выключите и включите переключатель, чтобы попробовать сейчас." + reason
     }
 
-    /// Проба SABR (`SabrProbe`): ~30 с, потом текст с кнопкой «Скопировать» — владелец присылает его.
+    /// Диагностика системного плеера (`PlayerDiagnostics`, вместо пробы SABR в окне — после 1.103): до ~1 мин,
+    /// потом текст с кнопкой «Скопировать» — владелец присылает его.
     private func runSabrProbe() {
-        let videoID = NativeAudio.shared.currentTrack?.id ?? "dQw4w9WgXcQ"
-        let waiting = UIAlertController(title: "Проверяю SABR…", message: "Около 30 секунд. Не закрывайте экран.", preferredStyle: .alert)
+        let videoID = NativeAudio.shared.currentTrack?.id ?? Library.shared.history.first?.id ?? "dQw4w9WgXcQ"
+        let waiting = UIAlertController(title: "Диагностика…", message: "До минуты. Не закрывайте экран.", preferredStyle: .alert)
         present(waiting, animated: true)
-        let host: UIView = view.window ?? view
         Task { [weak self] in
-            let text = await SabrProbe.run(videoID: videoID, in: host)
+            let text = await PlayerDiagnostics.run(videoID: videoID)
             await MainActor.run {
                 waiting.dismiss(animated: true) {
-                    let alert = UIAlertController(title: "Проверка SABR", message: text, preferredStyle: .alert)
+                    let alert = UIAlertController(title: "Диагностика системного плеера", message: text, preferredStyle: .alert)
                     alert.addAction(UIAlertAction(title: tr("Скопировать"), style: .default) { _ in UIPasteboard.general.string = text })
                     alert.addAction(UIAlertAction(title: "OK", style: .cancel))
                     self?.present(alert, animated: true)
@@ -144,8 +144,8 @@ final class SettingsViewController: UITableViewController {
             return cell
         }
         if indexPath.row == 1 {
-            content.text = "Проверить SABR"
-            content.secondaryText = "проба для iPad/iPhone без системного плеера"
+            content.text = "Диагностика системного плеера"
+            content.secondaryText = "пришлите текст, если системный плеер не играет"
             content.image = UIImage(systemName: "stethoscope")
             content.imageProperties.tintColor = PlayerView.accent
             cell.contentConfiguration = content

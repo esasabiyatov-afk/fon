@@ -675,7 +675,8 @@ final class NativeAudio: NSObject {
         if result.streams.isEmpty, result.noLinks {
             UserDefaults.standard.set(Date().addingTimeInterval(6 * 3600), forKey: "sabrOnlyUntil")
             UserDefaults.standard.set(result.reason, forKey: "sabrOnlyReason") // для подписи в ⚙ (iPhone 17 после 1.97)
-            lastReason = nil // ожидаемо — переходим тихо
+            // Ожидаемо — переходим тихо; но если не справился свой SABR — окно с причиной (iPhone 17 после 1.103).
+            lastReason = result.reason?.contains("SABR:") == true ? result.reason : nil
         } else if result.streams.isEmpty, let reason = result.reason {
             lastReason = reason
         }

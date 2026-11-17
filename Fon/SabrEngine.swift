@@ -57,6 +57,9 @@ final class SabrEngine {
     private var timers: [Int: DispatchWorkItem] = [:]
     private var nextID = 1
     private var lastException: String?
+    /// Итог последней загрузки звука — для диагностики (⚙ → «Диагностика системного плеера»).
+    private var report = ""
+    var lastReport: String { queue.sync { report } }
 
     static let folder: URL = {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("sabr", isDirectory: true)
@@ -155,6 +158,11 @@ final class SabrEngine {
         }
         guard let job = jobs.removeValue(forKey: id) else { return }
         try? job.handle.close()
+        let parsed = (try? JSONSerialization.jsonObject(with: Data(info.utf8))) as? [String: Any]
+        report = "запросов \(parsed?["requests"] as? Int ?? 0), байт \(job.bytes)"
+            + (error.isEmpty ? "" : ", ошибка: \(error)")
+            + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(8).joined(separator: " | ") } ?? "")
+            + (lastException.map { "; JS: \($0.prefix(120))" } ?? "")
         if error.isEmpty, job.bytes > 10_000 {
             try? FileManager.default.removeItem(at: job.file)
             do {
