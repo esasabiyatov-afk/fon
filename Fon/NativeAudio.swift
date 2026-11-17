@@ -699,7 +699,7 @@ final class NativeAudio: NSObject {
             publish(loading: true)
             queueChanged()
         }
-        candidates += result.streams
+        candidates += Self.ordered(result.streams)
         if let file = OfflineStore.shared.file(for: track.id) {
             candidates.append(AudioStream(url: file, headers: [:], client: "Скачано")) // поток не заиграл — скачанный файл
         }
@@ -762,10 +762,20 @@ final class NativeAudio: NSObject {
         stallTimer = timer
     }
 
+    /// Порядок потоков: с видео на обложке — сперва файл с картинкой (360p), иначе — только звук (меньше трафика).
+    /// Раньше порядок давал `DirectStream` (звук первым), а звук без картинки бывал только у SABR; с 1.109 m.youtube
+    /// отдаёт и чистый звук — на iPhone 17 видео на обложке пропало (владелец после 1.109).
+    static func ordered(_ streams: [AudioStream]) -> [AudioStream] {
+        let video = streams.filter { $0.client != "Прямо звук" && $0.client != "SABR" }
+        let audio = streams.filter { $0.client == "Прямо звук" || $0.client == "SABR" }
+        return Settings.videoArtwork ? video + audio : audio + video
+    }
+
     /// На обложке включили видео, а играет скачанный файл (в нём только звук; владелец после 1.88: «не играет видео
     /// по нажатию на сохранённых») — с сетью переходим на поток с видео с того же места, пауза сохраняется.
     func videoWanted() {
-        guard active, currentClient == "Скачано", OfflineStore.shared.online, let track = currentTrack else { return }
+        // Скачанный файл или чистый звук m.youtube — в них нет картинки.
+        guard active, currentClient == "Скачано" || currentClient == "Прямо звук", OfflineStore.shared.online, let track = currentTrack else { return }
         let was = currentClient
         let current = token
         Task { [weak self] in
@@ -847,7 +857,7 @@ final class NativeAudio: NSObject {
                 self.refreshingStream = false
                 guard self.token == current, self.active else { return }
                 guard !found.streams.isEmpty else { return }
-                self.candidates = found.streams
+                self.candidates = Self.ordered(found.streams)
                 self.tryNextCandidate() // с того же места (`resumeAt`)
             }
         }

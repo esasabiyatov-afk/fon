@@ -338,6 +338,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
 
     /// Режим сменили (здесь или во вкладке приложения) — обновляем экран и страницу.
     func musicModeDidChange() {
+        AppJournal.add("режим: \(musicMode ? "музыка" : "видео"); системный плеер \(NativeAudio.shared.active ? "играл" : "не играл"), трек \(currentVideoID ?? "—")")
         // Режим видео — картинку показывает только веб-плеер: передаём ему трек с того же места.
         if !musicMode, NativeAudio.shared.active, let url = NativeAudio.shared.handoverURL() {
             NativeAudio.shared.deactivate()

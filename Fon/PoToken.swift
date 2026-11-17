@@ -60,11 +60,18 @@ final class PoToken: NSObject, WKNavigationDelegate {
         Task { _ = await self.refresh(binding) }
     }
 
+    /// Строго по одному: с 1.109 токены просят часто (токен видео на каждый трек — плеер, «заранее», «Скачанные»),
+    /// и две проверки сразу создавали два окна — ожидание первой могло не закончиться никогда.
     private func refresh(_ binding: String) async -> String? {
+        while let current = working {
+            _ = await current.value
+            if let token = Self.cached(for: binding) { return token }
+            if working == current { working = nil } // та проверка закончилась — дальше своя
+        }
         let task = Task { await self.make(binding) }
         working = task
         let token = await task.value
-        working = nil
+        if working == task { working = nil }
         return token
     }
 
