@@ -355,6 +355,9 @@ final class OfflineStore {
             offset += Int64(data.count)
         }
         try? handle.close()
+        // Звук 140 (m.youtube, iPhone 17 после 1.109) — фрагментированный, с длиной трека в moov: без обнуления плеер
+        // видит двойную длину, вторая половина — тишина (владелец). У файла 360p (не фрагментированный) ничего не меняется.
+        _ = SabrEngine.zeroMoovDurations(temp)
         try? FileManager.default.removeItem(at: destination)
         guard await exportAudio(from: temp, to: destination) else { return nil }
         let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path)

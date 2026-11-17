@@ -273,6 +273,8 @@ final class SabrEngine {
             guard size >= 8 else { return nil }
             if type == "moov" {
                 guard o + size <= data.count else { return nil }
+                // Только фрагментированный файл (есть mvex): у обычного m4a длина в moov — единственная.
+                guard data[o..<o + size].range(of: Data("mvex".utf8)) != nil else { return "не фрагментированный" }
                 walk(o, o + size)
                 guard !notes.isEmpty else { return "без длительностей" }
                 do {
