@@ -145,7 +145,7 @@
         return new Promise((ok) => setTimeout(ok, requests > 1 ? 50 : 0)).then(() => g.__fonFetch(input, init));
       };
       const stream = new S.SabrStream({ videoId: job.videoId, serverAbrStreamingUrl: job.url, videoPlaybackUstreamerConfig: job.config,
-        clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction });
+        clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction, poToken: job.poToken || undefined });
       stream.on('streamProtectionStatusUpdate', (s) => { if (s.status !== 1) log.push('защита потока: ' + s.status); });
       stream.on('error', (e) => log.push('ошибка: ' + (e && e.message)));
       log.push('звук itag ' + audio.itag + (audio.audioTrackId ? ' ' + audio.audioTrackId : ''));
@@ -184,7 +184,7 @@
         return new Promise((ok) => setTimeout(ok, requests > 1 ? 50 : 0)).then(() => g.__fonFetch(input, init));
       };
       const stream = new S.SabrStream({ videoId: job.videoId, serverAbrStreamingUrl: job.url, videoPlaybackUstreamerConfig: job.config,
-        clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction });
+        clientInfo: { clientName: job.clientName, clientVersion: job.clientVersion }, formats, fetchFunction, poToken: job.poToken || undefined });
       stream.on('streamProtectionStatusUpdate', (s) => { if (s.status !== 1) log.push('защита потока: ' + s.status); });
       stream.on('error', (e) => log.push('ошибка: ' + (e && e.message)));
       const started = stream.start({ videoFormat: video, audioFormat: audio, enabledTrackTypes: S.EnabledTrackTypes.VIDEO_AND_AUDIO,

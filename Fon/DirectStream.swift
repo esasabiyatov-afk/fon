@@ -119,6 +119,13 @@ enum DirectStream {
                                             clientName: number(in: data, after: "\"INNERTUBE_CONTEXT_CLIENT_NAME\":") ?? 1,
                                             clientVersion: YouTubeStreams.string(in: data, after: "\"INNERTUBE_CLIENT_VERSION\":\"") ?? "2.20261112.10.00",
                                             formats: adaptive, playerURL: js)
+            // Привязка PO-токена (`PoToken`): со входом — DATASYNC_ID (до «||»), без входа — VISITOR_DATA.
+            let unescape = { (text: String) in text.replacingOccurrences(of: "\\u003d", with: "=").replacingOccurrences(of: "\\u0026", with: "&") }
+            let loggedIn = data.range(of: Data("\"LOGGED_IN\":true".utf8)) != nil
+            let sync = YouTubeStreams.string(in: data, after: "\"DATASYNC_ID\":\"").map(unescape)?
+                .components(separatedBy: "||").first { !$0.isEmpty }
+            let visitorData = YouTubeStreams.string(in: data, after: "\"VISITOR_DATA\":\"").map(unescape)
+            result.sabr?.poBinding = loggedIn ? (sync ?? visitorData) : visitorData
             result.sabr?.duration = Double((response["videoDetails"] as? [String: Any])?["lengthSeconds"] as? String ?? "") ?? 0
             let tracks = ((response["captions"] as? [String: Any])?["playerCaptionsTracklistRenderer"] as? [String: Any])?["captionTracks"] as? [[String: Any]] ?? []
             result.sabr?.captions = tracks.compactMap { track in

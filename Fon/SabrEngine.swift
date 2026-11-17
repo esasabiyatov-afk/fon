@@ -1,5 +1,5 @@
-import Foundation
 import JavaScriptCore
+import UIKit
 
 /// Звук по SABR — для устройств, которым YouTube не даёт обычных ссылок (iPad, iPhone 17; владелец после 1.98).
 /// Проба 1.99 на iPhone владельца: защита потока 1 (без PO-токена), весь трек itag 140 (~3,3 МБ) за 3 с,
@@ -23,6 +23,9 @@ final class SabrEngine {
         /// Субтитры со страницы (для своего видеоплеера) и длина видео.
         var captions: [Caption] = []
         var duration: Double = 0
+        /// Привязка PO-токена (DATASYNC_ID со входом, VISITOR_DATA без) — `PoToken`.
+        var poBinding: String?
+        var poToken: String?
     }
 
     struct Caption {
@@ -59,6 +62,8 @@ final class SabrEngine {
     private var lastException: String?
     /// Итог последней загрузки звука — для диагностики (⚙ → «Диагностика системного плеера»).
     private var report = ""
+    /// Был ли PO-токен у последней загрузки (пишется до старта, читается в отчёте).
+    private var poNote = ""
     var lastReport: String { queue.sync { report } }
 
     static let folder: URL = {
@@ -98,7 +103,8 @@ final class SabrEngine {
                 guard let context = self.prepareContext() else { return onDone("SABR: движок не запустился (\(self.lastException ?? "?"))") }
                 self.videoJobs[id] = VideoJob(onData: onData, onDone: onDone)
                 let job: [String: Any] = ["id": id, "videoId": source.videoID, "url": source.url, "config": source.config, "clientName": source.clientName,
-                                          "clientVersion": source.clientVersion, "videoItag": videoItag, "audioTrackId": audioTrack ?? "", "formats": source.formats]
+                                          "clientVersion": source.clientVersion, "videoItag": videoItag, "audioTrackId": audioTrack ?? "", "formats": source.formats,
+                                          "poToken": source.poToken ?? ""]
                 guard let data = try? JSONSerialization.data(withJSONObject: job), let json = String(data: data, encoding: .utf8) else {
                     return self.complete(id, error: "SABR: форматы не разобрались", info: "")
                 }
@@ -117,6 +123,14 @@ final class SabrEngine {
     /// n в адресе — решателем (как у обычных ссылок).
     private func solved(_ source: Source) async -> Source {
         var source = source
+        if let binding = source.poBinding, !binding.isEmpty {
+            source.poToken = await Self.poToken(for: binding)
+            let detail = PoToken.cached(for: binding) != nil && source.poToken != nil ? await PoToken.shared.lastReport : "в фоне — только готовый"
+            let note = source.poToken != nil ? "PO-токен: есть (\(detail))" : "PO-токен: нет (\(await PoToken.shared.lastReport))"
+            queue.sync { poNote = note }
+        } else {
+            queue.sync { poNote = "PO-токен: нет привязки" }
+        }
         if var parts = URLComponents(string: source.url), let n = parts.queryItems?.first(where: { $0.name == "n" })?.value,
            let playerURL = source.playerURL,
            let answer = try? await ChallengeSolver.shared.solve(playerURL: playerURL, n: [n], signatures: []), let value = answer.n[n] {
@@ -124,6 +138,15 @@ final class SabrEngine {
             source.url = parts.url?.absoluteString ?? source.url
         }
         return source
+    }
+
+    /// PO-токен: в фоне — только готовый (скрытое окно там может не ответить), на экране — получить.
+    private static func poToken(for binding: String) async -> String? {
+        if let token = PoToken.cached(for: binding) { return token }
+        let active = await MainActor.run { UIApplication.shared.applicationState != .background }
+        guard active else { return nil }
+        PoToken.rememberBinding(binding)
+        return await PoToken.shared.token(for: binding)
     }
 
     // MARK: - На своей очереди
@@ -137,7 +160,8 @@ final class SabrEngine {
         guard let handle = try? FileHandle(forWritingTo: temp) else { return finish(.failure(Failure.message("SABR: нет места для файла"))) }
         jobs[id] = Job(handle: handle, temp: temp, file: file, finish: finish)
         let job: [String: Any] = ["id": id, "videoId": source.videoID, "url": source.url, "config": source.config, "clientName": source.clientName,
-                                  "clientVersion": source.clientVersion, "itag": 140, "formats": source.formats]
+                                  "clientVersion": source.clientVersion, "itag": 140, "formats": source.formats,
+                                  "poToken": source.poToken ?? ""]
         guard let data = try? JSONSerialization.data(withJSONObject: job), let json = String(data: data, encoding: .utf8) else {
             return complete(id, error: "SABR: форматы не разобрались", info: "")
         }
@@ -163,6 +187,7 @@ final class SabrEngine {
             + (error.isEmpty ? "" : ", ошибка: \(error)")
             + ((parsed?["log"] as? [String]).map { $0.isEmpty ? "" : "; журнал: " + $0.prefix(8).joined(separator: " | ") } ?? "")
             + (lastException.map { "; JS: \($0.prefix(120))" } ?? "")
+            + (poNote.isEmpty ? "" : "; " + poNote)
         if error.isEmpty, job.bytes > 10_000 {
             // Длина в moov YouTube + длина фрагментов — AVPlayer показывал двойную длину (iPad, 1.104: 406 с при 203).
             if let note = Self.zeroMoovDurations(job.temp) { report += "; moov: " + note }
