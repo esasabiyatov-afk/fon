@@ -1,4 +1,5 @@
 import UIKit
+import notify
 
 /// Общие настройки приложения (живут в UserDefaults).
 enum Settings {
@@ -84,7 +85,7 @@ enum ScreenState {
     /// Экран погас или включился — сообщаем (`Settings.headphonesChanged`: веб-плееру обновить флаг).
     static func startWatching() {
         var watch: Int32 = 0
-        _ = notify_register_dispatch(name, &watch, .main) { _ in
+        _ = notify_register_dispatch(name, &watch, DispatchQueue.main) { _ in
             NotificationCenter.default.post(name: Settings.headphonesChanged, object: nil)
         }
     }
