@@ -367,6 +367,7 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
         on(center.pauseCommand) { [weak self] _ in self?.player.pause(); return .success }
         on(center.togglePlayPauseCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
+            if Settings.ignoreHeadphoneTap { return .success } // касание наушников (см. Settings)
             if self.player.timeControlStatus == .paused { self.player.play() } else { self.player.pause() }
             return .success
         }

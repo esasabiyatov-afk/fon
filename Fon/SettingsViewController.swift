@@ -3,6 +3,7 @@ import UIKit
 /// Настройки приложения (⚙ в «Медиатеке»). Пока одна: системный плеер для музыки.
 final class SettingsViewController: UITableViewController {
     private let nativeSwitch = UISwitch()
+    private let headphoneSwitch = UISwitch()
 
     init() {
         super.init(style: .insetGrouped)
@@ -17,6 +18,13 @@ final class SettingsViewController: UITableViewController {
         nativeSwitch.onTintColor = PlayerView.accent
         nativeSwitch.isOn = Settings.nativeAudio
         nativeSwitch.addTarget(self, action: #selector(nativeChanged), for: .valueChanged)
+        headphoneSwitch.onTintColor = PlayerView.accent
+        headphoneSwitch.isOn = Settings.ignoreHeadphoneTap
+        headphoneSwitch.addTarget(self, action: #selector(headphoneChanged), for: .valueChanged)
+    }
+
+    @objc private func headphoneChanged() {
+        Settings.ignoreHeadphoneTap = headphoneSwitch.isOn
     }
 
     @objc private func nativeChanged() {
@@ -28,7 +36,7 @@ final class SettingsViewController: UITableViewController {
 
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
 
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 2 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? 3 : 2 }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         section == 0 ? tr("Воспроизведение") : (section == 1 ? tr("Внешний вид") : tr("О приложении"))
@@ -43,6 +51,7 @@ final class SettingsViewController: UITableViewController {
             + tr("Если YouTube не отдаст поток, трек сам включится в обычном плеере. ")
             + tr("Включится со следующего трека, который вы откроете.")
             + unavailableNote
+            + "\n\n" + tr("«Не реагировать на касание наушников»: касание наушников не ставит музыку на паузу и не включает её. Пауза на экране блокировки и в пункте управления работает. Только у системного плеера.")
     }
 
     /// YouTube не дал этому телефону обычной ссылки (только свой протокол SABR) — Fon тихо играет обычным плеером.
@@ -132,6 +141,16 @@ final class SettingsViewController: UITableViewController {
             cell.contentConfiguration = content
             cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
             cell.accessoryType = .disclosureIndicator
+            return cell
+        }
+        if indexPath.row == 2 {
+            content.text = tr("Не реагировать на касание наушников")
+            content.image = UIImage(systemName: "earbuds")
+            content.imageProperties.tintColor = PlayerView.accent
+            cell.contentConfiguration = content
+            cell.backgroundColor = UIColor(white: 1, alpha: 0.08)
+            cell.selectionStyle = .none
+            cell.accessoryView = headphoneSwitch
             return cell
         }
         if indexPath.row == 1 {

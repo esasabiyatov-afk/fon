@@ -42,6 +42,15 @@ extension Settings {
         set { UserDefaults.standard.set(newValue, forKey: "sabrSubtitles") }
     }
 
+    /// Не реагировать на касание наушников (просьба владельца: китайские наушники без своего приложения ставили на
+    /// паузу от случайного касания). Наушники шлют «переключить паузу» (`togglePlayPauseCommand`), а экран
+    /// блокировки и пункт управления — отдельные «пауза»/«играть»: пропускаем только первое. Долгое нажатие (Siri)
+    /// обрабатывает сама iOS — приложению оно не приходит.
+    static var ignoreHeadphoneTap: Bool {
+        get { UserDefaults.standard.bool(forKey: "ignoreHeadphoneTap") }
+        set { UserDefaults.standard.set(newValue, forKey: "ignoreHeadphoneTap") }
+    }
+
     static var sabrVideoSpeed: Float {
         get { UserDefaults.standard.object(forKey: "sabrVideoSpeed") as? Float ?? 1 }
         set { UserDefaults.standard.set(newValue, forKey: "sabrVideoSpeed") }

@@ -1260,7 +1260,12 @@ final class NativeAudio: NSObject {
         }
         on(center.playCommand) { [weak self] _ in self?.play(); return .success }
         on(center.pauseCommand) { [weak self] _ in self?.pause(); return .success }
-        on(center.togglePlayPauseCommand) { [weak self] _ in self?.handle("toggle"); return .success }
+        // Команда остаётся включённой: выключенную iOS заменяет на «пауза»/«играть», и касание всё равно сработает.
+        on(center.togglePlayPauseCommand) { [weak self] _ in
+            if Settings.ignoreHeadphoneTap { AppJournal.add("наушники: касание пропущено"); return .success }
+            self?.handle("toggle")
+            return .success
+        }
         on(center.nextTrackCommand) { [weak self] _ in self?.next(); return .success }
         on(center.previousTrackCommand) { [weak self] _ in self?.previous(); return .success }
         on(center.changePlaybackPositionCommand) { [weak self] event in

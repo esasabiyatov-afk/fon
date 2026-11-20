@@ -24,6 +24,8 @@ enum L10nTable {
         "Включится со следующего трека, который вы откроете.": "Takes effect from the next track you open.",
         "Оформление плеера": "Player appearance",
         "Системный плеер для музыки": "System player for music",
+        "Не реагировать на касание наушников": "Ignore headphone taps",
+        "«Не реагировать на касание наушников»: касание наушников не ставит музыку на паузу и не включает её. Пауза на экране блокировки и в пункте управления работает. Только у системного плеера.": "“Ignore headphone taps”: tapping your headphones won't pause or resume music. Pause on the Lock Screen and in Control Center still works. System player only.",
         "Оформление": "Appearance",
         "Фон": "Background",
         "Подложка под кнопками": "Panel under buttons",
