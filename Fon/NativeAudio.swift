@@ -1263,8 +1263,9 @@ final class NativeAudio: NSObject {
         // другой, и касание всё равно сработало бы.
         func remote(_ name: String, _ action: @escaping () -> Void) -> (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
             return { _ in
-                let skip = Settings.ignoreHeadphoneTap
-                AppJournal.add("кнопка извне: \(name)" + (skip ? " — пропущена" : ""))
+                let skip = Settings.skipRemoteNow
+                let screen = ScreenState.isBlank.map { $0 ? "погашен" : "включён" } ?? "не узнать"
+                AppJournal.add("кнопка извне: \(name), экран \(screen)" + (skip ? " — пропущена" : ""))
                 if !skip { action() }
                 return .success
             }

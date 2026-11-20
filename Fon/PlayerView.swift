@@ -331,7 +331,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func applyPageState() {
         runJS("window.__fon && __fon.setMini && __fon.setMini(\(mode == .mini))")
         runJS("window.__fon && __fon.setMusic && __fon.setMusic(\(musicMode))")
-        runJS("window.__fon && (__fon.ignoreRemote = \(Settings.ignoreHeadphoneTap))")
+        runJS("window.__fon && (__fon.ignoreRemote = \(Settings.skipRemoteNow))")
     }
 
     private func updateMusicButton() {

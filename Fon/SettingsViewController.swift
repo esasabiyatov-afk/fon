@@ -51,7 +51,7 @@ final class SettingsViewController: UITableViewController {
             + tr("Если YouTube не отдаст поток, трек сам включится в обычном плеере. ")
             + tr("Включится со следующего трека, который вы откроете.")
             + unavailableNote
-            + "\n\n" + tr("«Не реагировать на кнопки наушников»: наушники не ставят на паузу, не включают и не переключают треки. iOS не различает наушники и экран блокировки, поэтому ▶/⏸/⏭/⏮ на экране блокировки и в пункте управления тоже не работают — управление только в Fon.")
+            + "\n\n" + tr("«Не реагировать на наушники при погашенном экране»: пока экран погашен, касания наушников не ставят на паузу, не включают и не переключают треки. Когда экран горит, всё работает как обычно — и экран блокировки, и пункт управления.")
     }
 
     /// YouTube не дал этому телефону обычной ссылки (только свой протокол SABR) — Fon тихо играет обычным плеером.
@@ -144,7 +144,7 @@ final class SettingsViewController: UITableViewController {
             return cell
         }
         if indexPath.row == 2 {
-            content.text = tr("Не реагировать на кнопки наушников")
+            content.text = tr("Не реагировать на наушники при погашенном экране")
             content.image = UIImage(systemName: "earbuds")
             content.imageProperties.tintColor = PlayerView.accent
             cell.contentConfiguration = content

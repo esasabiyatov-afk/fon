@@ -44,8 +44,8 @@ extension Settings {
 
     /// Не реагировать на кнопки наушников (просьба владельца: китайские наушники без своего приложения ставили на
     /// паузу от случайного касания). В 1.114 пропускалась только «переключить паузу» — не помогло: эти наушники
-    /// шлют обычную «паузу», ту же, что экран блокировки (iOS не говорит, откуда команда). С 1.115 по выбору
-    /// владельца пропускаются ▶/⏸/⏭/⏮ извне совсем — и экрана блокировки тоже; управление — только в Fon.
+    /// шлют обычную «паузу», ту же, что экран блокировки (iOS не говорит, откуда команда). С 1.115 ▶/⏸/⏭/⏮ извне
+    /// пропускаются, только когда экран погашен (`skipRemoteNow`) — экран блокировки при горящем экране работает.
     /// Долгое нажатие (Siri) обрабатывает сама iOS — приложению оно не приходит.
     static var ignoreHeadphoneTap: Bool {
         get { UserDefaults.standard.bool(forKey: "ignoreHeadphoneTap") }
@@ -57,6 +57,40 @@ extension Settings {
 
     static let headphonesChanged = Notification.Name("FonHeadphonesChanged")
 
+    /// Пропускать ли кнопку извне прямо сейчас: функция включена (по умолчанию выкл.) и экран погашен. Кнопки экрана
+    /// блокировки нажимают при горящем экране, а случайные касания наушников — в кармане (владелец после 1.114:
+    /// «делай с погашенным экраном»). Не узнали, погашен ли экран, — не пропускаем.
+    static var skipRemoteNow: Bool {
+        ignoreHeadphoneTap && ScreenState.isBlank == true
+    }
+}
+
+/// Погашен ли экран — служебный сигнал SpringBoard `com.apple.springboard.hasBlankedScreen` (1 — погашен).
+/// Для App Store не годится, для Fon на SideStore — да; может перестать работать в новой iOS (тогда nil).
+enum ScreenState {
+    private static let name = "com.apple.springboard.hasBlankedScreen"
+    private static var token: Int32 = {
+        var token: Int32 = 0
+        return notify_register_check(name, &token) == 0 ? token : -1
+    }()
+
+    static var isBlank: Bool? {
+        guard token >= 0 else { return nil }
+        var state: UInt64 = 0
+        guard notify_get_state(token, &state) == 0 else { return nil }
+        return state != 0
+    }
+
+    /// Экран погас или включился — сообщаем (`Settings.headphonesChanged`: веб-плееру обновить флаг).
+    static func startWatching() {
+        var watch: Int32 = 0
+        _ = notify_register_dispatch(name, &watch, .main) { _ in
+            NotificationCenter.default.post(name: Settings.headphonesChanged, object: nil)
+        }
+    }
+}
+
+extension Settings {
     static var sabrVideoSpeed: Float {
         get { UserDefaults.standard.object(forKey: "sabrVideoSpeed") as? Float ?? 1 }
         set { UserDefaults.standard.set(newValue, forKey: "sabrVideoSpeed") }
