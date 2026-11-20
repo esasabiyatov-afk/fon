@@ -1258,16 +1258,22 @@ final class NativeAudio: NSObject {
             command.isEnabled = true
             commandTargets.append((command, command.addTarget(handler: action)))
         }
-        on(center.playCommand) { [weak self] _ in self?.play(); return .success }
-        on(center.pauseCommand) { [weak self] _ in self?.pause(); return .success }
-        // Команда остаётся включённой: выключенную iOS заменяет на «пауза»/«играть», и касание всё равно сработает.
-        on(center.togglePlayPauseCommand) { [weak self] _ in
-            if Settings.ignoreHeadphoneTap { AppJournal.add("наушники: касание пропущено"); return .success }
-            self?.handle("toggle")
-            return .success
+        // Кнопки извне (наушники, экран блокировки): каждую — в журнал; с «Не реагировать на кнопки наушников» —
+        // пропускаем (iOS не говорит, откуда команда). Команды остаются включёнными: выключенную iOS заменила бы
+        // другой, и касание всё равно сработало бы.
+        func remote(_ name: String, _ action: @escaping () -> Void) -> (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+            return { _ in
+                let skip = Settings.ignoreHeadphoneTap
+                AppJournal.add("кнопка извне: \(name)" + (skip ? " — пропущена" : ""))
+                if !skip { action() }
+                return .success
+            }
         }
-        on(center.nextTrackCommand) { [weak self] _ in self?.next(); return .success }
-        on(center.previousTrackCommand) { [weak self] _ in self?.previous(); return .success }
+        on(center.playCommand, remote("играть") { [weak self] in self?.play() })
+        on(center.pauseCommand, remote("пауза") { [weak self] in self?.pause() })
+        on(center.togglePlayPauseCommand, remote("пауза/играть") { [weak self] in self?.handle("toggle") })
+        on(center.nextTrackCommand, remote("следующий") { [weak self] in self?.next() })
+        on(center.previousTrackCommand, remote("предыдущий") { [weak self] in self?.previous() })
         on(center.changePlaybackPositionCommand) { [weak self] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
             self?.seek(event.positionTime)

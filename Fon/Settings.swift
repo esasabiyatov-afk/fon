@@ -42,14 +42,20 @@ extension Settings {
         set { UserDefaults.standard.set(newValue, forKey: "sabrSubtitles") }
     }
 
-    /// Не реагировать на касание наушников (просьба владельца: китайские наушники без своего приложения ставили на
-    /// паузу от случайного касания). Наушники шлют «переключить паузу» (`togglePlayPauseCommand`), а экран
-    /// блокировки и пункт управления — отдельные «пауза»/«играть»: пропускаем только первое. Долгое нажатие (Siri)
-    /// обрабатывает сама iOS — приложению оно не приходит.
+    /// Не реагировать на кнопки наушников (просьба владельца: китайские наушники без своего приложения ставили на
+    /// паузу от случайного касания). В 1.114 пропускалась только «переключить паузу» — не помогло: эти наушники
+    /// шлют обычную «паузу», ту же, что экран блокировки (iOS не говорит, откуда команда). С 1.115 по выбору
+    /// владельца пропускаются ▶/⏸/⏭/⏮ извне совсем — и экрана блокировки тоже; управление — только в Fon.
+    /// Долгое нажатие (Siri) обрабатывает сама iOS — приложению оно не приходит.
     static var ignoreHeadphoneTap: Bool {
         get { UserDefaults.standard.bool(forKey: "ignoreHeadphoneTap") }
-        set { UserDefaults.standard.set(newValue, forKey: "ignoreHeadphoneTap") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "ignoreHeadphoneTap")
+            NotificationCenter.default.post(name: headphonesChanged, object: nil)
+        }
     }
+
+    static let headphonesChanged = Notification.Name("FonHeadphonesChanged")
 
     static var sabrVideoSpeed: Float {
         get { UserDefaults.standard.object(forKey: "sabrVideoSpeed") as? Float ?? 1 }

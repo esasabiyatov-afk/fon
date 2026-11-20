@@ -565,11 +565,14 @@ enum Scripts {
 
   // --- 3. Экран блокировки: «следующий / предыдущий» вместо перемотки на 10 секунд.
   const ms = navigator.mediaSession;
+  // «Не реагировать на кнопки наушников» (⚙): ▶/⏸/⏭/⏮ извне — наушники, экран блокировки — пропускаются
+  // (iOS не говорит, откуда команда). Флаг ставит приложение (`PlayerView.applyPageState`).
+  const remote = (f) => (d) => { if (!fon.ignoreRemote) f(d); };
   const ours = {
-    play: () => fon.cmd('play'),
-    pause: () => fon.cmd('pause'),
-    nexttrack: () => fon.cmd('next'),
-    previoustrack: () => fon.cmd('prev'),
+    play: remote(() => fon.cmd('play')),
+    pause: remote(() => fon.cmd('pause')),
+    nexttrack: remote(() => fon.cmd('next')),
+    previoustrack: remote(() => fon.cmd('prev')),
     seekto: (d) => fon.cmd('seek', d && d.seekTime),
     seekforward: null,
     seekbackward: null

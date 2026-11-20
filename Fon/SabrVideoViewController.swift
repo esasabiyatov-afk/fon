@@ -363,11 +363,12 @@ final class SabrVideoViewController: UIViewController, AVPlayerViewControllerDel
             command.isEnabled = true
             commandTargets.append((command, command.addTarget(handler: action)))
         }
-        on(center.playCommand) { [weak self] _ in self?.player.play(); return .success }
-        on(center.pauseCommand) { [weak self] _ in self?.player.pause(); return .success }
+        // «Не реагировать на кнопки наушников» (см. Settings) — ▶/⏸ извне пропускаются.
+        on(center.playCommand) { [weak self] _ in if !Settings.ignoreHeadphoneTap { self?.player.play() }; return .success }
+        on(center.pauseCommand) { [weak self] _ in if !Settings.ignoreHeadphoneTap { self?.player.pause() }; return .success }
         on(center.togglePlayPauseCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
-            if Settings.ignoreHeadphoneTap { return .success } // касание наушников (см. Settings)
+            if Settings.ignoreHeadphoneTap { return .success }
             if self.player.timeControlStatus == .paused { self.player.play() } else { self.player.pause() }
             return .success
         }

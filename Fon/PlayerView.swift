@@ -196,6 +196,9 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
         nativeVideoButton.addTarget(self, action: #selector(nativeVideoTapped), for: .touchUpInside)
         updateLikeButton()
         NotificationCenter.default.addObserver(self, selector: #selector(updateLikeButton), name: CloudLikes.didChange, object: nil)
+        NotificationCenter.default.addObserver(forName: Settings.headphonesChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.applyPageState()
+        }
         [collapseButton, likeButton, pipButton, nativeVideoButton, topTitleLabel, musicButton].forEach { topBar.addSubview($0) }
         addSubview(topBar)
         fullBar.exitButton.addTarget(self, action: #selector(exitFullTapped), for: .touchUpInside)
@@ -328,6 +331,7 @@ final class PlayerView: UIView, WKScriptMessageHandler, WKNavigationDelegate, WK
     private func applyPageState() {
         runJS("window.__fon && __fon.setMini && __fon.setMini(\(mode == .mini))")
         runJS("window.__fon && __fon.setMusic && __fon.setMusic(\(musicMode))")
+        runJS("window.__fon && (__fon.ignoreRemote = \(Settings.ignoreHeadphoneTap))")
     }
 
     private func updateMusicButton() {
