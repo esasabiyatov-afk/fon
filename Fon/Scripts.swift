@@ -1056,14 +1056,21 @@ enum Scripts {
     return shown(b) ? b : null; // панель скрыта — касание лишь показывает её
   };
   // Касание по самой кнопке по координатам — на случай, когда цель касания не сама кнопка (прозрачный слой сверху).
-  const onFullButton = (x, y) => {
+  // Касание по меню YouTube (⚙ → «Субтитры» → «Выкл.» лежит поверх угла с кнопкой) или по соседней кнопке (субтитры
+  // рядом с полным экраном) — не наше: иначе субтитры в полном экране не выключались (жалоба владельца после 1.113).
+  const onFullButton = (x, y, target) => {
+    if (target && target.closest) {
+      if (target.closest(MENUS)) return false;
+      const own = target.closest('button, [role="button"]');
+      if (own && !own.classList.contains('fullscreen-icon') && !FULL_BUTTON.test(labelOf(own))) return false;
+    }
     const { full } = fullControls();
     if (!full || !shown(full)) return false;
     const r = full.getBoundingClientRect();
     return x >= r.left - 8 && x <= r.right + 8 && y >= r.top - 8 && y <= r.bottom + 8;
   };
   window.addEventListener('click', (e) => {
-    if (!fullButton(e.target) && !(fon.isFull && onFullButton(e.clientX, e.clientY))) return;
+    if (!fullButton(e.target) && !(fon.isFull && onFullButton(e.clientX, e.clientY, e.target))) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     setFull(false);
@@ -1075,7 +1082,7 @@ enum Scripts {
     const t = e.changedTouches && e.changedTouches[0];
     if (!t || Math.abs(t.clientX - tapX) > 12 || Math.abs(t.clientY - tapY) > 12) return;
     if (fon.isFull) tapShownUntil = Date.now() + 3500;
-    if (!fullButton(e.target) && !(fon.isFull && onFullButton(t.clientX, t.clientY))) return;
+    if (!fullButton(e.target) && !(fon.isFull && onFullButton(t.clientX, t.clientY, e.target))) return;
     setTimeout(() => { if (fon.isFull) setFull(false); }, 350);
   }, true);
 
